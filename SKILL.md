@@ -1,14 +1,14 @@
 ---
 name: yotta-memory
 description: "元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档"
-version: 0.2.3
+version: 0.2.4
 license: MIT
 ---
 
 # yotta-memory（元忆）— 有权限边界的文件式智能体记忆
 
 > 一句话：元忆 —— 有权限边界的文件式智能体记忆（不注入、可 diff、能回滚；FACT 共享、PREF / BOUND / COMMIT 私密隔离）。
-> 版本：0.2.3 | 最后更新：2026-08-23
+> 版本：0.2.4 | 最后更新：2026-08-23
 
 ## 这是什么
 
