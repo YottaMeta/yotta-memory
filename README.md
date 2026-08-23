@@ -20,17 +20,18 @@
 ```bash
 npx skills add YottaMeta/yotta-memory
 ```
-> 自动安装到已检测到的智能体（Claude Code / Codex / Cursor / OpenCode 等 78+ 智能体）。
+> 自动把技能文件装到已检测到的智能体（Claude Code / Codex / Cursor / OpenCode 等 78+ 智能体）。此方式只装「技能指令」（SKILL.md 等）；要使用 `yotta-memory` 读写命令，需另装 CLI：`npm install -g @yottameta/yotta-memory`（见方式二）。
 
 ### 方式二：npm 直接安装（CLI + 技能）
 ```bash
 # 国内加速（可选）：npm config set registry https://registry.npmmirror.com
 npm install -g @yottameta/yotta-memory
 yotta-memory init            # 初始化记忆库
-# 若要把技能文件装进某个智能体的 skills 目录：
-npx -y @yottameta/yotta-memory-install -g
-npx -y @yottameta/yotta-memory-install --agent codex
+yotta-memory-install -g                  # 装进所有已识别智能体（用户级）
+yotta-memory-install --agent codex       # 只装进指定智能体
 ```
+
+> 全局安装后 `yotta-memory`（读写下）与 `yotta-memory-install`（安装器）两个命令均已加入 PATH。若不想全局安装，可一行运行安装器：`npx -y --package @yottameta/yotta-memory yotta-memory-install -g`。
 
 ### 方式三：install.sh / 手动复制
 获取技能文件夹后（`npm pack` 解包或 `git clone`），进入技能文件夹：
