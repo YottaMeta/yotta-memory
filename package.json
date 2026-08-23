@@ -1,0 +1,35 @@
+{
+  "name": "@yottameta/yotta-memory",
+  "version": "0.1.0",
+  "description": "文件式跨智能体记忆协议与零依赖读写工具：让任何 AI 智能体活过会话（FACT/PREF/BOUND/COMMIT 四分类，用户级+项目级双级存储）。",
+  "license": "MIT",
+  "keywords": [
+    "agent-skills",
+    "yotta-memory",
+    "memory",
+    "persistent-memory",
+    "cross-agent",
+    "session-continuity"
+  ],
+  "files": [
+    "SKILL.md",
+    "LICENSE",
+    "README.md",
+    "install.sh",
+    "references",
+    "scripts",
+    "assets",
+    "bin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YottaMeta/yotta-memory.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "yotta-memory": "bin/yotta-memory.js",
+    "yotta-memory-install": "bin/install.js"
+  }
+}

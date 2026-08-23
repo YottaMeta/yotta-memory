@@ -1,0 +1,93 @@
+# yotta-memory 协议规范 v0.1.0
+
+> 本文件定义 yotta-memory 记忆标准：存储位置、目录结构、文件格式、类型体系与 CLI 命令参考。
+> 目标：任何支持 Agent Skills 开放标准的智能体，装完即可读写同一份记忆。
+
+## 1. 存储位置
+
+| 级别 | 默认路径 | 覆盖方式 | 用途 |
+|---|---|---|---|
+| 用户级 | `~/.yottamemory/` | 环境变量 `YOTTA_MEMORY_HOME` | 跨项目个人记忆 |
+| 项目级 | `<repo>/.yottamemory/` | `yotta-memory init --project` | 随项目提交，团队共享 |
+
+- recall 时项目级优先，其次用户级；写入默认用户级（`remember` 不指定级别）。
+- 项目级记忆随 git 提交，适合团队共享的 FACT 与项目级 BOUND。
+
+## 2. 目录结构
+
+```
+<root>/
+├── facts/       # FACT 事实（公共可共享）
+├── prefs/       # PREF 偏好（私密）
+├── bounds/      # BOUND 边界（私密）
+├── commits/     # COMMIT 承诺（私密）
+├── .archive/    # 归档区（archive 命令移入）
+└── README.md    # 记忆库说明
+```
+
+## 3. 文件格式
+
+每个记忆一条独立 `.md` 文件，文件名 `<YYYY-MM-DD>-<NNNN>.md`（NNNN 为当日序号）：
+
+```markdown
+---
+type: FACT
+subject: "用户"
+statement: "用户偏好短回复"
+confidence: 1.0
+created: 2026-08-23
+updated: 2026-08-23
+tags: []
+immutable: false
+---
+
+用户偏好短回复
+```
+
+### frontmatter 字段
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `type` | 是 | `FACT` / `PREF` / `BOUND` / `COMMIT` |
+| `subject` | 是 | 记忆主体（人 / 项目 / 系统）|
+| `statement` | 是 | 记忆内容 |
+| `confidence` | 否 | 置信度 0-1，默认 1.0 |
+| `created` | 是 | 创建日期 `YYYY-MM-DD` |
+| `updated` | 是 | 最近更新日期 |
+| `tags` | 否 | 标签数组 |
+| `immutable` | 否 | `true` 时 archive 不移动（用户级硬事实）|
+
+## 4. 类型体系
+
+| 类型 | 含义 | 可见性 |
+|---|---|---|
+| `FACT` | 客观事实 / 知识 / 经验 | 公共，可共享给所有智能体 |
+| `PREF` | 用户偏好 / 习惯 | 私密，per-agent 隔离 |
+| `BOUND` | 边界 / 规则 / 底线 | 私密，不可违反 |
+| `COMMIT` | 承诺 / 约定 | 私密 |
+
+- 写入纪律：公共事实用 FACT；涉及用户偏好 / 边界 / 承诺一律用私密类型，避免公共区泄露。
+- 多智能体协作：每个智能体只读自己的私密区（如 `~/.yottamemory/<agent-id>/prefs/` 可自行约定），公共 FACT 共享。
+
+## 5. CLI 命令参考
+
+| 命令 | 行为 |
+|---|---|
+| `init [--project]` | 创建目录结构；默认用户级，`--project` 建项目级 |
+| `remember <type> <subject> <statement>` | 写入；同 subject+statement 已存在则只更新 `updated` |
+| `recall [关键词] [--type T] [--limit N]` | 全文匹配 subject/statement/tags；项目级优先；默认 50 条 |
+| `forget <文件>` | 删除（按路径或文件名）|
+| `archive [--days 180]` | 将超过 N 天且非 immutable 的记录移入 `.archive/` |
+| `export [--out f.json]` | 导出全部记忆为 JSON |
+| `import <f.json>` | 从 JSON 导入（幂等）|
+
+### 去重与更新
+
+- remember 时若同 `type + subject + statement` 已存在，仅刷新 `updated`，不产生重复文件。
+- 修改内容：先 `recall` 定位文件，再 `forget` + 重新 `remember`，或直接编辑文件。
+
+## 6. 与其他系统互操作
+
+- **git**：整个记忆库可纳入版本控制，回滚 / 审计 / 团队同步。
+- **灵魂盘（Soul Framework）**：类型体系同源（FACT/PREF/BOUND/COMMIT）；`export` 出的 JSON 可作迁移中间格式。
+- **Agent Skills 标准**：本技能 SKILL.md 符合 agentskills.io 开放标准，支持 npx skills 安装。
