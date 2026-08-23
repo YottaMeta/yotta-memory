@@ -1,4 +1,4 @@
-# yotta-memory 协议规范 v0.2.5
+# yotta-memory 协议规范 v0.2.6
 
 > 本文件定义 yotta-memory 记忆标准：存储位置、目录结构、文件格式、类型体系与 CLI 命令参考。
 > 目标：任何支持 Agent Skills 开放标准的智能体，装完即可读写同一份记忆。

@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const VERSION = '0.2.5';
+const VERSION = '0.2.6';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const ARCHIVE_DIR = '.archive';
@@ -340,6 +340,8 @@ function cmdRecall(query, opts) {
   const agent = opts.agent || currentAgent();
   const ownerFilter = opts.owner || '';
   const allSafe = !!opts.unsafe;
+  // 是否显式发起跨智能体读取（--all 或 --owner <其它agent>）：只有此时越界读才报错/警告，默认 recall 保持原有静默跳过
+  const explicitCross = !!opts.all || (!!ownerFilter && ownerFilter.toLowerCase() !== 'user' && ownerFilter !== agent);
   const hits = [];
   let deniedCount = 0;
   for (const root of roots) {
@@ -372,7 +374,7 @@ function cmdRecall(query, opts) {
   });
   const shown = hits.slice(0, limit);
   if (!shown.length) {
-    if (deniedCount > 0) {
+    if (deniedCount > 0 && explicitCross) {
       console.log('检测到 ' + deniedCount + ' 条越界访问已被拒绝。');
       console.log('如需读取其它智能体私密记忆，请加 --unsafe（用户显式授权）或 --owner user。');
       process.exit(3);
@@ -392,7 +394,7 @@ function cmdRecall(query, opts) {
     console.log('[' + h.entry.type + '] ' + h.entry.subject + ': ' + h.entry.statement);
     console.log('  ' + path.join(h.root, h.entry.file));
   }
-  if (deniedCount > 0) {
+  if (deniedCount > 0 && explicitCross) {
     console.log('\n[警告] 本次检索共拒绝 ' + deniedCount + ' 条越界访问（其它智能体私密记忆，未授权不展示）。如需读取请加 --unsafe 或 --owner user。');
   }
 }
