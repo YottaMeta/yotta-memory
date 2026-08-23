@@ -5,14 +5,12 @@
 </p>
 
 <p align="center">
-  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue" />
-  <img alt="Standard: agentskills.io" src="https://img.shields.io/badge/standard-agentskills.io-orange" />
-  <img alt="Agents: 17+" src="https://img.shields.io/badge/agents-17%2B-purple" />
-  <img alt="npm package" src="https://img.shields.io/npm/v/@yottameta/yotta-memory" />
-  <img alt="npm downloads" src="https://img.shields.io/npm/dt/@yottameta/yotta-memory" />
-  <img alt="GitHub stars" src="https://img.shields.io/github/stars/YottaMeta/yotta-memory" />
-  <img alt="last commit" src="https://img.shields.io/github/last-commit/YottaMeta/yotta-memory" />
-  <img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen" />
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
+  <a href="https://agentskills.io/"><img alt="Standard: agentskills.io" src="https://img.shields.io/badge/standard-agentskills.io-orange" /></a>
+  <a href="https://www.npmjs.com/package/@yottameta/yotta-memory"><img alt="npm package" src="https://img.shields.io/npm/v/@yottameta/yotta-memory" /></a>
+  <a href="https://github.com/YottaMeta/yotta-memory"><img alt="GitHub stars" src="https://img.shields.io/github/stars/YottaMeta/yotta-memory" /></a>
+  <a href="https://github.com/YottaMeta/yotta-memory/commits/main"><img alt="last commit" src="https://img.shields.io/github/last-commit/YottaMeta/yotta-memory" /></a>
+  <a href="https://github.com/YottaMeta/yotta-memory"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
 
 > 元忆 —— 有权限边界的文件式智能体记忆。让任何 AI 智能体活过会话：开工 `recall` 恢复上下文、重要信息 `remember` 落盘、收工归档。文件式、零依赖、可 diff / 回滚；FACT 共享、PREF / BOUND / COMMIT 私密隔离——谁该读、谁不该读，由机制而非 AI 自觉决定。
