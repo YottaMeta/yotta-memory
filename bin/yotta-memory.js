@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// yotta-memory: 文件式跨智能体记忆 CLI（零依赖）v0.2
+// yotta-memory（元忆）: 有权限边界的文件式智能体记忆 CLI（零依赖）
 // v0.2 增强：① index.json 索引+TF 打分 ② 质量分+盖棺分（access_count/last_accessed）③ 读取分区（scope/owner）
 'use strict';
 
@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const VERSION = '0.2.0';
+const VERSION = '0.2.1';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const ARCHIVE_DIR = '.archive';
@@ -110,7 +110,7 @@ function ensureInit(root) {
   fs.mkdirSync(path.join(root, ARCHIVE_DIR), { recursive: true });
   const readme = path.join(root, 'README.md');
   if (!fs.existsSync(readme)) {
-    fs.writeFileSync(readme, '# yotta-memory 记忆库\n\n文件式跨智能体记忆协议存储目录。结构：facts/ prefs/ bounds/ commits/ .archive/。\n', 'utf8');
+    fs.writeFileSync(readme, '# yotta-memory（元忆）记忆库\n\n有权限边界的文件式智能体记忆存储目录。结构：facts/ prefs/ bounds/ commits/ .archive/。\n', 'utf8');
   }
 }
 function nextSeq(dir) {
@@ -501,7 +501,7 @@ function cmdImport(src) {
 
 function usage() {
   console.log([
-    'yotta-memory v' + VERSION + ' — 文件式跨智能体记忆（v0.2）',
+    'yotta-memory v' + VERSION + ' — 元忆：有权限边界的文件式智能体记忆',
     '',
     '用法:',
     '  yotta-memory init [--project]             初始化记忆库（默认用户级 ~/.yottamemory）',

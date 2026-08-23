@@ -1,13 +1,14 @@
-# yotta-memory
+# 元忆（yotta-memory）
 
-> 文件式跨智能体记忆协议与零依赖读写工具：让任何 AI 智能体活过会话。
+> 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff / 回滚；FACT 共享、PREF / BOUND / COMMIT 私密隔离——谁该读、谁不该读，由机制而非 AI 自觉决定。
 
 ## 这是什么
 
 - **文件式记忆标准**：记忆 = Markdown + YAML frontmatter 文件，git 可版本化，任何智能体可读，数据主权在用户本地。
 - **零依赖**：无 daemon / 无数据库 / 无向量库，Node.js 自带即可运行。
 - **类型体系**：FACT（事实，公共共享）/ PREF（偏好）/ BOUND（边界）/ COMMIT（承诺）——后三者私密、per-agent 隔离。
-- **双级存储**：用户级 `~/.yottamemory/` + 项目级 `.yottamemory/`。
+- **双级存储**：用户级 ~/.yottamemory/ + 项目级 .yottamemory/。
+- **有权限边界**：FACT 进公共区共享；PREF / BOUND / COMMIT 进私密区、按 agent 隔离；读取按 scope/owner 分区，默认只返当前 agent 可读项。
 
 适用场景：跨会话续测、个人偏好与边界沉淀、多智能体协作、项目交接、收工归档。
 
