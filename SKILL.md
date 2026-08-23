@@ -1,14 +1,14 @@
 ---
 name: yotta-memory
 description: "文件式跨智能体记忆协议与零依赖读写工具。让任何 AI 智能体活过会话：开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档"
-version: 0.1.0
+version: 0.2.0
 license: MIT
 ---
 
 # yotta-memory — 文件式跨智能体记忆
 
 > 一句话：定义记忆协议 + 提供零依赖读写 CLI，让任何 AI 智能体活过会话。
-> 版本：0.1.0 | 最后更新：2026-08-23
+> 版本：0.2.0 | 最后更新：2026-08-23
 
 ## 这是什么
 
@@ -36,15 +36,16 @@ license: MIT
 | 命令 | 作用 |
 |---|---|
 | `yotta-memory init [--project]` | 初始化记忆库（默认用户级）|
-| `yotta-memory remember <type> <subject> <statement>` | 写入（同 subject+statement 自动更新）|
-| `yotta-memory recall [关键词] [--type T] [--limit N]` | 检索（项目级优先）|
-| `yotta-memory forget <文件>` | 删除 |
-| `yotta-memory archive [--days 180]` | 归档旧记忆（immutable 除外）|
+| `yotta-memory remember <type> <subject> <statement> [--owner <id>]` | 写入（同 subject+statement 自动更新；--owner 标注归属，默认取 agent id）|
+| `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all]` | 检索（索引+TF 打分，读取分区过滤；项目级优先）|
+| `yotta-memory forget <文件>` | 删除（按类型目录路径或文件名）|
+| `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（盖棺分+年龄，immutable 除外）|
+| `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
 
 ## 存储格式（摘要）
 
-`<YYYY-MM-DD>-<NNNN>.md`，frontmatter 含 `type / subject / statement / confidence / created / updated / tags / immutable`；正文为记忆内容。
+`<YYYY-MM-DD>-<NNNN>.md`，frontmatter 含 `type / subject / statement / confidence / created / updated / tags / immutable / scope / owner / access_count / last_accessed`；正文为记忆内容。顶层另有 `index.json`（反向索引 + TF 打分）。
 
 ## 渐进披露
 

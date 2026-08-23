@@ -45,10 +45,11 @@ bash install.sh --dir /path/to/skills
 | 命令 | 作用 |
 |---|---|
 | `yotta-memory init [--project]` | 初始化记忆库（默认用户级 `~/.yottamemory/`）|
-| `yotta-memory remember <type> <subject> <statement>` | 写入记忆（同 subject+statement 自动更新）|
-| `yotta-memory recall [关键词] [--type T] [--limit N]` | 检索记忆（项目级优先）|
-| `yotta-memory forget <文件>` | 删除一条记忆 |
-| `yotta-memory archive [--days 180]` | 归档旧记忆（immutable 除外）|
+| `yotta-memory remember <type> <subject> <statement> [--owner <id>]` | 写入记忆（同 subject+statement 自动更新；--owner 标注归属）|
+| `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all]` | 检索记忆（索引+TF 打分，读取分区过滤；项目级优先）|
+| `yotta-memory forget <文件>` | 删除一条记忆（按类型目录路径或文件名）|
+| `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（盖棺分+年龄，immutable 除外）|
+| `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
 
 类型：`FACT`（事实，公共共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺）。

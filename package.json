@@ -1,6 +1,6 @@
 {
   "name": "@yottameta/yotta-memory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "文件式跨智能体记忆协议与零依赖读写工具：让任何 AI 智能体活过会话（FACT/PREF/BOUND/COMMIT 四分类，用户级+项目级双级存储）。",
   "license": "MIT",
   "keywords": [

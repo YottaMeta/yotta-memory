@@ -1,15 +1,19 @@
 #!/usr/bin/env node
-// yotta-memory: 文件式跨智能体记忆 CLI（零依赖）
+// yotta-memory: 文件式跨智能体记忆 CLI（零依赖）v0.2
+// v0.2 增强：① index.json 索引+TF 打分 ② 质量分+盖棺分（access_count/last_accessed）③ 读取分区（scope/owner）
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const ARCHIVE_DIR = '.archive';
+const INDEX_FILE = 'index.json';
+const PRIVATE_TYPES = ['PREF', 'BOUND', 'COMMIT'];
+const FIELD_ORDER = ['type', 'subject', 'statement', 'confidence', 'created', 'updated', 'tags', 'immutable', 'scope', 'owner', 'access_count', 'last_accessed'];
 
 function userRoot() {
   return process.env.YOTTA_MEMORY_HOME || path.join(os.homedir(), '.yottamemory');
@@ -22,6 +26,9 @@ function today() {
   const p = (n) => String(n).padStart(2, '0');
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
+function currentAgent() {
+  return process.env.YOTTA_AGENT_ID || process.env.AGENT_ID || '';
+}
 function typeDir(type) {
   const t = String(type).toUpperCase();
   if (!TYPE_DIRS[t]) {
@@ -29,6 +36,9 @@ function typeDir(type) {
     process.exit(2);
   }
   return TYPE_DIRS[t];
+}
+function defaultScope(type) {
+  return PRIVATE_TYPES.indexOf(String(type).toUpperCase()) === -1 ? 'public' : 'private';
 }
 function parseFrontmatter(text) {
   const m = text.match(/^---\s*\n([\s\S]*?)\n---/);
@@ -48,6 +58,49 @@ function parseFrontmatter(text) {
 }
 function escapeYaml(v) {
   return String(v).replace(/\n/g, ' ').replace(/"/g, '\\"');
+}
+function parseTags(v) {
+  if (Array.isArray(v)) return v.map(String);
+  if (typeof v === 'string') {
+    let s = v.trim();
+    if (s.startsWith('[') && s.endsWith(']')) s = s.slice(1, -1);
+    return s.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+  }
+  return [];
+}
+function tokenize(s) {
+  s = String(s || '').toLowerCase();
+  const toks = [];
+  const latin = s.match(/[a-z0-9_]+/g);
+  if (latin) for (const t of latin) toks.push(t);
+  const han = s.match(/[\u4e00-\u9fa5]+/g);
+  if (han) {
+    for (const seg of han) {
+      if (seg.length === 1) toks.push(seg);
+      else for (let i = 0; i < seg.length - 1; i++) toks.push(seg.slice(i, i + 2));
+    }
+  }
+  return toks;
+}
+function buildTokens(subject, statement, tags) {
+  const toks = tokenize(subject + ' ' + statement + ' ' + tags.join(' '));
+  const m = {};
+  for (const t of toks) m[t] = (m[t] || 0) + 1;
+  return m;
+}
+function frontmatterToText(meta, body) {
+  const lines = ['---'];
+  const ordered = FIELD_ORDER.filter(function (k) { return meta[k] !== undefined && meta[k] !== null && meta[k] !== ''; });
+  const extra = Object.keys(meta).filter(function (k) { return FIELD_ORDER.indexOf(k) === -1 && meta[k] !== undefined && meta[k] !== null && meta[k] !== ''; });
+  for (const k of ordered.concat(extra)) {
+    const v = meta[k];
+    if (Array.isArray(v)) lines.push(k + ': ' + JSON.stringify(v));
+    else if (typeof v === 'number') lines.push(k + ': ' + v);
+    else lines.push(k + ': ' + escapeYaml(v));
+  }
+  lines.push('---', '');
+  const b = body === undefined || body === null ? '' : body;
+  return lines.join('\n') + String(b).replace(/^\n+/, '') + '\n';
 }
 function ensureInit(root) {
   fs.mkdirSync(path.join(root, 'facts'), { recursive: true });
@@ -71,13 +124,147 @@ function nextSeq(dir) {
   return String(max + 1).padStart(4, '0');
 }
 
+// ---- 索引（index.json）----
+function indexPath(root) { return path.join(root, INDEX_FILE); }
+function loadIndex(root) {
+  const p = indexPath(root);
+  if (!fs.existsSync(p)) return null;
+  try {
+    const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (d && Array.isArray(d.entries)) return d.entries;
+  } catch (e) { /* ignore */ }
+  return null;
+}
+function getIndex(root) { return loadIndex(root) || []; }
+function saveIndex(root, entries) {
+  const clean = entries.map(function (e) { const c = Object.assign({}, e); delete c.meta; return c; });
+  fs.writeFileSync(indexPath(root), JSON.stringify({ version: 2, updated: today(), entries: clean }, null, 2), 'utf8');
+}
+function buildIndex(root) {
+  const entries = [];
+  for (const t of Object.keys(TYPE_DIRS)) {
+    const dir = path.join(root, TYPE_DIRS[t]);
+    if (!fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir)) {
+      const fp = path.join(dir, f);
+      if (!fs.statSync(fp).isFile()) continue;
+      entries.push(readEntry(fp, root));
+    }
+  }
+  saveIndex(root, entries);
+  return entries;
+}
+function ensureIndex(root) {
+  const idx = loadIndex(root);
+  if (idx) return idx;
+  return buildIndex(root);
+}
+function upsertIndexEntry(root, entry) {
+  const idx = getIndex(root);
+  const i = idx.findIndex(function (e) { return e.file === entry.file; });
+  if (i >= 0) idx[i] = entry; else idx.push(entry);
+  saveIndex(root, idx);
+}
+function removeIndexEntry(root, file) {
+  const idx = getIndex(root);
+  const i = idx.findIndex(function (e) { return e.file === file; });
+  if (i >= 0) { idx.splice(i, 1); saveIndex(root, idx); }
+}
+function removeIndexEntries(root, files) {
+  const set = new Set(files);
+  const idx = getIndex(root);
+  const next = idx.filter(function (e) { return !set.has(e.file); });
+  if (next.length !== idx.length) saveIndex(root, next);
+}
+
+// ---- 读取 / 写入记忆文件 ----
+function readEntry(fp, root) {
+  const parsed = parseFrontmatter(fs.readFileSync(fp, 'utf8'));
+  const meta = parsed.meta;
+  const type = (meta.type || 'FACT').toUpperCase();
+  const subject = meta.subject || '';
+  const statement = meta.statement || '';
+  const tags = parseTags(meta.tags);
+  return {
+    file: path.relative(root, fp).replace(/\\/g, '/'),
+    type: type,
+    scope: meta.scope || defaultScope(type),
+    owner: meta.owner || '',
+    subject: subject,
+    statement: statement,
+    tags: tags,
+    confidence: parseFloat(meta.confidence || 1.0),
+    created: meta.created || '',
+    updated: meta.updated || '',
+    access_count: parseInt(meta.access_count || '0', 10) || 0,
+    last_accessed: meta.last_accessed || '',
+    immutable: meta.immutable === 'true',
+    tokens: buildTokens(subject, statement, tags),
+    meta: meta,
+  };
+}
+function rewriteFrontmatter(fp, patch) {
+  const txt = fs.readFileSync(fp, 'utf8');
+  const parsed = parseFrontmatter(txt);
+  const meta = Object.assign({}, parsed.meta);
+  for (const k of Object.keys(patch)) meta[k] = patch[k];
+  fs.writeFileSync(fp, frontmatterToText(meta, parsed.body), 'utf8');
+}
+function bumpReadMeta(root, relFiles) {
+  const now = today();
+  for (const rel of relFiles) {
+    const fp = path.join(root, rel);
+    if (!fs.existsSync(fp)) continue;
+    const parsed = parseFrontmatter(fs.readFileSync(fp, 'utf8'));
+    const meta = parsed.meta;
+    if (meta.immutable === 'true') continue;
+    const acc = (parseInt(meta.access_count || '0', 10) || 0) + 1;
+    rewriteFrontmatter(fp, { access_count: acc, last_accessed: now });
+  }
+}
+function touchIndex(root, relFiles) {
+  const set = new Set(relFiles);
+  const idx = getIndex(root);
+  let dirty = false;
+  const now = today();
+  for (const e of idx) {
+    if (set.has(e.file)) { e.access_count = (parseInt(e.access_count, 10) || 0) + 1; e.last_accessed = now; dirty = true; }
+  }
+  if (dirty) saveIndex(root, idx);
+}
+function daysBetween(a, b) {
+  const da = new Date(a);
+  const db = new Date(b);
+  if (isNaN(da.getTime()) || isNaN(db.getTime())) return 99999;
+  return Math.round((db.getTime() - da.getTime()) / (24 * 60 * 60 * 1000));
+}
+function vitality(meta) {
+  const conf = parseFloat(meta.confidence || 1.0);
+  const acc = parseInt(meta.access_count || '0', 10) || 0;
+  const last = meta.last_accessed || '';
+  const accScore = Math.min(acc, 10) / 10;
+  let recency = 0;
+  if (last) { const d = daysBetween(last, today()); recency = Math.max(0, 1 - Math.floor(d / 30) * 0.2); }
+  return 0.4 * conf + 0.3 * accScore + 0.3 * recency;
+}
+function isReadable(entry, agent, ownerFilter, all) {
+  if (entry.scope === 'public') return true;
+  if (all) return true;
+  const owner = entry.owner || '';
+  if (!owner) return true;
+  if (ownerFilter && owner === ownerFilter) return true;
+  if (agent && owner === agent) return true;
+  return false;
+}
+
+// ---- 命令 ----
 function cmdInit(opts) {
   const root = opts.project ? projectRoot() : userRoot();
   ensureInit(root);
   console.log('已初始化记忆库: ' + root);
 }
 
-function cmdRemember(type, subject, statement) {
+function cmdRemember(type, subject, statement, opts) {
   const root = userRoot();
   ensureInit(root);
   const t = String(type).toUpperCase();
@@ -86,6 +273,8 @@ function cmdRemember(type, subject, statement) {
   const subj = String(subject || '').trim();
   if (!stmt) { console.error('statement 不能为空'); process.exit(2); }
   if (!subj) { console.error('subject 不能为空'); process.exit(2); }
+  const owner = opts.owner || currentAgent();
+  const scope = opts.scope || defaultScope(t);
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
       const fp = path.join(dir, f);
@@ -93,8 +282,11 @@ function cmdRemember(type, subject, statement) {
       const parsed = parseFrontmatter(fs.readFileSync(fp, 'utf8'));
       const meta = parsed.meta;
       if ((meta.type || '').toUpperCase() === t && meta.subject === subj && meta.statement === stmt) {
-        const txt = fs.readFileSync(fp, 'utf8');
-        fs.writeFileSync(fp, txt.replace(/^updated:.*$/m, 'updated: ' + today()), 'utf8');
+        const patch = { updated: today() };
+        if (owner && !meta.owner) patch.owner = owner;
+        if (scope && !meta.scope) patch.scope = scope;
+        rewriteFrontmatter(fp, patch);
+        upsertIndexEntry(root, readEntry(fp, root));
         console.log('已更新: ' + fp);
         return;
       }
@@ -102,91 +294,118 @@ function cmdRemember(type, subject, statement) {
   }
   const seq = nextSeq(dir);
   const file = path.join(dir, today() + '-' + seq + '.md');
-  const content = [
-    '---',
-    'type: ' + t,
-    'subject: "' + escapeYaml(subj) + '"',
-    'statement: "' + escapeYaml(stmt) + '"',
-    'confidence: 1.0',
-    'created: ' + today(),
-    'updated: ' + today(),
-    'tags: []',
-    'immutable: false',
-    '---',
-    '',
-    stmt,
-    '',
-  ].join('\n');
-  fs.writeFileSync(file, content, 'utf8');
+  const rec = {
+    type: t, subject: subj, statement: stmt,
+    confidence: 1.0, created: today(), updated: today(),
+    tags: [], immutable: false,
+    scope: scope, owner: owner, access_count: 0, last_accessed: '',
+  };
+  fs.writeFileSync(file, frontmatterToText(rec, stmt), 'utf8');
+  upsertIndexEntry(root, readEntry(file, root));
   console.log('已记录: ' + file);
 }
 
 function cmdRecall(query, opts) {
-  const roots = [projectRoot(), userRoot()].filter((r) => fs.existsSync(r));
+  const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
   if (!roots.length) {
     console.log('记忆库不存在，请先运行: yotta-memory init');
     return;
   }
   const limit = opts.limit || 50;
   const onlyType = opts.type ? String(opts.type).toUpperCase() : null;
-  const q = query ? String(query).toLowerCase() : null;
+  const q = query ? String(query).toLowerCase() : '';
+  const agent = opts.agent || currentAgent();
+  const ownerFilter = opts.owner || '';
+  const all = !!opts.all;
   const hits = [];
   for (const root of roots) {
-    for (const t of Object.keys(TYPE_DIRS)) {
-      const dir = path.join(root, TYPE_DIRS[t]);
-      if (!fs.existsSync(dir)) continue;
-      for (const f of fs.readdirSync(dir)) {
-        const fp = path.join(dir, f);
-        if (!fs.statSync(fp).isFile()) continue;
-        const meta = parseFrontmatter(fs.readFileSync(fp, 'utf8')).meta;
-        if (onlyType && (meta.type || '').toUpperCase() !== onlyType) continue;
-        if (q) {
-          const hay = ((meta.subject || '') + ' ' + (meta.statement || '') + ' ' + (meta.tags || '')).toLowerCase();
-          if (hay.indexOf(q) === -1) continue;
+    const entries = ensureIndex(root);
+    for (const e of entries) {
+      if (onlyType && e.type !== onlyType) continue;
+      if (!isReadable(e, agent, ownerFilter, all)) continue;
+      let score = 0;
+      if (q) {
+        const qtoks = tokenize(q);
+        for (const tt of qtoks) { if (e.tokens && e.tokens[tt]) score += e.tokens[tt]; }
+        if (score === 0) {
+          const hay = ((e.subject || '') + ' ' + (e.statement || '') + ' ' + e.tags.join(' ')).toLowerCase();
+          if (hay.indexOf(q) !== -1) score = 1;
         }
-        hits.push({ type: meta.type || t, subject: meta.subject || '', statement: meta.statement || '', file: fp, created: meta.created || '' });
+        if (score === 0) continue;
+      } else {
+        score = 1;
       }
+      hits.push({ entry: e, score: score, root: root });
     }
   }
   hits.sort(function (a, b) {
-    const pa = a.file.indexOf(projectRoot()) === 0 ? 0 : 1;
-    const pb = b.file.indexOf(projectRoot()) === 0 ? 0 : 1;
+    if (b.score !== a.score) return b.score - a.score;
+    const pa = a.root === projectRoot() ? 0 : 1;
+    const pb = b.root === projectRoot() ? 0 : 1;
     if (pa !== pb) return pa - pb;
-    return String(b.created).localeCompare(String(a.created));
+    return String(b.entry.created).localeCompare(String(a.entry.created));
   });
   const shown = hits.slice(0, limit);
   if (!shown.length) { console.log('无匹配记忆。'); return; }
+  const touchRel = shown.filter(function (h) { return !h.entry.immutable; }).map(function (h) { return h.entry.file; });
+  if (touchRel.length) {
+    for (const root of roots) {
+      bumpReadMeta(root, touchRel);
+      touchIndex(root, touchRel);
+    }
+  }
   console.log('共 ' + shown.length + ' 条记忆（' + (hits.length > limit ? '前 ' + limit + ' 条' : '全部') + '）：');
   for (const h of shown) {
-    console.log('[' + h.type + '] ' + h.subject + ': ' + h.statement);
-    console.log('  ' + h.file);
+    console.log('[' + h.entry.type + '] ' + h.entry.subject + ': ' + h.entry.statement);
+    console.log('  ' + path.join(h.root, h.entry.file));
   }
 }
 
 function cmdForget(fileRef) {
-  const roots = [projectRoot(), userRoot()].filter((r) => fs.existsSync(r));
-  let target = null;
+  const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
+  const ref = String(fileRef || '').replace(/\\/g, '/');
+  const slash = ref.indexOf('/');
+  const dynTypeDir = slash === -1 ? '' : ref.slice(0, slash);
+  const dynBase = slash === -1 ? ref : ref.slice(slash + 1);
+  let target = null, targetRoot = null, targetRel = null;
   for (const root of roots) {
+    if (dynTypeDir) {
+      const dir = path.join(root, dynTypeDir);
+      if (!fs.existsSync(dir)) continue;
+      const cand = path.join(dir, dynBase);
+      if (fs.existsSync(cand)) {
+        target = cand; targetRoot = root;
+        targetRel = dynTypeDir + '/' + path.basename(dynBase);
+        break;
+      }
+      continue;
+    }
     for (const t of Object.keys(TYPE_DIRS)) {
       const dir = path.join(root, TYPE_DIRS[t]);
       if (!fs.existsSync(dir)) continue;
-      const cand = path.join(dir, fileRef);
-      if (fs.existsSync(cand)) { target = cand; break; }
-      if (fs.existsSync(path.join(dir, path.basename(fileRef)))) { target = path.join(dir, path.basename(fileRef)); break; }
+      const cand = path.join(dir, dynBase);
+      if (fs.existsSync(cand)) {
+        target = cand; targetRoot = root;
+        targetRel = TYPE_DIRS[t] + '/' + path.basename(dynBase);
+        break;
+      }
     }
     if (target) break;
   }
   if (!target) { console.error('未找到记忆文件: ' + fileRef); process.exit(2); }
   fs.unlinkSync(target);
+  if (targetRoot) removeIndexEntry(targetRoot, targetRel);
   console.log('已删除: ' + target);
 }
 
 function cmdArchive(opts) {
   const days = opts.days || 180;
+  const threshold = (opts.threshold !== undefined && opts.threshold !== null) ? opts.threshold : 0.4;
   const root = userRoot();
   if (!fs.existsSync(root)) { console.log('记忆库不存在。'); return; }
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   let moved = 0;
+  const movedFiles = [];
   for (const t of Object.keys(TYPE_DIRS)) {
     const dir = path.join(root, TYPE_DIRS[t]);
     if (!fs.existsSync(dir)) continue;
@@ -196,17 +415,28 @@ function cmdArchive(opts) {
       const meta = parseFrontmatter(fs.readFileSync(fp, 'utf8')).meta;
       if (meta.immutable === 'true') continue;
       if (!meta.created) continue;
-      const ts = new Date(meta.created).getTime();
-      if (isNaN(ts)) continue;
-      if (ts < cutoff) {
+      const createdTs = new Date(meta.created).getTime();
+      if (isNaN(createdTs)) continue;
+      if (vitality(meta) < threshold && createdTs < cutoff) {
         const destDir = path.join(root, ARCHIVE_DIR, TYPE_DIRS[t]);
         fs.mkdirSync(destDir, { recursive: true });
         fs.renameSync(fp, path.join(destDir, f));
+        movedFiles.push(TYPE_DIRS[t] + '/' + f);
         moved++;
       }
     }
   }
+  if (movedFiles.length) removeIndexEntries(root, movedFiles);
   console.log('已归档 ' + moved + ' 条旧记忆到 ' + path.join(root, ARCHIVE_DIR));
+}
+
+function cmdReindex() {
+  const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
+  if (!roots.length) { console.log('记忆库不存在。'); return; }
+  for (const root of roots) {
+    const n = buildIndex(root).length;
+    console.log('已重建索引 ' + root + '（' + n + ' 条）');
+  }
 }
 
 function collectAll(root) {
@@ -217,7 +447,8 @@ function collectAll(root) {
     for (const f of fs.readdirSync(dir)) {
       const fp = path.join(dir, f);
       if (!fs.statSync(fp).isFile()) continue;
-      out.push({ file: path.relative(root, fp), meta: parseFrontmatter(fs.readFileSync(fp, 'utf8')).meta });
+      const e = readEntry(fp, root);
+      out.push({ file: e.file, meta: e.meta });
     }
   }
   return out;
@@ -247,22 +478,22 @@ function cmdImport(src) {
     let seq = nextSeq(dir);
     let file = path.join(dir, today() + '-' + seq + '.md');
     while (fs.existsSync(file)) { seq = String(parseInt(seq, 10) + 1).padStart(4, '0'); file = path.join(dir, today() + '-' + seq + '.md'); }
-    const content = [
-      '---',
-      'type: ' + t,
-      'subject: "' + escapeYaml(meta.subject || '') + '"',
-      'statement: "' + escapeYaml(meta.statement || '') + '"',
-      'confidence: ' + (meta.confidence || 1.0),
-      'created: ' + (meta.created || today()),
-      'updated: ' + (meta.updated || today()),
-      'tags: ' + (meta.tags || '[]'),
-      'immutable: ' + (meta.immutable || 'false'),
-      '---',
-      '',
-      meta.statement || '',
-      '',
-    ].join('\n');
-    fs.writeFileSync(file, content, 'utf8');
+    const rec = {
+      type: t,
+      subject: meta.subject || '',
+      statement: meta.statement || '',
+      confidence: parseFloat(meta.confidence || 1.0),
+      created: meta.created || today(),
+      updated: meta.updated || today(),
+      tags: parseTags(meta.tags),
+      immutable: meta.immutable === true || meta.immutable === 'true',
+      scope: meta.scope || defaultScope(t),
+      owner: meta.owner || '',
+      access_count: parseInt(meta.access_count || '0', 10) || 0,
+      last_accessed: meta.last_accessed || '',
+    };
+    fs.writeFileSync(file, frontmatterToText(rec, rec.statement), 'utf8');
+    upsertIndexEntry(root, readEntry(file, root));
     n++;
   }
   console.log('已导入 ' + n + ' 条记忆 -> ' + root);
@@ -270,20 +501,21 @@ function cmdImport(src) {
 
 function usage() {
   console.log([
-    'yotta-memory v' + VERSION + ' — 文件式跨智能体记忆',
+    'yotta-memory v' + VERSION + ' — 文件式跨智能体记忆（v0.2）',
     '',
     '用法:',
     '  yotta-memory init [--project]             初始化记忆库（默认用户级 ~/.yottamemory）',
-    '  yotta-memory remember <type> <subject> <statement>   写入记忆',
-    '  yotta-memory recall [关键词] [--type T] [--limit N]  检索记忆（项目级优先）',
+    '  yotta-memory remember <type> <subject> <statement> [--owner <id>]   写入记忆',
+    '  yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all]  检索（索引+TF，读取分区）',
     '  yotta-memory forget <文件或文件名>         删除一条记忆',
-    '  yotta-memory archive [--days 180]         归档超过 N 天且非 immutable 的旧记忆',
+    '  yotta-memory archive [--days 180] [--threshold 0.4]  归档（盖棺分+年龄）',
+    '  yotta-memory reindex                       重建索引（手动改文件后用）',
     '  yotta-memory export [--out 文件.json]      导出全部记忆',
     '  yotta-memory import <文件.json>            导入记忆',
     '  yotta-memory --version                    版本',
     '',
     '类型: FACT(公共共享) / PREF(偏好) / BOUND(边界) / COMMIT(承诺)',
-    '环境变量: YOTTA_MEMORY_HOME 可覆盖用户级记忆库目录',
+    '环境变量: YOTTA_MEMORY_HOME 覆盖用户级目录; YOTTA_AGENT_ID/AGENT_ID 作为当前 agent 标识（读取分区）',
     '',
   ].join('\n'));
 }
@@ -296,16 +528,21 @@ function main() {
   if (first === '--help' || first === '-h') { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope']);
   for (let i = 1; i < args.length; i++) {
     const a = args[i];
     if (a === '--project') opts.project = true;
+    else if (a === '--all') opts.all = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;
       else if (a === '--limit') opts.limit = parseInt(v, 10) || 50;
       else if (a === '--days') opts.days = parseInt(v, 10) || 180;
+      else if (a === '--threshold') opts.threshold = parseFloat(v);
       else if (a === '--out') opts.out = v;
+      else if (a === '--owner') opts.owner = v;
+      else if (a === '--agent') opts.agent = v;
+      else if (a === '--scope') opts.scope = v;
     } else if (a.startsWith('--')) {
       console.error('未知选项: ' + a);
       process.exit(2);
@@ -315,10 +552,11 @@ function main() {
   }
   switch (first) {
     case 'init': cmdInit(opts); break;
-    case 'remember': cmdRemember(positional[0], positional[1], positional[2]); break;
+    case 'remember': cmdRemember(positional[0], positional[1], positional[2], opts); break;
     case 'recall': cmdRecall(positional[0] || null, opts); break;
     case 'forget': cmdForget(positional[0]); break;
     case 'archive': cmdArchive(opts); break;
+    case 'reindex': cmdReindex(); break;
     case 'export': cmdExport(opts.out); break;
     case 'import': cmdImport(positional[0]); break;
     default:

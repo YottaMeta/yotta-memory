@@ -1,4 +1,4 @@
-# yotta-memory 协议规范 v0.1.0
+# yotta-memory 协议规范 v0.2.0
 
 > 本文件定义 yotta-memory 记忆标准：存储位置、目录结构、文件格式、类型体系与 CLI 命令参考。
 > 目标：任何支持 Agent Skills 开放标准的智能体，装完即可读写同一份记忆。
@@ -22,6 +22,7 @@
 ├── bounds/      # BOUND 边界（私密）
 ├── commits/     # COMMIT 承诺（私密）
 ├── .archive/    # 归档区（archive 命令移入）
+├── index.json   # 反向索引 + TF 打分
 └── README.md    # 记忆库说明
 ```
 
@@ -56,6 +57,10 @@ immutable: false
 | `updated` | 是 | 最近更新日期 |
 | `tags` | 否 | 标签数组 |
 | `immutable` | 否 | `true` 时 archive 不移动（用户级硬事实）|
+| `scope` | 否 | `public` / `private`，默认按类型（FACT=public，其余 private）|
+| `owner` | 否 | 归属 agent id，默认空；private+owner 非空仅供该 agent 读取 |
+| `access_count` | 否 | 命中次数，recall 命中展示集时 +1 |
+| `last_accessed` | 否 | 最近访问日期 `YYYY-MM-DD` |
 
 ## 4. 类型体系
 
@@ -74,10 +79,11 @@ immutable: false
 | 命令 | 行为 |
 |---|---|
 | `init [--project]` | 创建目录结构；默认用户级，`--project` 建项目级 |
-| `remember <type> <subject> <statement>` | 写入；同 subject+statement 已存在则只更新 `updated` |
-| `recall [关键词] [--type T] [--limit N]` | 全文匹配 subject/statement/tags；项目级优先；默认 50 条 |
+| `remember <type> <subject> <statement> [--owner <id>]` | 写入；同 subject+statement 已存在则只更新 `updated`；`--owner` 标注归属 |
+| `recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all]` | 索引+TF 打分匹配；读取分区过滤；项目级优先；默认 50 条 |
 | `forget <文件>` | 删除（按路径或文件名）|
-| `archive [--days 180]` | 将超过 N 天且非 immutable 的记录移入 `.archive/` |
+| `archive [--days 180] [--threshold 0.4]` | 按盖棺分+年龄移入 `.archive/`（`vitality < threshold` 且超过 N 天）|
+| `reindex` | 全量扫描重建 `index.json`（手动改 .md 后校正）|
 | `export [--out f.json]` | 导出全部记忆为 JSON |
 | `import <f.json>` | 从 JSON 导入（幂等）|
 
