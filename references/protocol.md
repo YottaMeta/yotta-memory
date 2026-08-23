@@ -1,4 +1,4 @@
-# yotta-memory 协议规范 v0.2.6
+# yotta-memory 协议规范 v0.2.7
 
 > 本文件定义 yotta-memory 记忆标准：存储位置、目录结构、文件格式、类型体系与 CLI 命令参考。
 > 目标：任何支持 Agent Skills 开放标准的智能体，装完即可读写同一份记忆。
@@ -85,6 +85,8 @@ immutable: false
 | 公共 FACT | 始终可读 |
 | 当前 agent 自己的 private | 始终可读 |
 | 其它 agent 的 private | 默认拒绝（不返回内容）；需满足任一授权：① `grants.json` 显式授权记录 ② identity=user（`--agent user` / `--owner user` / `YOTTA_AGENT_ID=user`）③ 显式 `--unsafe` |
+
+> **默认隔离行为（recall）**：不带 `--all` / `--owner <其它agent>` 时（即默认 recall），遇其它 agent 私密记忆**静默跳过**，不输出任何「有私密被拒」提示、也不报错（exit 0），不泄露私密存在性；仅当**显式跨智能体读取**（`--all` 或 `--owner <其它agent>`，且非 user/自身）且无授权命中时，才报错/警告：无可读命中 → 「检测到 N 条越界访问已被拒绝」+ exit 3；有可读命中 → 正常展示 + 追加警告。
 
 授权记录格式（`<root>/grants.json`）：`{ "<userAgent>": ["<ownerAgent>", ...] }`，表示 userAgent 可读 ownerAgent 的私密记忆。
 
