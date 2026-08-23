@@ -1,8 +1,10 @@
-# 元忆（yotta-memory）
-
 <p align="center">
-  <img src="assets/banner.png" alt="元忆（yotta-memory）banner" width="100%" />
+  <img src="assets/banner.png" alt="yotta-memory banner" width="100%" />
 </p>
+
+<h1 align="center">元忆（yotta-memory）</h1>
+
+<p align="center">元忆 —— 有权限边界的文件式智能体记忆。让任何 AI 智能体活过会话：开工 <code>recall</code> 恢复上下文、重要信息 <code>remember</code> 落盘、收工归档。文件式、零依赖、可 diff / 回滚；FACT 共享、PREF / BOUND / COMMIT 私密隔离——谁该读、谁不该读，由机制而非 AI 自觉决定。</p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
@@ -12,8 +14,6 @@
   <a href="https://github.com/YottaMeta/yotta-memory/commits/main"><img alt="last commit" src="https://img.shields.io/github/last-commit/YottaMeta/yotta-memory" /></a>
   <a href="https://github.com/YottaMeta/yotta-memory"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
-
-> 元忆 —— 有权限边界的文件式智能体记忆。让任何 AI 智能体活过会话：开工 `recall` 恢复上下文、重要信息 `remember` 落盘、收工归档。文件式、零依赖、可 diff / 回滚；FACT 共享、PREF / BOUND / COMMIT 私密隔离——谁该读、谁不该读，由机制而非 AI 自觉决定。
 
 ## 核心价值
 
