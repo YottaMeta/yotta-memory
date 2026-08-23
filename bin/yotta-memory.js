@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const VERSION = '0.2.2';
+const VERSION = '0.2.3';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const ARCHIVE_DIR = '.archive';
@@ -247,14 +247,37 @@ function vitality(meta) {
   if (last) { const d = daysBetween(last, today()); recency = Math.max(0, 1 - Math.floor(d / 30) * 0.2); }
   return 0.4 * conf + 0.3 * accScore + 0.3 * recency;
 }
-function isReadable(entry, agent, ownerFilter, all) {
-  if (entry.scope === 'public') return true;
-  if (all) return true;
-  const owner = entry.owner || '';
-  if (!owner) return true;
-  if (ownerFilter && owner === ownerFilter) return true;
-  if (agent && owner === agent) return true;
+function loadGrants(root) {
+  const fp = path.join(root, 'grants.json');
+  try {
+    return JSON.parse(fs.readFileSync(fp, 'utf8')) || {};
+  } catch (e) {
+    return {};
+  }
+}
+function hasGrant(userAgent, ownerAgent) {
+  if (!userAgent || !ownerAgent) return false;
+  for (const root of [projectRoot(), userRoot()]) {
+    if (!fs.existsSync(root)) continue;
+    const grants = loadGrants(root);
+    const list = grants[userAgent];
+    if (Array.isArray(list) && list.indexOf(ownerAgent) !== -1) return true;
+  }
   return false;
+}
+// 三态读取判定：'read' | 'denied'
+function classifyRead(entry, agent, ownerFilter, unsafe) {
+  if (entry.scope === 'public') return 'read';
+  const owner = entry.owner || '';
+  // 无归属的 private：所有 agent 视为自身私密（默认行为保留）
+  if (!owner) return 'read';
+  // 归属等于当前 agent 或（显式 --owner 等于当前 agent）：自身授权
+  if (agent && owner === agent) return 'read';
+  if (ownerFilter && owner === ownerFilter && agent && ownerFilter === agent) return 'read';
+  // 越界读：需要 --unsafe / identity=user / grant 授权，否则拒绝
+  if (unsafe || String(ownerFilter).toLowerCase() === 'user' || String(agent && '' + agent).toLowerCase() === 'user') return 'read';
+  if (hasGrant(agent, owner)) return 'read';
+  return 'denied';
 }
 
 // ---- 命令 ----
@@ -316,13 +339,15 @@ function cmdRecall(query, opts) {
   const q = query ? String(query).toLowerCase() : '';
   const agent = opts.agent || currentAgent();
   const ownerFilter = opts.owner || '';
-  const all = !!opts.all;
+  const allSafe = !!opts.unsafe;
   const hits = [];
+  let deniedCount = 0;
   for (const root of roots) {
     const entries = ensureIndex(root);
     for (const e of entries) {
       if (onlyType && e.type !== onlyType) continue;
-      if (!isReadable(e, agent, ownerFilter, all)) continue;
+      const r = classifyRead(e, agent, ownerFilter, allSafe);
+      if (r === 'denied') { deniedCount++; continue; }
       let score = 0;
       if (q) {
         const qtoks = tokenize(q);
@@ -346,7 +371,15 @@ function cmdRecall(query, opts) {
     return String(b.entry.created).localeCompare(String(a.entry.created));
   });
   const shown = hits.slice(0, limit);
-  if (!shown.length) { console.log('无匹配记忆。'); return; }
+  if (!shown.length) {
+    if (deniedCount > 0) {
+      console.log('检测到 ' + deniedCount + ' 条越界访问已被拒绝。');
+      console.log('如需读取其它智能体私密记忆，请加 --unsafe（用户显式授权）或 --owner user。');
+      process.exit(3);
+    }
+    console.log('无匹配记忆。');
+    return;
+  }
   const touchRel = shown.filter(function (h) { return !h.entry.immutable; }).map(function (h) { return h.entry.file; });
   if (touchRel.length) {
     for (const root of roots) {
@@ -358,6 +391,9 @@ function cmdRecall(query, opts) {
   for (const h of shown) {
     console.log('[' + h.entry.type + '] ' + h.entry.subject + ': ' + h.entry.statement);
     console.log('  ' + path.join(h.root, h.entry.file));
+  }
+  if (deniedCount > 0) {
+    console.log('\n[警告] 本次检索共拒绝 ' + deniedCount + ' 条越界访问（其它智能体私密记忆，未授权不展示）。如需读取请加 --unsafe 或 --owner user。');
   }
 }
 
@@ -506,7 +542,7 @@ function usage() {
     '用法:',
     '  yotta-memory init [--project]             初始化记忆库（默认用户级 ~/.yottamemory）',
     '  yotta-memory remember <type> <subject> <statement> [--owner <id>]   写入记忆',
-    '  yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all]  检索（索引+TF，读取分区）',
+    '  yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]  检索（索引+TF，读取分区；--unsafe 允许越界读其它智能体私密）',
     '  yotta-memory forget <文件或文件名>         删除一条记忆',
     '  yotta-memory archive [--days 180] [--threshold 0.4]  归档（盖棺分+年龄）',
     '  yotta-memory reindex                       重建索引（手动改文件后用）',
@@ -533,6 +569,7 @@ function main() {
     const a = args[i];
     if (a === '--project') opts.project = true;
     else if (a === '--all') opts.all = true;
+    else if (a === '--unsafe') opts.unsafe = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;

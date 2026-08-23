@@ -1,4 +1,4 @@
-# yotta-memory 协议规范 v0.2.0
+# yotta-memory 协议规范 v0.2.3
 
 > 本文件定义 yotta-memory 记忆标准：存储位置、目录结构、文件格式、类型体系与 CLI 命令参考。
 > 目标：任何支持 Agent Skills 开放标准的智能体，装完即可读写同一份记忆。
@@ -58,7 +58,7 @@ immutable: false
 | `tags` | 否 | 标签数组 |
 | `immutable` | 否 | `true` 时 archive 不移动（用户级硬事实）|
 | `scope` | 否 | `public` / `private`，默认按类型（FACT=public，其余 private）|
-| `owner` | 否 | 归属 agent id，默认空；private+owner 非空仅供该 agent 读取 |
+| `owner` | 否 | 归属 agent id，默认空；private+owner 非空默认仅供该 owner agent 读取，其它 agent 越界读需 grant 授权、identity=user 或 `--unsafe` |
 | `access_count` | 否 | 命中次数，recall 命中展示集时 +1 |
 | `last_accessed` | 否 | 最近访问日期 `YYYY-MM-DD` |
 
@@ -74,13 +74,27 @@ immutable: false
 - 写入纪律：公共事实用 FACT；涉及用户偏好 / 边界 / 承诺一律用私密类型，避免公共区泄露。
 - 多智能体协作：每个智能体只读自己的私密区（如 `~/.yottamemory/<agent-id>/prefs/` 可自行约定），公共 FACT 共享。
 
+## 隔离说明
+
+> 隔离说明：scope: private 保证的是"AI 之间的语义隔离"——其他智能体在正常 recall 会话中不会被搜到、也不会主动去读本条私密记忆。但它不是文件系统级机密保护：在你自己的机器上，作为所有者你有权看到任何记忆文件，数据主权在你。本工具不承诺对抗同权限的本地进程主动读取。
+
+读分区边界（recall 三态）：
+
+| 目标 | 行为 |
+|---|---|
+| 公共 FACT | 始终可读 |
+| 当前 agent 自己的 private | 始终可读 |
+| 其它 agent 的 private | 默认拒绝（不返回内容）；需满足任一授权：① `grants.json` 显式授权记录 ② identity=user（`--agent user` / `--owner user` / `YOTTA_AGENT_ID=user`）③ 显式 `--unsafe` |
+
+授权记录格式（`<root>/grants.json`）：`{ "<userAgent>": ["<ownerAgent>", ...] }`，表示 userAgent 可读 ownerAgent 的私密记忆。
+
 ## 5. CLI 命令参考
 
 | 命令 | 行为 |
 |---|---|
 | `init [--project]` | 创建目录结构；默认用户级，`--project` 建项目级 |
 | `remember <type> <subject> <statement> [--owner <id>]` | 写入；同 subject+statement 已存在则只更新 `updated`；`--owner` 标注归属 |
-| `recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all]` | 索引+TF 打分匹配；读取分区过滤；项目级优先；默认 50 条 |
+| `recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 索引+TF 打分匹配；读取分区过滤；越界（读其它智能体私密）默认拒绝，需 grant / identity=user / `--unsafe` 授权；项目级优先；默认 50 条 |
 | `forget <文件>` | 删除（按路径或文件名）|
 | `archive [--days 180] [--threshold 0.4]` | 按盖棺分+年龄移入 `.archive/`（`vitality < threshold` 且超过 N 天）|
 | `reindex` | 全量扫描重建 `index.json`（手动改 .md 后校正）|
