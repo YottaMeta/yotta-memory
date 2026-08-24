@@ -1,22 +1,41 @@
 #!/usr/bin/env node
 // yotta-memory（元忆）: 有权限边界的文件式智能体记忆 CLI（零依赖）
-// v0.2 增强：① index.json 索引+TF 打分 ② 质量分+盖棺分（access_count/last_accessed）③ 读取分区（scope/owner）
+// v0.3.0 新增：serve（局域网 streamable HTTP MCP 记忆引擎）/ token（每智能体访问令牌）/ config（记忆库位置持久化）
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
+const http = require('http');
 
-const VERSION = '0.2.9';
+const VERSION = '0.3.0';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const ARCHIVE_DIR = '.archive';
 const INDEX_FILE = 'index.json';
 const PRIVATE_TYPES = ['PREF', 'BOUND', 'COMMIT'];
 const FIELD_ORDER = ['type', 'subject', 'statement', 'confidence', 'created', 'updated', 'tags', 'immutable', 'scope', 'owner', 'access_count', 'last_accessed'];
+const CONFIG_FILE = 'config.json';
+const SERVER_SUBDIR = '.server';
+const TOKENS_FILE = 'tokens.json';
 
+// ---- 全局配置（记忆库位置持久化，固定 ~/.yottamemory/config.json）----
+function configPath() {
+  return path.join(os.homedir(), '.yottamemory', CONFIG_FILE);
+}
+function loadConfig() {
+  try { return JSON.parse(fs.readFileSync(configPath(), 'utf8')) || {}; } catch (e) { return {}; }
+}
+function saveConfig(cfg) {
+  fs.mkdirSync(path.dirname(configPath()), { recursive: true });
+  fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2), 'utf8');
+}
 function userRoot() {
-  return process.env.YOTTA_MEMORY_HOME || path.join(os.homedir(), '.yottamemory');
+  if (process.env.YOTTA_MEMORY_HOME) return process.env.YOTTA_MEMORY_HOME;
+  const cfg = loadConfig();
+  if (cfg.memory_home) return cfg.memory_home;
+  return path.join(os.homedir(), '.yottamemory');
 }
 function projectRoot() {
   return path.join(process.cwd(), '.yottamemory');
@@ -249,11 +268,7 @@ function vitality(meta) {
 }
 function loadGrants(root) {
   const fp = path.join(root, 'grants.json');
-  try {
-    return JSON.parse(fs.readFileSync(fp, 'utf8')) || {};
-  } catch (e) {
-    return {};
-  }
+  try { return JSON.parse(fs.readFileSync(fp, 'utf8')) || {}; } catch (e) { return {}; }
 }
 function hasGrant(userAgent, ownerAgent) {
   if (!userAgent || !ownerAgent) return false;
@@ -269,33 +284,30 @@ function hasGrant(userAgent, ownerAgent) {
 function classifyRead(entry, agent, ownerFilter, unsafe) {
   if (entry.scope === 'public') return 'read';
   const owner = entry.owner || '';
-  // 无归属的 private：所有 agent 视为自身私密（默认行为保留）
   if (!owner) return 'read';
-  // 归属等于当前 agent 或（显式 --owner 等于当前 agent）：自身授权
   if (agent && owner === agent) return 'read';
   if (ownerFilter && owner === ownerFilter && agent && ownerFilter === agent) return 'read';
-  // 越界读：需要 --unsafe / identity=user / grant 授权，否则拒绝
   if (unsafe || String(ownerFilter).toLowerCase() === 'user' || String(agent && '' + agent).toLowerCase() === 'user') return 'read';
   if (hasGrant(agent, owner)) return 'read';
   return 'denied';
 }
 
-// ---- 命令 ----
-function cmdInit(opts) {
+// ---- 命令 core（CLI 与 MCP 共用；返回 { error, exitCode, text }，不 process.exit）----
+function initCore(opts) {
   const root = opts.project ? projectRoot() : userRoot();
   ensureInit(root);
-  console.log('已初始化记忆库: ' + root);
+  return { error: false, text: '已初始化记忆库: ' + root };
 }
-
-function cmdRemember(type, subject, statement, opts) {
+function rememberCore(type, subject, statement, opts) {
   const root = userRoot();
   ensureInit(root);
   const t = String(type).toUpperCase();
-  const dir = path.join(root, typeDir(t));
+  if (!TYPE_DIRS[t]) return { error: true, text: '未知记忆类型: ' + type + '（可用: ' + TYPES.join(' / ') + '）' };
+  const dir = path.join(root, TYPE_DIRS[t]);
   const stmt = String(statement || '').trim();
   const subj = String(subject || '').trim();
-  if (!stmt) { console.error('statement 不能为空'); process.exit(2); }
-  if (!subj) { console.error('subject 不能为空'); process.exit(2); }
+  if (!stmt) return { error: true, text: 'statement 不能为空' };
+  if (!subj) return { error: true, text: 'subject 不能为空' };
   const owner = opts.owner || currentAgent();
   const scope = opts.scope || defaultScope(t);
   if (fs.existsSync(dir)) {
@@ -310,8 +322,7 @@ function cmdRemember(type, subject, statement, opts) {
         if (scope && !meta.scope) patch.scope = scope;
         rewriteFrontmatter(fp, patch);
         upsertIndexEntry(root, readEntry(fp, root));
-        console.log('已更新: ' + fp);
-        return;
+        return { error: false, text: '已更新: ' + fp };
       }
     }
   }
@@ -325,22 +336,17 @@ function cmdRemember(type, subject, statement, opts) {
   };
   fs.writeFileSync(file, frontmatterToText(rec, stmt), 'utf8');
   upsertIndexEntry(root, readEntry(file, root));
-  console.log('已记录: ' + file);
+  return { error: false, text: '已记录: ' + file };
 }
-
-function cmdRecall(query, opts) {
+function recallCore(query, opts) {
   const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
-  if (!roots.length) {
-    console.log('记忆库不存在，请先运行: yotta-memory init');
-    return;
-  }
+  if (!roots.length) return { error: false, exitCode: 0, text: '记忆库不存在，请先运行: yotta-memory init' };
   const limit = opts.limit || 50;
   const onlyType = opts.type ? String(opts.type).toUpperCase() : null;
   const q = query ? String(query).toLowerCase() : '';
   const agent = opts.agent || currentAgent();
   const ownerFilter = opts.owner || '';
   const allSafe = !!opts.unsafe;
-  // 是否显式发起跨智能体读取（--all 或 --owner <其它agent>）：只有此时越界读才报错/警告，默认 recall 保持原有静默跳过
   const explicitCross = !!opts.all || (!!ownerFilter && ownerFilter.toLowerCase() !== 'user' && ownerFilter !== agent);
   const hits = [];
   let deniedCount = 0;
@@ -375,12 +381,9 @@ function cmdRecall(query, opts) {
   const shown = hits.slice(0, limit);
   if (!shown.length) {
     if (deniedCount > 0 && explicitCross) {
-      console.log('检测到 ' + deniedCount + ' 条越界访问已被拒绝。');
-      console.log('如需读取其它智能体私密记忆，请加 --unsafe（用户显式授权）或 --owner user。');
-      process.exit(3);
+      return { error: false, exitCode: 3, text: '检测到 ' + deniedCount + ' 条越界访问已被拒绝。\n如需读取其它智能体私密记忆，请加 --unsafe（用户显式授权）或 --owner user。' };
     }
-    console.log('无匹配记忆。');
-    return;
+    return { error: false, exitCode: 0, text: '无匹配记忆。' };
   }
   const touchRel = shown.filter(function (h) { return !h.entry.immutable; }).map(function (h) { return h.entry.file; });
   if (touchRel.length) {
@@ -389,17 +392,17 @@ function cmdRecall(query, opts) {
       touchIndex(root, touchRel);
     }
   }
-  console.log('共 ' + shown.length + ' 条记忆（' + (hits.length > limit ? '前 ' + limit + ' 条' : '全部') + '）：');
+  const lines = ['共 ' + shown.length + ' 条记忆（' + (hits.length > limit ? '前 ' + limit + ' 条' : '全部') + '）：'];
   for (const h of shown) {
-    console.log('[' + h.entry.type + '] ' + h.entry.subject + ': ' + h.entry.statement);
-    console.log('  ' + path.join(h.root, h.entry.file));
+    lines.push('[' + h.entry.type + '] ' + h.entry.subject + ': ' + h.entry.statement);
+    lines.push('  ' + path.join(h.root, h.entry.file));
   }
   if (deniedCount > 0 && explicitCross) {
-    console.log('\n[警告] 本次检索共拒绝 ' + deniedCount + ' 条越界访问（其它智能体私密记忆，未授权不展示）。如需读取请加 --unsafe 或 --owner user。');
+    lines.push('\n[警告] 本次检索共拒绝 ' + deniedCount + ' 条越界访问（其它智能体私密记忆，未授权不展示）。如需读取请加 --unsafe 或 --owner user。');
   }
+  return { error: false, exitCode: 0, text: lines.join('\n') };
 }
-
-function cmdForget(fileRef) {
+function forgetCore(fileRef) {
   const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
   const ref = String(fileRef || '').replace(/\\/g, '/');
   const slash = ref.indexOf('/');
@@ -430,17 +433,16 @@ function cmdForget(fileRef) {
     }
     if (target) break;
   }
-  if (!target) { console.error('未找到记忆文件: ' + fileRef); process.exit(2); }
+  if (!target) return { error: true, text: '未找到记忆文件: ' + fileRef };
   fs.unlinkSync(target);
   if (targetRoot) removeIndexEntry(targetRoot, targetRel);
-  console.log('已删除: ' + target);
+  return { error: false, text: '已删除: ' + target };
 }
-
-function cmdArchive(opts) {
+function archiveCore(opts) {
   const days = opts.days || 180;
   const threshold = (opts.threshold !== undefined && opts.threshold !== null) ? opts.threshold : 0.4;
   const root = userRoot();
-  if (!fs.existsSync(root)) { console.log('记忆库不存在。'); return; }
+  if (!fs.existsSync(root)) return { error: false, text: '记忆库不存在。' };
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   let moved = 0;
   const movedFiles = [];
@@ -465,9 +467,33 @@ function cmdArchive(opts) {
     }
   }
   if (movedFiles.length) removeIndexEntries(root, movedFiles);
-  console.log('已归档 ' + moved + ' 条旧记忆到 ' + path.join(root, ARCHIVE_DIR));
+  return { error: false, text: '已归档 ' + moved + ' 条旧记忆到 ' + path.join(root, ARCHIVE_DIR) };
 }
 
+// ---- 命令包装（CLI 入口）----
+function cmdInit(opts) {
+  const r = initCore(opts);
+  console.log(r.text);
+}
+function cmdRemember(type, subject, statement, opts) {
+  const r = rememberCore(type, subject, statement, opts);
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+function cmdRecall(query, opts) {
+  const r = recallCore(query, opts);
+  console.log(r.text);
+  if (r.exitCode) process.exit(r.exitCode);
+}
+function cmdForget(fileRef) {
+  const r = forgetCore(fileRef);
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+function cmdArchive(opts) {
+  const r = archiveCore(opts);
+  console.log(r.text);
+}
 function cmdReindex() {
   const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
   if (!roots.length) { console.log('记忆库不存在。'); return; }
@@ -476,7 +502,6 @@ function cmdReindex() {
     console.log('已重建索引 ' + root + '（' + n + ' 条）');
   }
 }
-
 function collectAll(root) {
   const out = [];
   for (const t of Object.keys(TYPE_DIRS)) {
@@ -491,16 +516,12 @@ function collectAll(root) {
   }
   return out;
 }
-
 function cmdExport(outPath) {
-  const root = userRoot();
-  if (!fs.existsSync(root)) { console.log('记忆库不存在。'); return; }
-  const data = { exported: today(), version: VERSION, memories: collectAll(root) };
+  const data = { format: 'yottamemory', version: 1, exported: today(), memories: collectAll(userRoot()) };
   const target = outPath || 'yottamemory-export-' + today() + '.json';
   fs.writeFileSync(target, JSON.stringify(data, null, 2), 'utf8');
   console.log('已导出 ' + data.memories.length + ' 条记忆 -> ' + target);
 }
-
 function cmdImport(src) {
   if (!src || !fs.existsSync(src)) { console.error('请提供 JSON 文件路径'); process.exit(2); }
   const data = JSON.parse(fs.readFileSync(src, 'utf8'));
@@ -537,27 +558,206 @@ function cmdImport(src) {
   console.log('已导入 ' + n + ' 条记忆 -> ' + root);
 }
 
+// ---- token 管理（每智能体一个，登记 <记忆库>/.server/tokens.json）----
+function serverDir(root) { return path.join(root, SERVER_SUBDIR); }
+function tokensPath(root) { return path.join(serverDir(root), TOKENS_FILE); }
+function loadTokens(root) {
+  try { return JSON.parse(fs.readFileSync(tokensPath(root), 'utf8')) || {}; } catch (e) { return {}; }
+}
+function saveTokens(root, data) {
+  fs.mkdirSync(serverDir(root), { recursive: true });
+  fs.writeFileSync(tokensPath(root), JSON.stringify(data, null, 2), 'utf8');
+  try { fs.chmodSync(tokensPath(root), 0o600); } catch (e) {}
+}
+function cmdTokenNew(agentId) {
+  const root = userRoot();
+  ensureInit(root);
+  if (!agentId) { console.error('请指定 --agent <id>'); process.exit(2); }
+  const data = loadTokens(root);
+  data.version = 1;
+  data.tokens = data.tokens || {};
+  const token = 'ytm_' + crypto.randomBytes(16).toString('hex');
+  data.tokens[agentId] = { token: token, created: today() };
+  saveTokens(root, data);
+  console.log(token);
+}
+function cmdTokenList() {
+  const root = userRoot();
+  const data = loadTokens(root);
+  const map = data.tokens || {};
+  const ids = Object.keys(map);
+  if (!ids.length) { console.log('暂无已登记 token（yotta-memory token new --agent <id> 生成）'); return; }
+  console.log('已登记智能体:');
+  for (const id of ids) console.log('  ' + id + '  (创建于 ' + map[id].created + ')');
+}
+function cmdTokenRevoke(agentId) {
+  const root = userRoot();
+  if (!agentId) { console.error('请指定 --agent <id>'); process.exit(2); }
+  const data = loadTokens(root);
+  data.tokens = data.tokens || {};
+  if (data.tokens[agentId]) { delete data.tokens[agentId]; saveTokens(root, data); console.log('已吊销: ' + agentId); }
+  else { console.log('未找到已登记智能体: ' + agentId); }
+}
+
+// ---- config 命令 ----
+function cmdConfigSet(key, value) {
+  if (key !== 'memory_home') { console.error('未知配置项: ' + key + '（可用: memory_home）'); process.exit(2); }
+  if (!value) { console.error('缺少值: config set memory_home <目录>'); process.exit(2); }
+  const cfg = loadConfig();
+  cfg.memory_home = value;
+  saveConfig(cfg);
+  console.log('已记住记忆库位置: ' + value);
+}
+function cmdConfigGet() {
+  const cfg = loadConfig();
+  console.log('memory_home: ' + (cfg.memory_home || '(未设置，默认 ~/.yottamemory)'));
+  console.log('当前生效用户级位置: ' + userRoot());
+  if (cfg.serve && Object.keys(cfg.serve).length) console.log('serve: ' + JSON.stringify(cfg.serve));
+}
+
+// ---- MCP serve（局域网 streamable HTTP 记忆引擎，零依赖）----
+function mcpTools() {
+  return [
+    { name: 'remember', description: '写入一条记忆。参数 type(FACT/PREF/BOUND/COMMIT)、subject、statement 必填；owner 可选，默认当前智能体', inputSchema: { type: 'object', properties: { type: { type: 'string', description: 'FACT/PREF/BOUND/COMMIT' }, subject: { type: 'string' }, statement: { type: 'string' }, owner: { type: 'string' } }, required: ['type', 'subject', 'statement'] } },
+    { name: 'recall', description: '检索记忆。query 可选；type 可选；limit 可选（默认 20）。只返回当前智能体可读记忆', inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string' }, limit: { type: 'number' } } } },
+    { name: 'search', description: '检索记忆（同 recall）。query 可选；type 可选；limit 可选（默认 20）', inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string' }, limit: { type: 'number' } } } },
+    { name: 'forget', description: '删除一条记忆。file 为记忆文件路径（如 facts/2026-08-24-0001.md 或文件名）', inputSchema: { type: 'object', properties: { file: { type: 'string' } }, required: ['file'] } },
+    { name: 'archive', description: '归档旧记忆。days 默认 180；threshold 默认 0.4', inputSchema: { type: 'object', properties: { days: { type: 'number' }, threshold: { type: 'number' } } } },
+  ];
+}
+function callTool(name, args, ctx) {
+  const agent = ctx.agent || '';
+  try {
+    if (name === 'remember') {
+      const r = rememberCore(String(args.type || ''), String(args.subject || ''), String(args.statement || ''), { owner: args.owner || agent });
+      return { text: r.text, error: r.error };
+    }
+    if (name === 'recall' || name === 'search') {
+      const r = recallCore(args.query ? String(args.query) : null, { limit: args.limit || 20, type: args.type ? String(args.type) : null, agent: agent });
+      return { text: r.text, error: r.error };
+    }
+    if (name === 'forget') {
+      const r = forgetCore(String(args.file || ''));
+      return { text: r.text, error: r.error };
+    }
+    if (name === 'archive') {
+      const r = archiveCore({ days: args.days, threshold: args.threshold });
+      return { text: r.text, error: r.error };
+    }
+    return { text: '未知工具: ' + name, error: true };
+  } catch (e) {
+    return { text: '错误: ' + (e && e.message ? e.message : String(e)), error: true };
+  }
+}
+function handleMessage(msg, ctx) {
+  if (!msg || msg.jsonrpc !== '2.0') return { jsonrpc: '2.0', id: msg && msg.id, error: { code: -32600, message: 'invalid request' } };
+  const id = msg.id;
+  if (id === undefined || id === null) return null;
+  const method = msg.method || '';
+  const params = msg.params || {};
+  if (method === 'initialize') {
+    return { jsonrpc: '2.0', id: id, result: { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'yotta-memory', version: VERSION } } };
+  }
+  if (method === 'ping') return { jsonrpc: '2.0', id: id, result: {} };
+  if (method === 'tools/list') return { jsonrpc: '2.0', id: id, result: { tools: mcpTools() } };
+  if (method === 'tools/call') {
+    const out = callTool(params.name || '', params.arguments || {}, ctx);
+    return { jsonrpc: '2.0', id: id, result: { content: [{ type: 'text', text: out.text }], isError: !!out.error } };
+  }
+  return { jsonrpc: '2.0', id: id, error: { code: -32601, message: 'Method not found: ' + method } };
+}
+function cmdServe(opts) {
+  const host = opts.host || '0.0.0.0';
+  const port = opts.port || 8787;
+  const noAuth = !!opts.noAuth;
+  const root = userRoot();
+  ensureInit(root);
+  const tokenData = loadTokens(root);
+  const tokenMap = tokenData.tokens || {};
+  function authorize(req) {
+    if (noAuth) return { agent: String(req.headers['x-agent-id'] || '') };
+    const auth = req.headers['authorization'] || '';
+    const m = /^Bearer\s+(.+)$/i.exec(auth);
+    if (!m) return null;
+    const token = m[1].trim();
+    const agent = String(req.headers['x-agent-id'] || '');
+    if (tokenMap[agent] && tokenMap[agent].token === token) return { agent: agent };
+    return null;
+  }
+  const server = http.createServer(function (req, res) {
+    let pathname = '/';
+    try { pathname = new URL(req.url, 'http://' + (req.headers.host || 'localhost')).pathname; } catch (e) {}
+    if (pathname !== '/mcp') { res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('not found'); return; }
+    const auth = authorize(req);
+    if (!auth) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'unauthorized: 需要有效 Bearer token 与 X-Agent-Id' } }));
+      return;
+    }
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+      res.write('event: endpoint\ndata: /mcp\n\n');
+      const iv = setInterval(function () { res.write(': keep-alive\n\n'); }, 15000);
+      req.on('close', function () { clearInterval(iv); });
+      return;
+    }
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', function (c) { body += c; });
+      req.on('end', function () {
+        let msg;
+        try { msg = JSON.parse(body); } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: 'parse error' } }));
+          return;
+        }
+        const resp = handleMessage(msg, auth);
+        if (resp === null) { res.writeHead(204); res.end(); return; }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(resp));
+      });
+      return;
+    }
+    res.writeHead(405, { 'Content-Type': 'text/plain' }); res.end('method not allowed');
+  });
+  server.listen(port, host, function () {
+    console.log('yotta-memory 记忆引擎已启动（v' + VERSION + '）');
+    console.log('URL: http://' + host + ':' + port + '/mcp');
+    console.log('记忆库: ' + root);
+    if (noAuth) console.log('鉴权: 已关闭（--no-auth，仅限可信内网）');
+    else console.log('鉴权: Bearer token + X-Agent-Id（yotta-memory token new --agent <id> 生成）');
+    console.log('按 Ctrl+C 停止');
+  });
+}
+
+// ---- usage / main ----
 function usage() {
   console.log([
     'yotta-memory v' + VERSION + ' — 元忆：有权限边界的文件式智能体记忆',
     '',
     '用法:',
-    '  yotta-memory init [--project]             初始化记忆库（默认用户级 ~/.yottamemory）',
+    '  yotta-memory init [--project]             初始化记忆库（默认用户级）',
+    '  yotta-memory config set memory_home <目录>  持久记住记忆库位置',
+    '  yotta-memory config get                   查看当前配置与生效位置',
     '  yotta-memory remember <type> <subject> <statement> [--owner <id>]   写入记忆',
-    '  yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]  检索（索引+TF，读取分区；--unsafe 允许越界读其它智能体私密）',
+    '  yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]  检索（索引+TF，读取分区）',
     '  yotta-memory forget <文件或文件名>         删除一条记忆',
     '  yotta-memory archive [--days 180] [--threshold 0.4]  归档（盖棺分+年龄）',
-    '  yotta-memory reindex                       重建索引（手动改文件后用）',
+    '  yotta-memory reindex                       重建索引',
     '  yotta-memory export [--out 文件.json]      导出全部记忆',
     '  yotta-memory import <文件.json>            导入记忆',
+    '  yotta-memory token new --agent <id>       生成/重置某智能体访问 token（登记 .server/tokens.json，打印一次）',
+    '  yotta-memory token list                   列出已登记智能体',
+    '  yotta-memory token revoke --agent <id>    吊销某智能体 token',
+    '  yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth]  启动局域网 MCP 记忆引擎（streamable HTTP）',
     '  yotta-memory --version                    版本',
     '',
     '类型: FACT(公共共享) / PREF(偏好) / BOUND(边界) / COMMIT(承诺)',
-    '环境变量: YOTTA_MEMORY_HOME 覆盖用户级目录; YOTTA_AGENT_ID/AGENT_ID 作为当前 agent 标识（读取分区）',
+    '环境变量: YOTTA_MEMORY_HOME 临时覆盖用户级位置; YOTTA_AGENT_ID/AGENT_ID 当前 agent 标识（读取分区）',
+    '远端接入: MCP url http://<主机IP>:8787/mcp；请求头 Authorization: Bearer <token> + X-Agent-Id: <id>',
     '',
   ].join('\n'));
 }
-
 function main() {
   const args = process.argv.slice(2);
   if (!args.length) { usage(); return; }
@@ -566,12 +766,13 @@ function main() {
   if (first === '--help' || first === '-h') { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port']);
   for (let i = 1; i < args.length; i++) {
     const a = args[i];
     if (a === '--project') opts.project = true;
     else if (a === '--all') opts.all = true;
     else if (a === '--unsafe') opts.unsafe = true;
+    else if (a === '--no-auth') opts.noAuth = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;
@@ -582,6 +783,8 @@ function main() {
       else if (a === '--owner') opts.owner = v;
       else if (a === '--agent') opts.agent = v;
       else if (a === '--scope') opts.scope = v;
+      else if (a === '--host') opts.host = v;
+      else if (a === '--port') opts.port = parseInt(v, 10) || 8787;
     } else if (a.startsWith('--')) {
       console.error('未知选项: ' + a);
       process.exit(2);
@@ -591,6 +794,13 @@ function main() {
   }
   switch (first) {
     case 'init': cmdInit(opts); break;
+    case 'config': {
+      const sub = positional[0];
+      if (sub === 'set') cmdConfigSet(positional[1], positional[2]);
+      else if (sub === 'get') cmdConfigGet();
+      else { console.error('config 子命令: set memory_home <目录> / get'); process.exit(2); }
+      break;
+    }
     case 'remember': cmdRemember(positional[0], positional[1], positional[2], opts); break;
     case 'recall': cmdRecall(positional[0] || null, opts); break;
     case 'forget': cmdForget(positional[0]); break;
@@ -598,6 +808,15 @@ function main() {
     case 'reindex': cmdReindex(); break;
     case 'export': cmdExport(opts.out); break;
     case 'import': cmdImport(positional[0]); break;
+    case 'token': {
+      const sub = positional[0];
+      if (sub === 'new') cmdTokenNew(opts.agent);
+      else if (sub === 'list') cmdTokenList();
+      else if (sub === 'revoke') cmdTokenRevoke(opts.agent);
+      else { console.error('token 子命令: new --agent <id> / list / revoke --agent <id>'); process.exit(2); }
+      break;
+    }
+    case 'serve': cmdServe(opts); break;
     default:
       console.error('未知命令: ' + first);
       usage();
@@ -605,4 +824,20 @@ function main() {
   }
 }
 
-main();
+if (require.main === module) main();
+module.exports = {
+  VERSION: VERSION,
+  userRoot: userRoot,
+  projectRoot: projectRoot,
+  rememberCore: rememberCore,
+  recallCore: recallCore,
+  forgetCore: forgetCore,
+  archiveCore: archiveCore,
+  mcpTools: mcpTools,
+  callTool: callTool,
+  handleMessage: handleMessage,
+  loadConfig: loadConfig,
+  saveConfig: saveConfig,
+  loadTokens: loadTokens,
+  saveTokens: saveTokens,
+};

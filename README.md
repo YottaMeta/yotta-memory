@@ -136,6 +136,9 @@ bash install.sh --dir /path/to/skills
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（盖棺分+年龄，immutable 除外）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
+| `yotta-memory config set memory_home <目录>` / `config get` | 持久记住 / 查看记忆库位置（`~/.yottamemory/config.json`）|
+| `yotta-memory token new --agent <id>` / `token list` / `token revoke --agent <id>` | 为智能体生成 / 列出 / 吊销访问 token（登记于记忆库 `.server/tokens.json`）|
+| `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth]` | 启动局域网 MCP 记忆引擎（零依赖 streamable HTTP，Bearer token + X-Agent-Id 鉴权）|
 
 类型：`FACT`（事实，公共共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺）。
 
@@ -154,6 +157,60 @@ yotta-memory recall --type FACT --limit 10
 ## 智能体接入后怎么用
 
 把技能装进智能体后，SKILL.md 会自动教会智能体：开工 `recall` 恢复上下文 → 重要信息 `remember` 落盘 → 收工归档。也可在对话中直接说「记住 XXX」「上次说到哪了」。
+
+## 局域网多机共享（便携记忆盘模式）
+
+记忆库可以装在任何主机或硬盘上（= 记忆引擎），供局域网内其它主机上的智能体远程接入：
+
+- **本机直连**：CLI 直接读写，无需 token；
+- **远程接入**：引擎主机运行 `yotta-memory serve` 常驻，远程智能体通过 MCP 以 `url + token` 连接。
+
+### 引擎侧（记忆所在主机）
+
+1. 初始化或接入记忆库（见 CLI 用法）。
+2. 为需要访问的每个智能体生成独立 token：
+   ```bash
+   yotta-memory token new --agent <智能体ID>     # 打印一次，如 ytm_...
+   yotta-memory token list                        # 查看已登记智能体
+   yotta-memory token revoke --agent <智能体ID>   # 吊销
+   ```
+3. 启动常驻服务（默认监听 0.0.0.0:8787，Bearer token + X-Agent-Id 鉴权）：
+   ```bash
+   yotta-memory serve
+   ```
+
+> 首次监听 0.0.0.0 时，Windows / 系统防火墙可能询问是否放行，需允许放行，否则局域网内其它主机无法访问；`--no-auth` 会关闭鉴权，仅限可信内网使用。
+
+### 客户端侧（远程智能体）
+
+在智能体 MCP 配置中登记连接（`url` + 两个请求头）：
+
+```json
+{
+  "mcpServers": {
+    "yotta-memory": {
+      "url": "http://<引擎主机IP>:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer <TOKEN>",
+        "X-Agent-Id": "<本智能体ID>"
+      }
+    }
+  }
+}
+```
+
+连接后可通过 MCP tools（remember / recall / search / forget / archive）读写记忆。`X-Agent-Id` 必须与 token 登记的智能体一致；读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
+
+### 位置持久化
+
+CLI 会持久记住记忆库位置（`~/.yottamemory/config.json`），同一主机上的智能体此后开工 `recall` 自动使用正确位置，无需每次指定：
+
+```bash
+yotta-memory config set memory_home <记忆库目录>
+yotta-memory config get
+```
+
+位置解析优先级：`YOTTA_MEMORY_HOME`（临时覆盖）> `config.json#memory_home`（持久）> 默认 `~/.yottamemory`。把记忆库放在硬盘上、插到任意主机后执行一次 `config set memory_home`，即可在该主机恢复全部记忆。
 
 ## 开发与校验
 
