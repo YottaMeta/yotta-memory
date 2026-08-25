@@ -47,13 +47,13 @@
 |---|---|---|
 | npx skills（生态标准入口） | `npx skills add YottaMeta/yotta-memory` | 自动检测已装智能体 |
 | 安装器（npm 全局时） | `yotta-memory-install -g` / `yotta-memory-install --agent codex` | 装进所有 / 指定智能体 |
-| 手动 | 把 `SKILL.md` 复制到智能体的 skills 目录 | 离线 |
+| 手动 | 把整个 `yotta-memory` 文件夹复制到智能体的 skills 目录 | 离线 |
 
 > CLI 与技能分工不同：CLI 让命令行能读写记忆；技能让 AI 知道「开工 recall 恢复上下文、重要信息 remember 落盘、收工归档」。只装 CLI 不装技能，AI 不会自动使用这套工作流。
 
-**更新：** `npm i -g @yottameta/yotta-memory@latest` 升级 CLI，再把 SKILL.md 重新装进智能体（重复执行上面的技能安装命令即可）。
+**更新：** `npm i -g @yottameta/yotta-memory@latest` 升级 CLI，再把技能文件夹重新装进智能体（重复执行上面的技能安装命令即可）。
 
-**卸载：** `npm rm -g @yottameta/yotta-memory`，并从智能体的 skills 目录删除 SKILL.md。
+**卸载：** `npm rm -g @yottameta/yotta-memory`，并从智能体的 skills 目录删除整个 `yotta-memory` 文件夹。
 
 ## 3. 本机单机使用
 
