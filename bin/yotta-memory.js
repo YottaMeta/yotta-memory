@@ -3,6 +3,7 @@
 // v0.4.0 新增：lan（Windows 计划任务开机自启 serve）/ init --dir（显式指定位置）/ serve --stdio（本地零进程模式）/ MCP 工具补 reindex/export/import
 // v0.5.0 新增：隐私硬隔离——私密物理分目录 private/<agent_id>/{prefs,bounds,commits}/ + 关闭 --agent 越权读 + 私密写跨智能体需 --unsafe + 禁 shell 直读写（文档红线）
 // v0.4.2 新增：iam/whoami 智能体身份自注册（agents.json 唯一性）+ 自我档案 PREF + 私密记忆须声明 owner
+// v0.5.3 新增：CLI 选项可前置（--agent 等允许放在子命令前，不再误报"未知命令"）/ lan enable 成功补"服务不会立刻启动"提示（v0.5.2 lan 引号修复无回归）
 'use strict';
 
 const fs = require('fs');
@@ -12,7 +13,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.5.2';
+const VERSION = '0.5.3';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -983,6 +984,7 @@ function cmdLanEnable(opts) {
   }
   console.log('已注册开机自启: 计划任务 ' + LAN_TASK_NAME + '（触发器 ' + trigger + '）');
   console.log('运行命令: ' + tr);
+  console.log('备注: 服务不会立刻启动，需重启/重新登录后自动启动；如需现在运行请执行 yotta-memory serve');
 }
 function cmdLanDisable() {
   if (process.platform !== 'win32') {
@@ -1055,14 +1057,13 @@ function usage() {
 function main() {
   const args = process.argv.slice(2);
   if (!args.length) { usage(); return; }
-  const first = args[0];
-  if (first === '--version' || first === '-v') { console.log(VERSION); return; }
-  if (first === '--help' || first === '-h') { usage(); return; }
   const opts = {};
   const positional = [];
   const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir']);
-  for (let i = 1; i < args.length; i++) {
+  for (let i = 0; i < args.length; i++) {
     const a = args[i];
+    if (a === '--version' || a === '-v') { console.log(VERSION); return; }
+    if (a === '--help' || a === '-h') { usage(); return; }
     if (a === '--project') opts.project = true;
     else if (a === '--all') opts.all = true;
     else if (a === '--unsafe') opts.unsafe = true;
@@ -1090,26 +1091,28 @@ function main() {
       positional.push(a);
     }
   }
+  const first = positional[0];
+  const rest = positional.slice(1);
   switch (first) {
     case 'init': cmdInit(opts); break;
     case 'whoami': cmdWhoami(); break;
-    case 'iam': cmdIam(positional[0], opts); break;
+    case 'iam': cmdIam(rest[0], opts); break;
     case 'config': {
-      const sub = positional[0];
-      if (sub === 'set') cmdConfigSet(positional[1], positional[2]);
+      const sub = rest[0];
+      if (sub === 'set') cmdConfigSet(rest[1], rest[2]);
       else if (sub === 'get') cmdConfigGet();
       else { console.error('config 子命令: set memory_home <目录> / get'); process.exit(2); }
       break;
     }
-    case 'remember': cmdRemember(positional[0], positional[1], positional[2], opts); break;
-    case 'recall': cmdRecall(positional[0] || null, opts); break;
-    case 'forget': cmdForget(positional[0]); break;
+    case 'remember': cmdRemember(rest[0], rest[1], rest[2], opts); break;
+    case 'recall': cmdRecall(rest[0] || null, opts); break;
+    case 'forget': cmdForget(rest[0]); break;
     case 'archive': cmdArchive(opts); break;
     case 'reindex': cmdReindex(); break;
     case 'export': cmdExport(opts.out); break;
-    case 'import': cmdImport(positional[0]); break;
+    case 'import': cmdImport(rest[0]); break;
     case 'token': {
-      const sub = positional[0];
+      const sub = rest[0];
       if (sub === 'new') cmdTokenNew(opts.agent, opts);
       else if (sub === 'list') cmdTokenList();
       else if (sub === 'revoke') cmdTokenRevoke(opts.agent);
@@ -1118,7 +1121,7 @@ function main() {
     }
     case 'serve': cmdServe(opts); break;
     case 'lan': {
-      const sub = positional[0];
+      const sub = rest[0];
       if (sub === 'enable') cmdLanEnable(opts);
       else if (sub === 'disable') cmdLanDisable();
       else if (sub === 'status') cmdLanStatus();
@@ -1126,6 +1129,7 @@ function main() {
       break;
     }
     default:
+      if (!first) { usage(); return; }
       console.error('未知命令: ' + first);
       usage();
       process.exit(2);
