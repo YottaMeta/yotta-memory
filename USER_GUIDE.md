@@ -8,7 +8,7 @@
 2. 安装
 3. 本机单机使用
 4. 便携记忆盘 · 记忆引擎主机篇（Linux / Windows）
-5. 便携记忆盘 · 智能体接入篇
+5. 智能体接入篇（本机 / 局域网其它主机）
 6. CLI 命令速查
 7. 故障排查
 8. 安全与边界
@@ -85,13 +85,13 @@ sudo systemctl enable --now yotta-memory
 systemctl status yotta-memory        # 查看状态
 ```
 
-**第 4 步：为每个智能体生成访问 token**
+**第 4 步：为局域网其它主机的智能体生成访问 token**
 
 ```bash
 yotta-memory token new --agent 我的智能体ID
 ```
 
-命令会打印一次 `ytm_...`，请妥善保管（它就是访问凭证）。多个智能体就重复执行、用不同 ID。
+命令会打印一次 `ytm_...`，请妥善保管（它就是访问凭证）。多个智能体就重复执行、用不同 ID。**本机上的 AI 智能体不需要 token**（见第 5 篇）。
 
 **第 5 步：把连接信息交给远程智能体的用户**
 
@@ -101,9 +101,37 @@ yotta-memory token new --agent 我的智能体ID
 
 查本机 IP：Linux 运行 `hostname -I`（或 `ip a`）；Windows 运行 `ipconfig` 找「IPv4 地址」。防火墙：Linux 若启用了 ufw，执行 `sudo ufw allow 8787/tcp`；Windows 首次监听时允许放行。否则局域网其它主机连不进来。
 
-## 5. 便携记忆盘 · 智能体接入篇
+## 5. 智能体接入篇（本机 / 局域网其它主机）
 
-场景：你的智能体在其它主机上，需要读写远程记忆引擎上的记忆。若智能体就在引擎主机本机，直接用 CLI（`yotta-memory recall` 等），不需要 MCP、不需要 token。
+接入智能体分两类：引擎主机本机的智能体、局域网其它主机上的智能体。本机不需要 token、不依赖远程服务；其它主机经 MCP + token 接入。
+
+### 5.1 本机 AI 智能体（引擎主机本机）
+
+**方式一（推荐，最简单）：让智能体直接调用 CLI。**
+
+```bash
+yotta-memory recall <关键词>            # 智能体开工恢复上下文
+yotta-memory remember FACT 主题 内容    # 智能体落盘
+```
+
+智能体装上技能后（`SKILL.md`）会自动学会这套工作流，无需任何 MCP 配置。
+
+**方式二：stdio MCP（零常驻进程，智能体按需拉起 CLI）。** 在智能体 MCP 配置里加：
+
+```json
+{
+  "mcpServers": {
+    "yotta-memory": {
+      "command": "yotta-memory",
+      "args": ["serve", "--stdio"]
+    }
+  }
+}
+```
+
+本机接入不需要 token，也不需要启动 HTTP 服务。
+
+### 5.2 局域网其它主机的 AI 智能体
 
 **第 1 步：向记忆引擎主机获取**：引擎 IP、端口（默认 8787）、本智能体的 token、智能体 ID。
 
