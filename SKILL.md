@@ -1,14 +1,14 @@
 ---
 name: yotta-memory
 description: "元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆"
-version: 0.3.0
+version: 0.4.0
 license: MIT
 ---
 
 # yotta-memory（元忆）— 有权限边界的文件式智能体记忆
 
 > 一句话：元忆 —— 有权限边界的文件式智能体记忆（不注入、可 diff、能回滚；FACT 共享、PREF / BOUND / COMMIT 私密隔离）。
-> 版本：0.3.0 | 最后更新：2026-08-24
+> 版本：0.4.0 | 最后更新：2026-08-25
 
 ## 这是什么
 
@@ -35,7 +35,7 @@ license: MIT
 
 | 命令 | 作用 |
 |---|---|
-| `yotta-memory init [--project]` | 初始化记忆库（默认用户级）|
+| `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库（默认用户级；--dir 显式指定位置）|
 | `yotta-memory remember <type> <subject> <statement> [--owner <id>]` | 写入（同 subject+statement 自动更新；--owner 标注归属，默认取 agent id）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索（索引+TF 打分，读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；项目级优先）|
 | `yotta-memory forget <文件>` | 删除（按类型目录路径或文件名）|
@@ -44,7 +44,8 @@ license: MIT
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
 | `yotta-memory config set memory_home <目录>` / `config get` | 持久记住 / 查看记忆库位置（`~/.yottamemory/config.json`）|
 | `yotta-memory token new --agent <id>` / `token list` / `token revoke --agent <id>` | 每智能体访问 token：生成 / 列出 / 吊销（登记 `<记忆库>/.server/tokens.json`）|
-| `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth]` | 启动局域网 MCP 记忆引擎（零依赖 streamable HTTP，Bearer token + X-Agent-Id 鉴权）|
+| `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id 鉴权）|
+| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows 计划任务，默认 ONLOGON 登录自启；--onstart 开机即启需管理员）|
 
 ## 存储格式（摘要）
 
@@ -78,7 +79,7 @@ yotta-memory --version    # 或 command -v yotta-memory / where yotta-memory
 **步骤 0.3 接入现有 vs 初始化新库（关键判断）**
 1. 检查目标目录是否已是记忆库：存在 `facts/` 等子目录或 `index.json`。
 2. 已是 → 🔒 **征得同意后**直接接入（不重复初始化）：设位置后 `recall` 验证能读到旧记忆。
-3. 不是 → 🔒 **征得同意后**初始化新库：`YOTTA_MEMORY_HOME=<目录> yotta-memory init`（项目级用 `init --project`）。
+3. 不是 → 🔒 **征得同意后**初始化新库：`yotta-memory init --dir <目录>` 或 `YOTTA_MEMORY_HOME=<目录> yotta-memory init`（项目级用 `init --project`）。
 4. 验证：`recall` 跑通。
 
 **步骤 0.4 持久记住位置（重要）**
@@ -89,8 +90,9 @@ yotta-memory --version    # 或 command -v yotta-memory / where yotta-memory
 > 记忆盘场景：硬盘插上 → AI 检查盘上目录是否有数据 → 有则接入 + config 记住 → 插盘即恢复，机器记住位置。
 
 **步骤 0.5 启动记忆引擎（仅引擎主机，供远程接入）**
-- 本机若作引擎：🔒 **征得同意后**常驻运行 `yotta-memory serve`（默认 `0.0.0.0:8787`，Bearer token + X-Agent-Id 鉴权；`--no-auth` 仅限可信内网）。
-- 远程客户端接入前，先确认引擎主机 serve 已运行。
+- 本机若作引擎：🔒 **征得同意后**启动服务——临时运行 `yotta-memory serve`（默认 `0.0.0.0:8787`，Bearer token + X-Agent-Id 鉴权；`--no-auth` 仅限可信内网），或注册开机自启 `yotta-memory lan enable`（Windows 计划任务，默认登录自启；`--onstart` 开机即启需管理员）。
+- 本地零进程模式：本机 AI 也可用 `serve --stdio` 由 MCP 客户端按需拉起 CLI（无常驻进程，照灵魂盘）。
+- 远程客户端接入前，先确认引擎主机 serve 已运行（`lan status` 可查）。
 
 ### 4.1 触发
 用户提及「记忆盘 / 记忆引擎 / 共享记忆 / 局域网记忆」，或开工 `recall` 发现需要访问远程记忆库时进入本流程。
@@ -123,6 +125,8 @@ yotta-memory --version    # 或 command -v yotta-memory / where yotta-memory
 3. 添加 server（JSON 见 4.8）；
 4. 按当前智能体机制重载 MCP（必要时请用户重启会话）；
 5. 用 MCP tools 读写记忆。
+
+> MCP 工具集与 CLI 一致：remember / recall / search / forget / archive / reindex / export / import；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露。
 
 ### 4.7 MCP 配置位置表
 | 智能体 | 常见 MCP 配置位置 |

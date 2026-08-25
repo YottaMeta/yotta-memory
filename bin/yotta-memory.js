@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // yotta-memory（元忆）: 有权限边界的文件式智能体记忆 CLI（零依赖）
-// v0.3.0 新增：serve（局域网 streamable HTTP MCP 记忆引擎）/ token（每智能体访问令牌）/ config（记忆库位置持久化）
+// v0.4.0 新增：lan（Windows 计划任务开机自启 serve）/ init --dir（显式指定位置）/ serve --stdio（本地零进程模式）/ MCP 工具补 reindex/export/import
 'use strict';
 
 const fs = require('fs');
@@ -8,8 +8,9 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const http = require('http');
+const child_process = require('child_process');
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const ARCHIVE_DIR = '.archive';
@@ -294,7 +295,7 @@ function classifyRead(entry, agent, ownerFilter, unsafe) {
 
 // ---- 命令 core（CLI 与 MCP 共用；返回 { error, exitCode, text }，不 process.exit）----
 function initCore(opts) {
-  const root = opts.project ? projectRoot() : userRoot();
+  const root = opts.dir ? path.resolve(String(opts.dir)) : (opts.project ? projectRoot() : userRoot());
   ensureInit(root);
   return { error: false, text: '已初始化记忆库: ' + root };
 }
@@ -516,19 +517,26 @@ function collectAll(root) {
   }
   return out;
 }
-function cmdExport(outPath) {
-  const data = { format: 'yottamemory', version: 1, exported: today(), memories: collectAll(userRoot()) };
-  const target = outPath || 'yottamemory-export-' + today() + '.json';
+function exportCore(root, outPath) {
+  const data = { format: 'yottamemory', version: 1, exported: today(), memories: collectAll(root) };
+  const target = outPath || path.join(root, 'yottamemory-export-' + today() + '.json');
   fs.writeFileSync(target, JSON.stringify(data, null, 2), 'utf8');
-  console.log('已导出 ' + data.memories.length + ' 条记忆 -> ' + target);
+  return { error: false, text: '已导出 ' + data.memories.length + ' 条记忆 -> ' + target };
 }
-function cmdImport(src) {
-  if (!src || !fs.existsSync(src)) { console.error('请提供 JSON 文件路径'); process.exit(2); }
-  const data = JSON.parse(fs.readFileSync(src, 'utf8'));
-  if (!data.memories || !Array.isArray(data.memories)) { console.error('JSON 格式不正确（缺少 memories 数组）'); process.exit(2); }
-  const root = userRoot();
+function importCore(root, src) {
+  if (!src) return { error: true, text: '请提供 JSON 文件路径' };
+  let fp = String(src);
+  if (!fs.existsSync(fp)) {
+    const alt = path.resolve(root, fp);
+    if (fs.existsSync(alt)) fp = alt;
+  }
+  if (!fs.existsSync(fp)) return { error: true, text: 'JSON 文件不存在: ' + src };
+  let data;
+  try { data = JSON.parse(fs.readFileSync(fp, 'utf8')); }
+  catch (e) { return { error: true, text: 'JSON 解析失败: ' + (e && e.message ? e.message : String(e)) }; }
+  if (!data.memories || !Array.isArray(data.memories)) return { error: true, text: 'JSON 格式不正确（缺少 memories 数组）' };
   ensureInit(root);
-  let n = 0;
+  let m = 0;
   for (const item of data.memories) {
     const meta = item.meta || {};
     const t = (meta.type || 'FACT').toUpperCase();
@@ -553,9 +561,18 @@ function cmdImport(src) {
     };
     fs.writeFileSync(file, frontmatterToText(rec, rec.statement), 'utf8');
     upsertIndexEntry(root, readEntry(file, root));
-    n++;
+    m++;
   }
-  console.log('已导入 ' + n + ' 条记忆 -> ' + root);
+  return { error: false, text: '已导入 ' + m + ' 条记忆 -> ' + root };
+}
+function cmdExport(outPath) {
+  const r = exportCore(userRoot(), outPath || 'yottamemory-export-' + today() + '.json');
+  console.log(r.text);
+}
+function cmdImport(src) {
+  const r = importCore(userRoot(), src);
+  console.log(r.text);
+  if (r.error) process.exit(2);
 }
 
 // ---- token 管理（每智能体一个，登记 <记忆库>/.server/tokens.json）----
@@ -623,6 +640,9 @@ function mcpTools() {
     { name: 'search', description: '检索记忆（同 recall）。query 可选；type 可选；limit 可选（默认 20）', inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string' }, limit: { type: 'number' } } } },
     { name: 'forget', description: '删除一条记忆。file 为记忆文件路径（如 facts/2026-08-24-0001.md 或文件名）', inputSchema: { type: 'object', properties: { file: { type: 'string' } }, required: ['file'] } },
     { name: 'archive', description: '归档旧记忆。days 默认 180；threshold 默认 0.4', inputSchema: { type: 'object', properties: { days: { type: 'number' }, threshold: { type: 'number' } } } },
+    { name: 'reindex', description: '重建索引（手动改 .md 后校正；扫描 facts/prefs/bounds/commits 四目录）', inputSchema: { type: 'object', properties: {} } },
+    { name: 'export', description: '导出全部记忆到引擎主机上的 JSON 文件。out 可选（默认 <记忆库>/yottamemory-export-<日期>.json）', inputSchema: { type: 'object', properties: { out: { type: 'string' } } } },
+    { name: 'import', description: '从引擎主机上的 JSON 文件导入记忆。src 为文件路径（可绝对路径，或相对记忆库目录）', inputSchema: { type: 'object', properties: { src: { type: 'string' } }, required: ['src'] } },
   ];
 }
 function callTool(name, args, ctx) {
@@ -642,6 +662,20 @@ function callTool(name, args, ctx) {
     }
     if (name === 'archive') {
       const r = archiveCore({ days: args.days, threshold: args.threshold });
+      return { text: r.text, error: r.error };
+    }
+    if (name === 'reindex') {
+      const root = userRoot();
+      if (!fs.existsSync(root)) return { text: '记忆库不存在。', error: false };
+      const cnt = buildIndex(root).length;
+      return { text: '已重建索引 ' + root + '（' + cnt + ' 条）', error: false };
+    }
+    if (name === 'export') {
+      const r = exportCore(userRoot(), args.out ? String(args.out) : null);
+      return { text: r.text, error: r.error };
+    }
+    if (name === 'import') {
+      const r = importCore(userRoot(), String(args.src || ''));
       return { text: r.text, error: r.error };
     }
     return { text: '未知工具: ' + name, error: true };
@@ -667,13 +701,12 @@ function handleMessage(msg, ctx) {
   return { jsonrpc: '2.0', id: id, error: { code: -32601, message: 'Method not found: ' + method } };
 }
 function cmdServe(opts) {
+  if (opts.stdio) { cmdServeStdio(); return; }
   const host = opts.host || '0.0.0.0';
   const port = opts.port || 8787;
   const noAuth = !!opts.noAuth;
   const root = userRoot();
   ensureInit(root);
-  const tokenData = loadTokens(root);
-  const tokenMap = tokenData.tokens || {};
   function authorize(req) {
     if (noAuth) return { agent: String(req.headers['x-agent-id'] || '') };
     const auth = req.headers['authorization'] || '';
@@ -681,6 +714,7 @@ function cmdServe(opts) {
     if (!m) return null;
     const token = m[1].trim();
     const agent = String(req.headers['x-agent-id'] || '');
+    const tokenMap = (loadTokens(root).tokens) || {};
     if (tokenMap[agent] && tokenMap[agent].token === token) return { agent: agent };
     return null;
   }
@@ -730,13 +764,95 @@ function cmdServe(opts) {
   });
 }
 
+// ---- stdio 本地零进程模式（照灵魂盘：客户端按需拉起 CLI）----
+function cmdServeStdio() {
+  const root = userRoot();
+  ensureInit(root);
+  const ctx = { agent: currentAgent() };
+  let buf = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', function (chunk) {
+    buf += chunk;
+    let idx;
+    while ((idx = buf.indexOf('\n')) !== -1) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (!line) continue;
+      let msg;
+      try { msg = JSON.parse(line); } catch (e) { continue; }
+      const resp = handleMessage(msg, ctx);
+      if (resp !== null) process.stdout.write(JSON.stringify(resp) + '\n');
+    }
+  });
+  process.stdin.on('end', function () { process.exit(0); });
+}
+
+// ---- lan 命令（Windows 计划任务管理开机自启 serve）----
+const LAN_TASK_NAME = 'YottaMemoryServe';
+function lanTaskRunCmd(opts) {
+  const host = opts.host || '0.0.0.0';
+  const port = opts.port || 8787;
+  return '"' + process.execPath + '" "' + __filename + '" serve --host ' + host + ' --port ' + port;
+}
+function cmdLanEnable(opts) {
+  if (process.platform !== 'win32') {
+    console.error('lan 命令当前仅支持 Windows（计划任务）；本机平台: ' + process.platform);
+    process.exit(2);
+  }
+  const trigger = opts.onstart ? 'onstart' : 'onlogon';
+  const tr = lanTaskRunCmd(opts);
+  try {
+    child_process.execFileSync('schtasks', ['/create', '/tn', LAN_TASK_NAME, '/tr', tr, '/sc', trigger, '/f'], { stdio: 'inherit' });
+  } catch (e) {
+    console.error('注册计划任务失败（ONSTART 需要管理员权限；ONLOGON 一般不需要；如仍失败请用管理员终端执行）: ' + String((e && e.stderr) || (e && e.message) || e).split(/\r?\n/)[0]);
+    process.exit(1);
+  }
+  console.log('已注册开机自启: 计划任务 ' + LAN_TASK_NAME + '（触发器 ' + trigger + '）');
+  console.log('运行命令: ' + tr);
+}
+function cmdLanDisable() {
+  if (process.platform !== 'win32') {
+    console.error('lan 命令当前仅支持 Windows（计划任务）；本机平台: ' + process.platform);
+    process.exit(2);
+  }
+  try {
+    child_process.execFileSync('schtasks', ['/delete', '/tn', LAN_TASK_NAME, '/f'], { stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (e) {
+    const msg = String((e && e.stderr) || (e && e.message) || e);
+    if (msg.indexOf('cannot find the path') !== -1 || msg.indexOf('没有找到') !== -1) {
+      console.log('未启用: 计划任务 ' + LAN_TASK_NAME + ' 不存在，无需移除');
+      return;
+    }
+    console.error('移除计划任务失败: ' + msg.split(/\r?\n/)[0]);
+    process.exit(1);
+  }
+  console.log('已移除开机自启计划任务 ' + LAN_TASK_NAME);
+}
+function cmdLanStatus() {
+  if (process.platform !== 'win32') {
+    console.log('lan 命令当前仅支持 Windows（计划任务）；本机平台: ' + process.platform);
+    return;
+  }
+  try {
+    const out = child_process.execFileSync('schtasks', ['/query', '/tn', LAN_TASK_NAME, '/fo', 'LIST', '/v'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    console.log('已启用: 计划任务 ' + LAN_TASK_NAME + ' 存在');
+    const re = /^(状态|Status)\s*:\s*(.+)$/;
+    for (const line of String(out).split(/\r?\n/)) {
+      const m = re.exec(line.trim());
+      if (m) console.log(m[1] + ': ' + m[2]);
+    }
+  } catch (e) {
+    console.log('未启用: 计划任务 ' + LAN_TASK_NAME + ' 不存在（可用 yotta-memory lan enable 注册）');
+  }
+}
+
 // ---- usage / main ----
 function usage() {
   console.log([
     'yotta-memory v' + VERSION + ' — 元忆：有权限边界的文件式智能体记忆',
     '',
     '用法:',
-    '  yotta-memory init [--project]             初始化记忆库（默认用户级）',
+    '  yotta-memory init [--project] [--dir <目录>]  初始化记忆库（默认用户级；--dir 显式指定位置）',
     '  yotta-memory config set memory_home <目录>  持久记住记忆库位置',
     '  yotta-memory config get                   查看当前配置与生效位置',
     '  yotta-memory remember <type> <subject> <statement> [--owner <id>]   写入记忆',
@@ -749,7 +865,8 @@ function usage() {
     '  yotta-memory token new --agent <id>       生成/重置某智能体访问 token（登记 .server/tokens.json，打印一次）',
     '  yotta-memory token list                   列出已登记智能体',
     '  yotta-memory token revoke --agent <id>    吊销某智能体 token',
-    '  yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth]  启动局域网 MCP 记忆引擎（streamable HTTP）',
+    '  yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]  启动 MCP 记忆引擎（streamable HTTP；--stdio 本地零进程模式）',
+    '  yotta-memory lan enable [--onstart] | disable | status  开机自启管理（Windows 计划任务，默认 ONLOGON）',
     '  yotta-memory --version                    版本',
     '',
     '类型: FACT(公共共享) / PREF(偏好) / BOUND(边界) / COMMIT(承诺)',
@@ -766,13 +883,15 @@ function main() {
   if (first === '--help' || first === '-h') { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir']);
   for (let i = 1; i < args.length; i++) {
     const a = args[i];
     if (a === '--project') opts.project = true;
     else if (a === '--all') opts.all = true;
     else if (a === '--unsafe') opts.unsafe = true;
     else if (a === '--no-auth') opts.noAuth = true;
+    else if (a === '--stdio') opts.stdio = true;
+    else if (a === '--onstart') opts.onstart = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;
@@ -785,6 +904,7 @@ function main() {
       else if (a === '--scope') opts.scope = v;
       else if (a === '--host') opts.host = v;
       else if (a === '--port') opts.port = parseInt(v, 10) || 8787;
+      else if (a === '--dir') opts.dir = v;
     } else if (a.startsWith('--')) {
       console.error('未知选项: ' + a);
       process.exit(2);
@@ -817,6 +937,14 @@ function main() {
       break;
     }
     case 'serve': cmdServe(opts); break;
+    case 'lan': {
+      const sub = positional[0];
+      if (sub === 'enable') cmdLanEnable(opts);
+      else if (sub === 'disable') cmdLanDisable();
+      else if (sub === 'status') cmdLanStatus();
+      else { console.error('lan 子命令: enable [--onstart] / disable / status'); process.exit(2); }
+      break;
+    }
     default:
       console.error('未知命令: ' + first);
       usage();

@@ -129,7 +129,7 @@ bash install.sh --dir /path/to/skills
 
 | 命令 | 作用 |
 |---|---|
-| `yotta-memory init [--project]` | 初始化记忆库（默认用户级 `~/.yottamemory/`）|
+| `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库（默认用户级 `~/.yottamemory/`；--dir 显式指定位置）|
 | `yotta-memory remember <type> <subject> <statement> [--owner <id>]` | 写入记忆（同 subject+statement 自动更新；--owner 标注归属）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索记忆（索引+TF 打分，读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；项目级优先）|
 | `yotta-memory forget <文件>` | 删除一条记忆（按类型目录路径或文件名）|
@@ -138,7 +138,8 @@ bash install.sh --dir /path/to/skills
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
 | `yotta-memory config set memory_home <目录>` / `config get` | 持久记住 / 查看记忆库位置（`~/.yottamemory/config.json`）|
 | `yotta-memory token new --agent <id>` / `token list` / `token revoke --agent <id>` | 为智能体生成 / 列出 / 吊销访问 token（登记于记忆库 `.server/tokens.json`）|
-| `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth]` | 启动局域网 MCP 记忆引擎（零依赖 streamable HTTP，Bearer token + X-Agent-Id 鉴权）|
+| `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id 鉴权）|
+| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows 计划任务，默认 ONLOGON 登录自启；--onstart 开机即启需管理员）|
 
 类型：`FACT`（事实，公共共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺）。
 
@@ -163,7 +164,8 @@ yotta-memory recall --type FACT --limit 10
 记忆库可以装在任何主机或硬盘上（= 记忆引擎），供局域网内其它主机上的智能体远程接入：
 
 - **本机直连**：CLI 直接读写，无需 token；
-- **远程接入**：引擎主机运行 `yotta-memory serve` 常驻，远程智能体通过 MCP 以 `url + token` 连接。
+- **远程接入**：引擎主机运行 `yotta-memory serve` 常驻（或 `lan enable` 注册开机自启），远程智能体通过 MCP 以 `url + token` 连接。
+- **本地零进程**：本机 MCP 客户端可用 `serve --stdio` 按需拉起 CLI（无常驻进程）。
 
 ### 引擎侧（记忆所在主机）
 
@@ -174,10 +176,13 @@ yotta-memory recall --type FACT --limit 10
    yotta-memory token list                        # 查看已登记智能体
    yotta-memory token revoke --agent <智能体ID>   # 吊销
    ```
-3. 启动常驻服务（默认监听 0.0.0.0:8787，Bearer token + X-Agent-Id 鉴权）：
+3. 启动服务（默认监听 0.0.0.0:8787，Bearer token + X-Agent-Id 鉴权）——临时运行或注册开机自启二选一：
    ```bash
-   yotta-memory serve
+   yotta-memory serve                          # 临时前台运行
+   yotta-memory lan enable                     # 注册开机自启（Windows 计划任务，登录自启）
+   yotta-memory lan status                     # 查看自启状态
    ```
+   > `lan enable --onstart` 改为开机即启（需管理员）；`lan disable` 移除自启。
 
 > 首次监听 0.0.0.0 时，Windows / 系统防火墙可能询问是否放行，需允许放行，否则局域网内其它主机无法访问；`--no-auth` 会关闭鉴权，仅限可信内网使用。
 
@@ -199,7 +204,7 @@ yotta-memory recall --type FACT --limit 10
 }
 ```
 
-连接后可通过 MCP tools（remember / recall / search / forget / archive）读写记忆。`X-Agent-Id` 必须与 token 登记的智能体一致；读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
+连接后可通过 MCP tools（remember / recall / search / forget / archive / reindex / export / import）读写记忆；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露。`X-Agent-Id` 必须与 token 登记的智能体一致；读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
 
 ### 位置持久化
 
@@ -210,7 +215,7 @@ yotta-memory config set memory_home <记忆库目录>
 yotta-memory config get
 ```
 
-位置解析优先级：`YOTTA_MEMORY_HOME`（临时覆盖）> `config.json#memory_home`（持久）> 默认 `~/.yottamemory`。把记忆库放在硬盘上、插到任意主机后执行一次 `config set memory_home`，即可在该主机恢复全部记忆。
+位置解析优先级：`YOTTA_MEMORY_HOME`（临时覆盖）> `config.json#memory_home`（持久）> 默认 `~/.yottamemory`。把记忆库放在硬盘上、插到任意主机后执行一次 `config set memory_home`（或用 `yotta-memory init --dir <目录>` 一步初始化到指定位置），即可在该主机恢复全部记忆。
 
 ## 开发与校验
 
