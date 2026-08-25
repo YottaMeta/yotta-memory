@@ -1,4 +1,4 @@
-# yotta-memory 协议规范 v0.6.0
+# yotta-memory 协议规范 v0.6.1
 
 > 本文件定义 yotta-memory 记忆标准：存储位置、目录结构、文件格式、类型体系与 CLI 命令参考。
 > 目标：任何支持 Agent Skills 开放标准的智能体，装完即可读写同一份记忆。
@@ -74,6 +74,8 @@ immutable: false
 | `immutable` | 否 | `true` 时 archive 不移动（用户级硬事实）|
 | `scope` | 否 | `public` / `private`，默认按类型（FACT=public，其余 private）|
 | `owner` | 否 | 归属 agent id，默认空；private+owner 非空默认仅供该 owner agent 读取，其它 agent 越界读需 grant 授权、identity=user 或 `--unsafe` |
+| `source` | 否 | 记录来源（如 `对话` / `推断`），`remember --source` 写入 |
+| `weight` | 否 | 重要性权重（默认 1.0，>1 提权 / <1 降权），去重时取 max |
 | `access_count` | 否 | 命中次数，recall 命中展示集时 +1 |
 | `last_accessed` | 否 | 最近访问日期 `YYYY-MM-DD` |
 
@@ -112,7 +114,7 @@ immutable: false
 | 命令 | 行为 |
 |---|---|
 | `init [--project]` | 创建目录结构；默认用户级，`--project` 建项目级 |
-| `remember <type> <subject> <statement> [--owner <id>] [--verify] [--no-hint]` | 写入；同 subject+statement 已存在则只更新 `updated`；`--owner` 标注归属；`--verify` 写后回读校验；`--no-hint` 关闭类型启发式提示 |
+| `remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入；同 subject+statement 已存在则更新 `updated` 且 `weight` 取 max；`--source` 记录来源；`--weight` 重要性权重；`--verify` 写后回读校验；`--no-hint` 关闭类型启发式提示 |
 | `recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 索引+TF 打分匹配；读取分区过滤；越界（读其它智能体私密）默认拒绝，需 grant / identity=user / `--unsafe` 授权；项目级优先；默认 50 条 |
 | `forget <文件>` | 删除（按路径或文件名）|
 | `archive [--days 180] [--threshold 0.4]` | 按盖棺分+年龄移入 `.archive/`（`vitality < threshold` 且超过 N 天）|
@@ -120,7 +122,7 @@ immutable: false
 | `export [--out f.json]` | 导出全部记忆为 JSON |
 | `import <f.json>` | 从 JSON 导入（幂等）|
 | `profile [--owner <id>]` | 用户画像聚合（零推断，写 `private/<owner>/profile.md`；跨 owner 默认拒绝）|
-| `context [--limit N] [--owner <id>]` | 开工上下文包（stdout：身份 + 画像 + 近期记忆 + 边界 + 承诺）|
+| `context [--limit N] [--owner <id>] [--budget N]` | 开工上下文包（stdout：身份 + 多智能体铁律 + 画像 + 近期记忆 + 边界 + 承诺；`--budget` 近期记忆字符预算）|
 | `iam <id> [--name] [--user] [--relationship] [--force]` | 登记身份 + 自我档案（可选扩展显示名 / 用户 / 关系）|
 
 
@@ -133,10 +135,10 @@ immutable: false
 
 ### context（开工上下文包，v0.6.0）
 
-- `context [--limit N] [--owner <id>]`：stdout 输出开工上下文包（不落盘），五段：
+- `context [--limit N] [--owner <id>] [--budget N]`：stdout 输出开工上下文包（不落盘），含多智能体接入铁律段（可读 A/B/C、可写范围、违规红线）与五段：
   1. 身份：agent_id / agent_name / user_name / relationship / host / memory_home（读自我档案）
   2. 用户画像摘要：profile.md（不存在则自动生成一次或降级跳过）
-  3. 近期记忆：按 vitality（活跃度）排序前 N 条（默认 10），读取分区过滤
+  3. 近期记忆：按 importance（confidence × recency + updated + weight + immutable）排序前 N 条（默认 10），读取分区过滤；`--budget` 时按剩余字符预算逐条放行（身份/铁律/画像/边界/承诺 必保）
   4. 边界提醒：BOUND 全列（可读范围内）
   5. 承诺 / 锚点：COMMIT 全列（可读范围内）
 
@@ -144,6 +146,8 @@ immutable: false
 
 - `remember ... --verify`：写后自动回读校验（recall 命中刚写入条目），输出「已写回读 OK」。
 - `remember ... --no-hint`：关闭类型启发式提示。默认开启：statement 含主观/关系词（用户 / 偏好 / 喜欢 / 关系 / 称呼 等）且 type=FACT 时 stdout 提示「疑似用户偏好 / 关系，建议 PREF」，仅提示不拦截。
+- `remember ... --source <来源>`：记录来源（如 `对话` / `推断` / `交接`）。
+- `remember ... --weight <0..>`：重要性权重（默认 1.0，>1 提权 / <1 降权）；去重更新时 `weight` 取 max（多次印证自动提权，与灵魂盘 record.py 一致）。
 - `iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]`：自我档案 PREF 扩展 `agent_name / user_name / relationship`；不带新参数行为与 0.4.2 一致。
 ### 去重与更新
 

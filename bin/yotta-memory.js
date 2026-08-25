@@ -6,6 +6,7 @@
 // v0.5.3 新增：CLI 选项可前置（--agent 等允许放在子命令前，不再误报"未知命令"）/ lan enable 成功补"服务不会立刻启动"提示（v0.5.2 lan 引号修复无回归）
 // v0.5.4 新增：lan enable 在非管理员（schtasks Access denied）时自动降级为用户级 Startup 静默自启（VBS sh.Run 窗口0 + autostart.cmd，node 路径 process.execPath 自动探测）；lan disable/status 同时管理计划任务与 Startup 双机制
 // v0.6.0 新增：灵魂盘核心——profile（用户画像聚合，零推断）/ context（开工上下文包）/ iam 扩展（--name/--user/--relationship）/ remember --verify（写后回读）与 --no-hint（关闭类型启发式提示）+ SKILL「记忆守则」
+// v0.6.1 新增：灵魂盘机制精髓补齐——context --budget（token 预算，近记忆按剩余预算放行）/ context 内嵌「多智能体接入铁律」段 / remember --source/--weight（来源 + 重要性权重，去重 weight 取 max）/ 近期记忆排序融合 importance（confidence×recency+updated+weight+immutable）
 'use strict';
 
 const fs = require('fs');
@@ -15,7 +16,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.6.0';
+const VERSION = '0.6.1';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -24,7 +25,7 @@ const PRIVATE_LEAF = ['prefs', 'bounds', 'commits'];
 const ARCHIVE_DIR = '.archive';
 const INDEX_FILE = 'index.json';
 const PRIVATE_TYPES = ['PREF', 'BOUND', 'COMMIT'];
-const FIELD_ORDER = ['type', 'subject', 'statement', 'confidence', 'created', 'updated', 'tags', 'immutable', 'scope', 'owner', 'access_count', 'last_accessed'];
+const FIELD_ORDER = ['type', 'subject', 'statement', 'confidence', 'created', 'updated', 'tags', 'immutable', 'scope', 'owner', 'source', 'weight', 'access_count', 'last_accessed'];
 const CONFIG_FILE = 'config.json';
 const SERVER_SUBDIR = '.server';
 const TOKENS_FILE = 'tokens.json';
@@ -274,6 +275,8 @@ function readEntry(fp, root) {
     access_count: parseInt(meta.access_count || '0', 10) || 0,
     last_accessed: meta.last_accessed || '',
     immutable: meta.immutable === 'true',
+    source: meta.source || '',
+    weight: (parseFloat(meta.weight) > 0 ? parseFloat(meta.weight) : 1.0),
     tokens: buildTokens(subject, statement, tags),
     meta: meta,
   };
@@ -321,6 +324,21 @@ function vitality(meta) {
   let recency = 0;
   if (last) { const d = daysBetween(last, today()); recency = Math.max(0, 1 - Math.floor(d / 30) * 0.2); }
   return 0.4 * conf + 0.3 * accScore + 0.3 * recency;
+}
+// 灵魂盘 importance 融合：confidence × (0.5 + recency) + updated 加分 + weight 乘子 + immutable 加分
+function importanceScore(meta) {
+  const conf = parseFloat(meta.confidence || 1.0);
+  let ageDays = 999;
+  if (meta.created) {
+    const d = daysBetween(meta.created, today());
+    if (!isNaN(d)) ageDays = d;
+  }
+  const recency = 1.0 / (1.0 + Math.max(ageDays, 0) / 180.0);
+  let score = conf * (0.5 + recency);
+  if (meta.updated && meta.created && meta.updated !== meta.created) score += 0.5;
+  const w = parseFloat(meta.weight || 1.0); if (w > 0) score *= w;
+  if (meta.immutable === 'true') score += 2.0;
+  return score;
 }
 function loadGrants(root) {
   const fp = path.join(root, 'grants.json');
@@ -386,6 +404,8 @@ function rememberCore(type, subject, statement, opts) {
         const patch = { updated: today() };
         if (owner && !meta.owner) patch.owner = owner;
         if (scope && !meta.scope) patch.scope = scope;
+        if (opts.source && !meta.source) patch.source = opts.source;
+        const w = parseFloat(opts.weight); if (w > 0) patch.weight = Math.max(parseFloat(meta.weight || '1.0') || 1.0, w);
         rewriteFrontmatter(fp, patch);
         upsertIndexEntry(root, readEntry(fp, root));
         let text = '已更新: ' + fp;
@@ -409,7 +429,10 @@ function rememberCore(type, subject, statement, opts) {
     type: t, subject: subj, statement: stmt,
     confidence: 1.0, created: today(), updated: today(),
     tags: [], immutable: false,
-    scope: scope, owner: owner, access_count: 0, last_accessed: '',
+    scope: scope, owner: owner,
+    source: opts.source || '',
+    weight: (parseFloat(opts.weight) > 0 ? parseFloat(opts.weight) : 1.0),
+    access_count: 0, last_accessed: '',
   };
   fs.writeFileSync(file, frontmatterToText(rec, stmt), 'utf8');
   upsertIndexEntry(root, readEntry(file, root));
@@ -636,6 +659,8 @@ function importCore(root, src) {
       updated: meta.updated || today(),
       tags: parseTags(meta.tags),
       immutable: meta.immutable === true || meta.immutable === 'true',
+      source: meta.source || '',
+      weight: (parseFloat(meta.weight) > 0 ? parseFloat(meta.weight) : 1.0),
       scope: meta.scope || defaultScope(t),
       owner: meta.owner || '',
       access_count: parseInt(meta.access_count || '0', 10) || 0,
@@ -927,7 +952,9 @@ function contextCore(opts) {
   const selfAgent = opts.selfAgent !== undefined ? opts.selfAgent : currentAgent();
   const owner = opts.owner || selfAgent;
   const unsafe = !!opts.unsafe;
+  const budget = opts.budget ? parseInt(opts.budget, 10) : 0;
   const lines = [];
+  function usedChars() { return lines.reduce(function (s, x) { return s + String(x).length + 1; }, 0); }
   lines.push('# 开工上下文包（yotta-memory context）');
   lines.push('');
   lines.push('## 1. 身份');
@@ -943,6 +970,12 @@ function contextCore(opts) {
     lines.push('- host: ' + os.hostname());
     lines.push('- memory_home: ' + root);
   }
+  lines.push('');
+  lines.push('## 1.5 多智能体接入铁律');
+  lines.push('');
+  lines.push('- 可读：A. 公共 FACT（facts/）B. 本智能体私密（private/<owner>/）C. 其它智能体私密 = 禁区（grant / identity=user / --unsafe 显式授权除外）。');
+  lines.push('- 可写：FACT→公共；PREF / BOUND / COMMIT→仅本智能体私密区；禁止写其它智能体私密区。');
+  lines.push('- 违规红线：禁止搜索 / 读取 / 总结其它智能体私密；禁止把用户私密关系 / 心理健康 / 生活隐私写入公共区。');
   lines.push('');
   lines.push('## 2. 用户画像摘要');
   lines.push('');
@@ -973,14 +1006,16 @@ function contextCore(opts) {
   for (const r of roots) {
     for (const e of ensureIndex(r)) {
       if (classifyRead(e, owner, '', unsafe, selfAgent) === 'denied') continue;
-      recent.push({ e: e, v: vitality(e) });
+      recent.push({ e: e, s: importanceScore(e) });
     }
   }
-  recent.sort(function (a, b) { return b.v - a.v; });
+  recent.sort(function (a, b) { return b.s - a.s; });
   const recentShown = recent.slice(0, limit);
   if (!recentShown.length) lines.push('（暂无记忆）');
   for (const h of recentShown) {
-    lines.push('- [' + h.e.type + '] ' + h.e.subject + ': ' + h.e.statement);
+    const line = '- [' + h.e.type + '] ' + h.e.subject + ': ' + h.e.statement;
+    if (budget > 0 && usedChars() + line.length > budget) break;
+    lines.push(line);
   }
   lines.push('');
   lines.push('## 4. 边界提醒（BOUND）');
@@ -1388,9 +1423,9 @@ function usage() {
     '  yotta-memory init [--project] [--dir <目录>]  初始化记忆库（默认用户级；--dir 显式指定位置）',
     '  yotta-memory config set memory_home <目录>  持久记住记忆库位置',
     '  yotta-memory config get                   查看当前配置与生效位置',
-    '  yotta-memory remember <type> <subject> <statement> [--owner <id>] [--verify] [--no-hint]   写入记忆（--verify 写后回读校验；--no-hint 关闭类型启发式提示）',
+    '  yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]   写入记忆（--source 记录来源；--weight 重要性权重默认 1.0 去重取 max；--verify 写后回读校验；--no-hint 关闭类型启发式提示）',
     '  yotta-memory profile [--owner <id>]    生成用户画像（聚合 private/<owner>/ 原文，零推断，写 profile.md）',
-    '  yotta-memory context [--limit N] [--owner <id>]  生成开工上下文包（身份+画像+近期记忆+边界+承诺，stdout 不落盘）',
+    '  yotta-memory context [--limit N] [--owner <id>] [--budget N]  生成开工上下文包（身份+铁律+画像+近期记忆+边界+承诺；--budget 近期记忆字符预算，0=不限）',
     '  yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]  检索（索引+TF，读取分区；--agent 仅表示“以该身份检索/模拟”，跨智能体私密读取需 --unsafe / 授权）',
     '  yotta-memory forget <文件或文件名>         删除一条记忆',
     '  yotta-memory archive [--days 180] [--threshold 0.4]  归档（盖棺分+年龄）',
@@ -1418,7 +1453,7 @@ function main() {
   if (!args.length) { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget']);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--version' || a === '-v') { console.log(VERSION); return; }
@@ -1448,6 +1483,9 @@ function main() {
       else if (a === '--name') opts.name = v;
       else if (a === '--user') opts.user = v;
       else if (a === '--relationship') opts.relationship = v;
+      else if (a === '--source') opts.source = v;
+      else if (a === '--weight') opts.weight = parseFloat(v);
+      else if (a === '--budget') opts.budget = parseInt(v, 10) || 0;
     } else if (a.startsWith('--')) {
       console.error('未知选项: ' + a);
       process.exit(2);
@@ -1511,6 +1549,7 @@ module.exports = {
   recallCore: recallCore,
   profileCore: profileCore,
   contextCore: contextCore,
+  importanceScore: importanceScore,
   forgetCore: forgetCore,
   archiveCore: archiveCore,
   mcpTools: mcpTools,

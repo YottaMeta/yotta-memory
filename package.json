@@ -1,6 +1,6 @@
 {
   "name": "@yottameta/yotta-memory",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/回滚；FACT/PREF/BOUND/COMMIT 四分类（公共共享/私密隔离），用户级+项目级双级存储。",
   "license": "MIT",
   "keywords": [

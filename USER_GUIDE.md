@@ -72,12 +72,12 @@ yotta-memory config get                              # 查看记忆库位置
 
 ```bash
 yotta-memory profile                          # 生成用户画像（写 private/<owner>/profile.md）
-yotta-memory context --limit 10               # 生成开工上下文包（身份+画像+近期记忆+边界+承诺）
+yotta-memory context --limit 10 --budget 1800 # 生成开工上下文包（身份+铁律+画像+近期记忆+边界+承诺，预算控 token）
 yotta-memory iam <id> --name 元忆 --user 老张 --relationship 伙伴   # 自我档案扩展显示名/用户/关系
 ```
 
 - `profile` 引擎零推断：只按类型 / 主题 / 标签归组呈现原文，画像结论由 AI 内部形成，不当面贴标签。
-- `context` 是每次会话开工的主注入，替代裸 `recall`；无画像时自动生成一次或降级，不报错。
+- `context` 是每次会话开工的主注入，替代裸 `recall`；无画像时自动生成一次或降级，不报错；`--budget` 控制近期记忆字符预算（token 恒定）。
 - `remember --verify` 写后回读校验；`remember --no-hint` 关闭「疑似偏好，建议 PREF」的提示。
 
 ### 记忆库位置：本机智能体如何找到记忆
@@ -244,10 +244,10 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 | 命令 | 作用 |
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库 |
-| `yotta-memory remember <类型> <主题> <内容> [--owner <id>] [--verify] [--no-hint]` | 写入记忆（--verify 写后回读；--no-hint 关闭类型提示）|
+| `yotta-memory remember <类型> <主题> <内容> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入记忆（--source 来源；--weight 重要性权重；--verify 写后回读；--no-hint 关闭类型提示）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索记忆（读取分区过滤；`--agent <其它>` 仅作身份声明、不授予跨读；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（零推断，写 `profile.md`）|
-| `yotta-memory context [--limit N] [--owner <id>]` | 开工上下文包（身份+画像+近期记忆+边界+承诺）|
+| `yotta-memory context [--limit N] [--owner <id>] [--budget N]` | 开工上下文包（身份+铁律+画像+近期记忆+边界+承诺；--budget 近期记忆字符预算）|
 | `yotta-memory forget <文件>` | 删除一条记忆 |
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆 |
 | `yotta-memory reindex` | 重建索引 |

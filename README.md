@@ -89,8 +89,8 @@
 ### 画像与开工上下文（v0.6.0）
 
 - **profile**：聚合 `private/<owner>/` 下 PREF / BOUND / COMMIT 原文，按 type + subject + tags 归组，写 `profile.md`；引擎零推断，画像结论由 AI 依据「记忆守则」内部形成，不当面贴标签。
-- **context**：一键生成开工上下文包——身份 + 用户画像摘要 + 近期记忆（按活跃度）+ 边界提醒 + 承诺 / 锚点，作为会话主注入（替代裸 `recall`）。
-- **记忆守则**：SKILL.md 内置规则层（类型红线 / 主动捕获触发信号 / 了解用户三阶段四手法 / 心理学底座 / 底线与边界 / 宿主隔离 / 反模式），让 AI「越用越懂」有章法。
+- **context**：一键生成开工上下文包——多智能体接入铁律 + 身份 + 用户画像摘要 + 近期记忆（按 importance 排序）+ 边界提醒 + 承诺 / 锚点；支持 `--budget` 字符预算（token 恒定，不随记忆膨胀）。
+- **记忆守则**：SKILL.md 内置规则层（类型红线 / 主动捕获触发信号 / 了解用户三阶段四手法 / 心理学底座与对齐 / 底线与边界 / 宿主隔离 / 反模式），让 AI「越用越懂」有章法。
 
 ### 检索：索引 + 中文分词打分
 
@@ -183,10 +183,10 @@ npm i -g @yottameta/yotta-memory
 | 命令 | 作用 |
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库（默认用户级 `~/.yottamemory/`；--dir 显式指定位置）|
-| `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--verify] [--no-hint]` | 写入记忆（同 subject+statement 自动更新；--owner 标注归属；--verify 写后回读校验；--no-hint 关闭类型启发式提示）|
+| `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入记忆（同 subject+statement 自动更新；--owner 标注归属；--source 记录来源；--weight 重要性权重、去重取 max；--verify 写后回读；--no-hint 关闭类型提示）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索记忆（索引+TF 打分，读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 仅作身份声明、不授予跨读；项目级优先）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
-| `yotta-memory context [--limit N] [--owner <id>]` | 生成开工上下文包（身份 + 画像 + 近期记忆 + 边界 + 承诺，stdout 不落盘）|
+| `yotta-memory context [--limit N] [--owner <id>] [--budget N]` | 生成开工上下文包（身份 + 多智能体铁律 + 画像 + 近期记忆 + 边界 + 承诺；--budget 近期记忆字符预算，token 恒定）|
 | `yotta-memory forget <文件>` | 删除一条记忆（按类型目录路径或文件名）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（盖棺分+年龄，immutable 除外）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
