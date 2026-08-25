@@ -40,7 +40,7 @@
 | **检索与生命周期** | 索引 + TF 打分（中文分词友好）；质量分 / 盖棺分 / 自动归档，记忆库不会无限膨胀 |
 | **生态分发** | GitHub + npm 双源同步发布；npx skills / npm / install.sh 三种方式，覆盖 17+ 类智能体目录 |
 | **便携记忆盘（随盘走）** | 记忆库即引擎：装在硬盘 / 主机上，插上即恢复全部记忆；引擎主机只需装 CLI 当存放点，无需装任何 AI 智能体 |
-| **局域网共享与自启** | 每智能体独立 token（Bearer + X-Agent-Id）鉴权、可吊销；`lan enable` 注册开机自启（默认登录自启，可选开机即启）；MCP 工具集与 CLI 一致（8 个工具），管理动作不远程暴露 |
+| **局域网共享与自启** | 每智能体独立 token（Bearer + X-Agent-Id）鉴权、可吊销；`lan enable` 注册开机自启（Windows：优先计划任务；非管理员自动降级用户级 Startup 静默自启）；MCP 工具集与 CLI 一致（8 个工具），管理动作不远程暴露 |
 | **本地 / 局域网双模式** | 本地 `serve --stdio` 零进程、按需拉起（无常驻）；局域网 streamable HTTP 常驻——两种模式可并存、按需选用 |
 
 ## 功能详解
@@ -106,7 +106,7 @@
 
 - **记忆库即引擎**：`serve` 把记忆目录挂成 MCP 服务，目录随盘走；引擎主机只需装 CLI 当存放点，无需装任何 AI 智能体。
 - **双模式可并存**：本地 `serve --stdio` 零进程（客户端按需拉起）；局域网 streamable HTTP（默认 `0.0.0.0:8787`）+ 每智能体 token 鉴权。
-- **开机自启**：`lan enable` 注册 Windows 计划任务（默认登录自启，`--onstart` 开机即启需管理员）；`lan disable` 移除，`lan status` 查询。
+- **开机自启**：`lan enable` 注册 Windows 开机自启——优先计划任务（默认登录自启，`--onstart` 开机即启需管理员）；非管理员（计划任务被拒）自动降级为**用户级 Startup 静默自启**（免管理员）；`lan disable` 移除，`lan status` 查询。
 - **安全边界**：管理动作（init / config / token / lan / serve）不进 MCP，token 不远程暴露；远程智能体只能读写记忆，不能改配置、不能管 token。
 - 完整操作步骤见上文「局域网多机共享」章节与 [USER_GUIDE.md](USER_GUIDE.md)。
 
@@ -185,7 +185,7 @@ npm i -g @yottameta/yotta-memory
 | `yotta-memory iam <id> [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 为智能体生成 / 列出 / 吊销访问 token（登记于记忆库 `.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
 | `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id 鉴权）|
-| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows 计划任务，默认 ONLOGON 登录自启；--onstart 开机即启需管理员）|
+| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务，默认 ONLOGON 登录自启、--onstart 开机即启需管理员；非管理员自动降级用户级 Startup 静默自启）|
 
 类型：`FACT`（事实，公共共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺）。
 
@@ -226,10 +226,10 @@ yotta-memory recall --type FACT --limit 10
 3. 启动服务（默认监听 0.0.0.0:8787，Bearer token + X-Agent-Id 鉴权）——临时运行或注册开机自启二选一：
    ```bash
    yotta-memory serve                          # 临时前台运行
-   yotta-memory lan enable                     # 注册开机自启（Windows 计划任务，登录自启）
+   yotta-memory lan enable                     # 注册开机自启（Windows：计划任务；非管理员自动降级用户级 Startup 静默自启）
    yotta-memory lan status                     # 查看自启状态
    ```
-   > `lan enable --onstart` 改为开机即启（需管理员）；`lan disable` 移除自启。
+   > `lan enable --onstart` 改为开机即启（需管理员）；非管理员时 `lan enable` 自动改用用户级 Startup 静默自启（无需管理员）；`lan disable` 移除自启。
 
 > 首次监听 0.0.0.0 时，Windows / 系统防火墙可能询问是否放行，需允许放行，否则局域网内其它主机无法访问；`--no-auth` 会关闭鉴权，仅限可信内网使用。
 

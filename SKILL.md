@@ -1,14 +1,14 @@
 ---
 name: yotta-memory
 description: "元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆"
-version: 0.5.3
+version: 0.5.4
 license: MIT
 ---
 
 # yotta-memory（元忆）— 有权限边界的文件式智能体记忆
 
 > 一句话：元忆 —— 有权限边界的文件式智能体记忆（不注入、可 diff、能回滚；FACT 共享、PREF / BOUND / COMMIT 私密隔离）。
-> 版本：0.5.3 | 最后更新：2026-08-25
+> 版本：0.5.4 | 最后更新：2026-08-25
 
 ## 这是什么
 
@@ -79,7 +79,7 @@ license: MIT
 | `yotta-memory iam <id> [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 每智能体访问 token：生成 / 列出 / 吊销（登记 `<记忆库>/.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
 | `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id 鉴权）|
-| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows 计划任务，默认 ONLOGON 登录自启；--onstart 开机即启需管理员）|
+| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务，默认 ONLOGON 登录自启、--onstart 开机即启需管理员；非管理员自动降级用户级 Startup 静默自启）|
 
 ## 存储格式（摘要）
 
@@ -137,7 +137,7 @@ yotta-memory --version    # 或 command -v yotta-memory / where yotta-memory
 > 记忆盘场景：硬盘插上 → AI 检查盘上目录是否有数据 → 有则接入 + config 记住 → 插盘即恢复，机器记住位置。
 
 **步骤 0.5 启动记忆引擎（仅引擎主机，供远程接入）**
-- 本机若作引擎：🔒 **征得同意后**启动服务——临时运行 `yotta-memory serve`（默认 `0.0.0.0:8787`，Bearer token + X-Agent-Id 鉴权；`--no-auth` 仅限可信内网），或注册开机自启 `yotta-memory lan enable`（Windows 计划任务，默认登录自启；`--onstart` 开机即启需管理员）。
+- 本机若作引擎：🔒 **征得同意后**启动服务——临时运行 `yotta-memory serve`（默认 `0.0.0.0:8787`，Bearer token + X-Agent-Id 鉴权；`--no-auth` 仅限可信内网），或注册开机自启 `yotta-memory lan enable`（Windows：优先计划任务，默认登录自启；非管理员自动降级用户级 Startup 静默自启，免管理员）。
 - 本地零进程模式：本机 AI 也可用 `serve --stdio` 由 MCP 客户端按需拉起 CLI（无常驻进程，照灵魂盘）。
 - 远程客户端接入前，先确认引擎主机 serve 已运行（`lan status` 可查）。
 

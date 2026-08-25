@@ -111,7 +111,7 @@ yotta-memory init --dir /srv/yotta-memory               # 新库：初始化（�
 **第 3 步：注册开机自启（可选，推荐）**
 
 ```bash
-# Windows：内置命令（计划任务）
+# Windows：内置命令（优先计划任务；非管理员自动降级用户级 Startup 静默自启）
 yotta-memory lan enable              # 登录后自动启动（默认）
 yotta-memory lan enable --onstart    # 开机即启（需管理员）
 yotta-memory lan status              # 查看状态
@@ -242,7 +242,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 | `yotta-memory iam <id> [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 访问 token（同 ID 已被其它来源占用需 `--force` 覆盖）|
 | `yotta-memory serve [--port 8787] [--stdio] [--no-auth]` | 启动记忆引擎（--no-auth 关闭鉴权，仅限可信内网）|
-| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理 |
+| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务；非管理员自动降级用户级 Startup 静默自启）|
 
 类型：`FACT`（事实，共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺），后三类按智能体物理分目录隔离（`private/<owner>/<type>/`）。
 
@@ -259,7 +259,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
    - 返回 401：服务在运行，是鉴权问题（token / 请求头不对）。
    - 连接被拒 / 超时：服务没启动，或防火墙拦截。
 
-**`lan enable` 失败提示 Access denied：** 需要管理员权限，请用管理员终端重新执行；`--onstart` 模式必须管理员。
+**`lan enable` 计划任务被拒（Access denied 等）：** 无需担心——会自动降级为**用户级 Startup 静默自启**（免管理员，重新登录后生效，启动脚本位于用户 Startup 目录）；如确需计划任务，请用管理员终端重新执行；`--onstart` 模式必须管理员。
 
 **启动引擎报端口被占用（EADDRINUSE）：** 用 `--port <其它端口>` 换端口启动，两端保持一致；或先查占用：Linux `ss -tlnp | grep 8787`，Windows `netstat -ano | findstr 8787`。
 
