@@ -22,9 +22,19 @@
 ├── bounds/      # BOUND 边界（私密）
 ├── commits/     # COMMIT 承诺（私密）
 ├── .archive/    # 归档区（archive 命令移入）
-├── index.json   # 反向索引 + TF 打分
+├── index.json   # 反向索引 + TF 打分（见下方说明）
+├── agents.json   # 智能体身份登记表（iam 写入，唯一性强制）
 └── README.md    # 记忆库说明
 ```
+
+> **`index.json` 说明**：条目内的 `tokens` 字段是中文分词的「词频表」，供 recall 的 TF 打分使用，**不是**访问令牌。真正的访问令牌由 `token` 命令生成，存放在 `<root>/.server/tokens.json`，仅在局域网 `serve` 模式下用于请求鉴权。
+
+## 2.5 智能体身份（谁在写 / 谁在读）
+
+- **agent ID 必须全局唯一**：`iam <id>` 写入 `agents.json`（记忆库根目录），唯一性强制——ID 已被其它主机 / 来源（含远端 token 登记）占用则拒绝，确认是同一智能体才 `--force`。
+- **当次身份声明**：`whoami` / MCP `agent_info` 读「当次声明身份」——本机 `YOTTA_AGENT_ID`（stdio 由 MCP 配置 `env` 注入，CLI 用 `--agent`/环境变量）；远端 `X-Agent-Id` 请求头（经 token 绑定校验）。不猜不默认。
+- **自我档案**：`iam` 自动写一条 PREF `subject=自我接入档案`（owner=自己），statement 为 `; ` 分隔的 key:value——`agent_id / host / memory_home / mcp_mode(stdio|http) / engine_url(仅远端) / token(仅远端；本机不存 token)`。
+- **私密记忆必须有 owner**：PREF / BOUND / COMMIT 写入时未声明身份（owner 空）直接拒绝（公共 FACT 不受影响），从机制上防止「抄别人的 ID」。
 
 ## 3. 文件格式
 

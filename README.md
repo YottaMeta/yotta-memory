@@ -68,9 +68,20 @@
 - **默认静默、显式跨读才报错**：默认 recall 遇其它 agent 私密静默跳过（不泄露「存在 N 条私密不可见」）；仅当显式跨智能体读取（`--all` / `--owner <其它>`）且无授权命中时才报错 / 警告。
 - **隔离定位**：scope: private 保证的是 AI 之间的语义隔离（正常 recall 不会被搜到、不会主动去读），不是文件系统级机密保护——数据主权在用户，作为所有者有权看到任何记忆文件。
 
+### 智能体身份（唯一 ID + 自我档案）
+
+每个智能体有一个**全局唯一的 agent ID**：它是私密记忆（PREF / BOUND / COMMIT）的归属键，也是远端接入的身份声明（`X-Agent-Id`）。
+
+- **登记（必须唯一）**：`yotta-memory iam <id>` 写入记忆库根目录 `agents.json`，**强制唯一性**——ID 已被其它主机 / 来源（含远端 token 登记）占用时拒绝，确认是同一智能体才 `--force`。
+- **确认身份**：`yotta-memory whoami`（远端 MCP 工具 `agent_info`）读「当次声明身份」（本机 `YOTTA_AGENT_ID` / CLI `--agent`；远端 `X-Agent-Id`），不猜不默认。
+- **自我档案（强制落盘）**：`iam` 自动写一条 PREF `subject=自我接入档案`（owner=自己），statement 为 `; ` 分隔的 key:value：`agent_id / host / memory_home / mcp_mode（stdio|http）/ engine_url（仅远端）/ token（仅远端；本机不存 token）`。开工先 `recall "自我接入档案"` 找回身份与接入信息。
+- **本机免 token**：本机 CLI / stdio 直连不经网络、不校验 token；身份经该智能体 MCP 配置的 `env.YOTTA_AGENT_ID` 声明。本机多个智能体各自声明唯一 ID，互不撞。
+- **私密记忆必须有 owner**：写 PREF / BOUND / COMMIT 时未声明身份会被拒绝（公共 FACT 不受影响），从机制上防止「抄别人的 ID」。
+
 ### 检索：索引 + 中文分词打分
 
 - `remember` 时自动构建 `index.json` 索引；recall 用 TF 打分排序，中文按 bigram 分词，不用额外模型。
+- `index.json` 的 `tokens` 字段是中文分词的词频表（TF 打分用），**不是**访问凭证；鉴权令牌在记忆目录下 `.server/tokens.json`。
 - 支持关键词、`--type` 过滤、`--limit` 截断、项目级优先。
 - 命中展示会累加 `access_count` / `last_accessed`，为生命周期管理提供依据。
 
@@ -165,7 +176,9 @@ npm i -g @yottameta/yotta-memory
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
 | `yotta-memory config set memory_home <目录>` / `config get` | 持久记住 / 查看记忆库位置（`~/.yottamemory/config.json`）|
-| `yotta-memory token new --agent <id>` / `token list` / `token revoke --agent <id>` | 为智能体生成 / 列出 / 吊销访问 token（登记于记忆库 `.server/tokens.json`）|
+| `yotta-memory whoami` | 查看当前智能体身份与登记状态（读 `YOTTA_AGENT_ID` / `X-Agent-Id`，不猜不默认）|
+| `yotta-memory iam <id> [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一）|
+| `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 为智能体生成 / 列出 / 吊销访问 token（登记于记忆库 `.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
 | `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id 鉴权）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows 计划任务，默认 ONLOGON 登录自启；--onstart 开机即启需管理员）|
 
@@ -181,7 +194,7 @@ yotta-memory recall --type FACT --limit 10
 
 环境变量：
 - `YOTTA_MEMORY_HOME`：覆盖用户级记忆库目录（默认 `~/.yottamemory/`）。
-- `YOTTA_AGENT_ID` / `AGENT_ID`：当前 agent 标识，参与读取分区判定。
+- `YOTTA_AGENT_ID` / `AGENT_ID`：当前 agent 标识（本机声明身份用，参与读取分区判定；私密记忆必须有 owner，未声明会被拒绝）。
 
 ## 智能体接入后怎么用
 
@@ -200,7 +213,7 @@ yotta-memory recall --type FACT --limit 10
 1. 初始化或接入记忆库（见 CLI 用法）。
 2. 为需要访问的每个智能体生成独立 token：
    ```bash
-   yotta-memory token new --agent <智能体ID>     # 打印一次，如 ytm_...
+   yotta-memory token new --agent <智能体ID>     # 打印一次，如 ytm_...（同 ID 已被其它来源占用需加 --force）
    yotta-memory token list                        # 查看已登记智能体
    yotta-memory token revoke --agent <智能体ID>   # 吊销
    ```
@@ -233,7 +246,7 @@ yotta-memory recall --type FACT --limit 10
 }
 ```
 
-连接后可通过 MCP tools（remember / recall / search / forget / archive / reindex / export / import）读写记忆；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露。`X-Agent-Id` 必须与 token 登记的智能体一致；读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
+连接后可通过 MCP tools（remember / recall / search / forget / archive / reindex / export / import / agent_info）读写记忆与确认身份；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露。`X-Agent-Id` 必须与 token 登记的智能体一致；读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
 
 ### 位置持久化
 

@@ -78,6 +78,8 @@ yotta-memory config get                              # 查看记忆库位置
 
 记忆就是文件：直接在 `facts/` `prefs/` `bounds/` `commits/` 目录下新建或修改 `.md` 文件即可，frontmatter 至少包含 `type` / `subject` / `statement`：
 
+> 说明：`index.json` 是引擎自动维护的检索索引，其 `tokens` 字段是中文分词的词频表（供 TF 打分），**不是**访问令牌。手动改过 `.md` 后可用 `yotta-memory reindex` 校正索引，无需手动编辑 `index.json`。
+
 ```markdown
 ---
 type: FACT
@@ -142,7 +144,7 @@ yotta-memory token new --agent 我的智能体ID
 
 命令会打印一次 `ytm_...`，请妥善保管（它就是访问凭证）。多个智能体就重复执行、用不同 ID。**本机上的 AI 智能体不需要 token**（见第 5 篇）。
 
-> token 丢失或要更换：重新执行 `token new --agent <id>` 会生成新 token 并覆盖旧的，旧 token 立即失效；`token list` 可查看已登记哪些智能体。
+> token 丢失或要更换：重新执行 `token new --agent <id> --force` 会生成新 token 并覆盖旧的，旧 token 立即失效；不加 `--force` 时若该 ID 已被其它来源占用会被拒绝（每个 AI 的 ID 必须唯一）；`token list` 可查看已登记哪些智能体。
 
 **第 5 步：把连接信息交给远程智能体的用户**
 
@@ -154,7 +156,7 @@ yotta-memory token new --agent 我的智能体ID
 
 **第 6 步：备份与迁移**
 
-- 备份 = 复制整个记忆目录（`facts/` `prefs/` `bounds/` `commits/` `.archive/` + `index.json` + `.server/`），复制到哪、哪就是记忆库；迁移同理，整个目录拷走即可。
+- 备份 = 复制整个记忆目录（`facts/` `prefs/` `bounds/` `commits/` `.archive/` + `index.json` + `agents.json` + `.server/`），复制到哪、哪就是记忆库；迁移同理，整个目录拷走即可。
 - `export` / `import` 是把记忆导出成单个 JSON 或从 JSON 导入，适合跨工具交换或归档，不是日常备份的必需步骤。
 
 ## 5. 智能体接入篇（本机 / 局域网其它主机）
@@ -179,17 +181,24 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
   "mcpServers": {
     "yotta-memory": {
       "command": "yotta-memory",
-      "args": ["serve", "--stdio"]
+      "args": ["serve", "--stdio"],
+      "env": { "YOTTA_AGENT_ID": "<该智能体唯一ID>" }
     }
   }
 }
 ```
 
-本机接入不需要 token，也不需要启动 HTTP 服务。
+本机接入不需要 token，也不需要启动 HTTP 服务；但**必须在配置里声明唯一的 `YOTTA_AGENT_ID`**（见下），否则写私密记忆会被拒。
 
 **本机智能体装好技能后如何获取记忆存放位置？** 按优先级：`YOTTA_MEMORY_HOME` 环境变量 > `config set memory_home` 持久化的 `~/.yottamemory/config.json` > 默认 `~/.yottamemory`。AI 开工执行 `yotta-memory config get` 查看当前生效位置；记忆库移动后执行一次 `config set memory_home <新目录>` 即可。
 
-**给本机智能体设置身份（重要）**：私密记忆（PREF / BOUND / COMMIT）按 owner 隔离，owner 取当前智能体的 agent ID。请在本机智能体的运行环境里设置 `YOTTA_AGENT_ID=<智能体ID>`（或 `AGENT_ID`），写入的私密记忆就归属该 ID、其它智能体默认读不到。**不设则 owner 为空，私密隔离会退化**（所有无主私密都可读），多智能体共用时务必设置。
+**给本机智能体设置唯一身份（强制）**：私密记忆（PREF / BOUND / COMMIT）按 owner 隔离，owner 取当前智能体的 agent ID。流程如下：
+
+1. 开工先 `yotta-memory whoami` 确认「我是谁」。
+2. 未登记 → 向用户确认一个**全局唯一** ID（建议 `<主机名>-<角色>`，别用 `dashu` / `codex` 这类易撞名），执行 `yotta-memory iam <id>`：引擎**强制唯一性**（被其它主机 / 来源占用会拒绝），并自动落一条「自我接入档案」PREF（owner=自己）。
+3. 本机多个 AI 智能体共用引擎时，**每个都要在它自己的 MCP 配置里声明唯一 `YOTTA_AGENT_ID`**（CLI 直连则每次带 `--agent <id>`），各自 `whoami` 各回各的、互不撞。
+4. **禁止**从记忆里读到别人的 ID 就当自己的（比如看到「Kali 智能体 ID 为 dashu」就把自己当 dashu）；不确定先 `whoami` 再问用户，**禁止猜**。
+5. **不设则 owner 为空**：写私密记忆会被引擎拒绝（公共 FACT 不受影响），避免私密隔离退化。
 
 ### 5.2 局域网其它主机的 AI 智能体
 
@@ -215,6 +224,8 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 
 **第 4 步：复用**：连接成功后就一直复用；token 失效（被吊销）时回到第 1 步重新获取。
 
+**身份确认与自我档案（强制）**：先调一次 MCP 工具 `agent_info` 确认「我是谁」（读 X-Agent-Id 声明 + 登记状态）。随后用 `remember` 写一条 `subject=自我接入档案` 的 PREF（owner=自己），body 为 `; ` 分隔的 key:value——`agent_id / host / memory_home / mcp_mode: http / engine_url / token`，把接入信息存进自己的永久记忆；下次会话 `recall "自我接入档案"` 直接找回。
+
 ## 6. CLI 命令速查
 
 | 命令 | 作用 |
@@ -227,7 +238,9 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 | `yotta-memory reindex` | 重建索引 |
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |
 | `yotta-memory config set memory_home <目录>` / `config get` | 记忆库位置 |
-| `yotta-memory token new --agent <id>` / `token list` / `token revoke --agent <id>` | 访问 token |
+| `yotta-memory whoami` | 查看当前智能体身份与登记状态（读 `YOTTA_AGENT_ID` / `X-Agent-Id`，不猜不默认）|
+| `yotta-memory iam <id> [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一）|
+| `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 访问 token（同 ID 已被其它来源占用需 `--force` 覆盖）|
 | `yotta-memory serve [--port 8787] [--stdio] [--no-auth]` | 启动记忆引擎（--no-auth 关闭鉴权，仅限可信内网）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理 |
 

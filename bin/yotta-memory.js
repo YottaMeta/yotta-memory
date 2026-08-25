@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // yotta-memory（元忆）: 有权限边界的文件式智能体记忆 CLI（零依赖）
 // v0.4.0 新增：lan（Windows 计划任务开机自启 serve）/ init --dir（显式指定位置）/ serve --stdio（本地零进程模式）/ MCP 工具补 reindex/export/import
+// v0.4.2 新增：iam/whoami 智能体身份自注册（agents.json 唯一性）+ 自我档案 PREF + 私密记忆须声明 owner
 'use strict';
 
 const fs = require('fs');
@@ -10,7 +11,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.4.1';
+const VERSION = '0.4.2';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const ARCHIVE_DIR = '.archive';
@@ -20,6 +21,7 @@ const FIELD_ORDER = ['type', 'subject', 'statement', 'confidence', 'created', 'u
 const CONFIG_FILE = 'config.json';
 const SERVER_SUBDIR = '.server';
 const TOKENS_FILE = 'tokens.json';
+const AGENTS_FILE = 'agents.json';
 
 // ---- 全局配置（记忆库位置持久化，固定 ~/.yottamemory/config.json）----
 function configPath() {
@@ -311,6 +313,9 @@ function rememberCore(type, subject, statement, opts) {
   if (!subj) return { error: true, text: 'subject 不能为空' };
   const owner = opts.owner || currentAgent();
   const scope = opts.scope || defaultScope(t);
+  if (scope === 'private' && !owner) {
+    return { error: true, text: '私密记忆必须声明归属智能体：请设环境变量 YOTTA_AGENT_ID（或 AGENT_ID）、传 --owner <id>，或先 yotta-memory whoami / iam 登记唯一身份。公共记忆(FACT)不受影响。' };
+  }
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
       const fp = path.join(dir, f);
@@ -586,13 +591,18 @@ function saveTokens(root, data) {
   fs.writeFileSync(tokensPath(root), JSON.stringify(data, null, 2), 'utf8');
   try { fs.chmodSync(tokensPath(root), 0o600); } catch (e) {}
 }
-function cmdTokenNew(agentId) {
+function cmdTokenNew(agentId, opts) {
   const root = userRoot();
   ensureInit(root);
   if (!agentId) { console.error('请指定 --agent <id>'); process.exit(2); }
   const data = loadTokens(root);
   data.version = 1;
   data.tokens = data.tokens || {};
+  const conflict = identityConflict(root, agentId);
+  if (conflict && !opts.force) {
+    console.error("错误: 智能体 ID '" + agentId + "' " + conflict + '。每个 AI 智能体的 ID 必须唯一；确认是同一智能体后加 --force 覆盖。');
+    process.exit(2);
+  }
   const token = 'ytm_' + crypto.randomBytes(16).toString('hex');
   data.tokens[agentId] = { token: token, created: today() };
   saveTokens(root, data);
@@ -614,6 +624,104 @@ function cmdTokenRevoke(agentId) {
   data.tokens = data.tokens || {};
   if (data.tokens[agentId]) { delete data.tokens[agentId]; saveTokens(root, data); console.log('已吊销: ' + agentId); }
   else { console.log('未找到已登记智能体: ' + agentId); }
+}
+
+
+// ---- 智能体身份登记（agents.json）+ 自我档案 ----
+function agentsPath(root) { return path.join(root, AGENTS_FILE); }
+function loadAgents(root) {
+  try { return JSON.parse(fs.readFileSync(agentsPath(root), 'utf8')) || {}; } catch (e) { return {}; }
+}
+function saveAgents(root, data) {
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(agentsPath(root), JSON.stringify(data, null, 2), 'utf8');
+}
+const SELF_PROFILE_SUBJECT = '自我接入档案';
+function findSelfProfile(root, agentId) {
+  const dir = path.join(root, TYPE_DIRS.PREF);
+  if (!fs.existsSync(dir)) return '';
+  for (const f of fs.readdirSync(dir)) {
+    const fp = path.join(dir, f);
+    if (!fs.statSync(fp).isFile()) continue;
+    const meta = parseFrontmatter(fs.readFileSync(fp, 'utf8')).meta;
+    if (meta.subject === SELF_PROFILE_SUBJECT && (meta.owner || '') === agentId) return f;
+  }
+  return '';
+}
+function selfProfileBody(agentId, root, extra) {
+  const lines = [];
+  lines.push('agent_id: ' + agentId);
+  lines.push('host: ' + os.hostname());
+  lines.push('memory_home: ' + root);
+  lines.push('mcp_mode: ' + (extra.mcpMode || 'stdio'));
+  if (extra.engineUrl) lines.push('engine_url: ' + extra.engineUrl);
+  if (extra.token) lines.push('token: ' + extra.token);
+  return lines.join('; ');
+}
+function writeSelfProfile(root, agentId, extra) {
+  const dir = path.join(root, TYPE_DIRS.PREF);
+  const seq = nextSeq(dir);
+  const file = path.join(dir, today() + '-' + seq + '.md');
+  const body = selfProfileBody(agentId, root, extra || {});
+  const rec = {
+    type: 'PREF', subject: SELF_PROFILE_SUBJECT, statement: body,
+    confidence: 1.0, created: today(), updated: today(),
+    tags: ['自我档案'], immutable: false,
+    scope: 'private', owner: agentId, access_count: 0, last_accessed: '',
+  };
+  fs.writeFileSync(file, frontmatterToText(rec, body), 'utf8');
+  upsertIndexEntry(root, readEntry(file, root));
+  return file;
+}
+function identityConflict(root, agentId) {
+  const agents = loadAgents(root).agents || {};
+  const tokens = loadTokens(root).tokens || {};
+  const host = os.hostname();
+  const a = agents[agentId];
+  if (a && a.host && a.host !== host) return '已被智能体身份登记占用（host=' + a.host + '）';
+  if (tokens[agentId]) return '已被远端 token 登记占用（.server/tokens.json）';
+  return '';
+}
+function cmdIam(agentId, opts) {
+  const root = userRoot();
+  ensureInit(root);
+  if (!agentId) { console.error('请指定 <id>：yotta-memory iam <id> [--force]'); process.exit(2); }
+  const conflict = identityConflict(root, agentId);
+  if (conflict && !opts.force) {
+    console.error("错误: ID '" + agentId + "' " + conflict + '。每个 AI 智能体的 ID 必须唯一。请换一个唯一 ID，或确认是同一智能体后加 --force 覆盖。');
+    process.exit(2);
+  }
+  const data = loadAgents(root);
+  data.version = 1;
+  data.agents = data.agents || {};
+  const host = os.hostname();
+  const existed = data.agents[agentId];
+  data.agents[agentId] = { host: host, created: (existed && existed.created) || today() };
+  saveAgents(root, data);
+  const file = writeSelfProfile(root, agentId, { mcpMode: 'stdio' });
+  console.log('已登记智能体身份: ' + agentId + '（host=' + host + '，' + (conflict ? '--force 覆盖' : '新建') + '）');
+  console.log('已写入自我档案: ' + file);
+  console.log('本机免 token：以后用 whoami 确认身份；远端接入需 token new --agent ' + agentId);
+}
+function cmdWhoami() {
+  const root = userRoot();
+  const id = currentAgent();
+  if (!id) {
+    console.log('当前未声明智能体身份（YOTTA_AGENT_ID / AGENT_ID 未设置，也未传 --agent）。');
+    console.log('本机：请在该智能体的 MCP 配置 env 设 YOTTA_AGENT_ID=<唯一ID>，然后 yotta-memory iam <id> 登记；或 CLI 每次带 --agent <id> / --owner <id>。');
+    console.log('远端：X-Agent-Id 请求头 + token（token new --agent <id>）。');
+    return;
+  }
+  const agents = loadAgents(root).agents || {};
+  const tokens = loadTokens(root).tokens || {};
+  let reg = '未登记';
+  if (agents[id]) reg = 'agents.json 已登记（host=' + agents[id].host + '）';
+  else if (tokens[id]) reg = 'tokens.json 已登记（远端）';
+  const profile = findSelfProfile(root, id);
+  console.log('当前智能体身份: ' + id);
+  console.log('登记状态: ' + reg);
+  console.log('自我档案: ' + (profile ? profile : '未写入（请执行 yotta-memory iam ' + id + '）'));
+  if (!agents[id] && !tokens[id]) console.log('提示: 请先 yotta-memory iam ' + id + ' 登记唯一身份并落自我档案，再写私密记忆。');
 }
 
 // ---- config 命令 ----
@@ -643,6 +751,7 @@ function mcpTools() {
     { name: 'reindex', description: '重建索引（手动改 .md 后校正；扫描 facts/prefs/bounds/commits 四目录）', inputSchema: { type: 'object', properties: {} } },
     { name: 'export', description: '导出全部记忆到引擎主机上的 JSON 文件。out 可选（默认 <记忆库>/yottamemory-export-<日期>.json）', inputSchema: { type: 'object', properties: { out: { type: 'string' } } } },
     { name: 'import', description: '从引擎主机上的 JSON 文件导入记忆。src 为文件路径（可绝对路径，或相对记忆库目录）', inputSchema: { type: 'object', properties: { src: { type: 'string' } }, required: ['src'] } },
+    { name: 'agent_info', description: '查看当前智能体身份与登记状态（远端读经 token 校验的 X-Agent-Id；本机读 YOTTA_AGENT_ID）。开工先确认「我是谁」，禁止从记忆里抄别人的 ID', inputSchema: { type: 'object', properties: {} } },
   ];
 }
 function callTool(name, args, ctx) {
@@ -677,6 +786,18 @@ function callTool(name, args, ctx) {
     if (name === 'import') {
       const r = importCore(userRoot(), String(args.src || ''));
       return { text: r.text, error: r.error };
+    }
+    if (name === 'agent_info') {
+      const root = userRoot();
+      const id = agent || '';
+      if (!id) return { text: '当前未声明智能体身份（无 X-Agent-Id / YOTTA_AGENT_ID）。本机请在 MCP 配置 env 设 YOTTA_AGENT_ID=<唯一ID> 并 iam 登记。', error: false };
+      const agents = loadAgents(root).agents || {};
+      const tokens = loadTokens(root).tokens || {};
+      let reg = '未登记';
+      if (agents[id]) reg = 'agents.json 已登记（host=' + agents[id].host + '）';
+      else if (tokens[id]) reg = 'tokens.json 已登记（远端）';
+      const profile = findSelfProfile(root, id);
+      return { text: '当前智能体身份: ' + id + '\n登记状态: ' + reg + '\n自我档案: ' + (profile || '未写入（本地引擎主机执行 yotta-memory iam ' + id + '）'), error: false };
     }
     return { text: '未知工具: ' + name, error: true };
   } catch (e) {
@@ -862,7 +983,9 @@ function usage() {
     '  yotta-memory reindex                       重建索引',
     '  yotta-memory export [--out 文件.json]      导出全部记忆',
     '  yotta-memory import <文件.json>            导入记忆',
-    '  yotta-memory token new --agent <id>       生成/重置某智能体访问 token（登记 .server/tokens.json，打印一次）',
+    '  yotta-memory whoami                       查看当前智能体身份与登记状态（读 YOTTA_AGENT_ID / X-Agent-Id，不猜不默认）',
+    '  yotta-memory iam <id> [--force]           登记本智能体唯一身份并自动落自我档案（agents.json；ID 必须唯一）',
+    '  yotta-memory token new --agent <id> [--force]  生成/重置某智能体访问 token（同 ID 已被其它来源占用需 --force 覆盖）',
     '  yotta-memory token list                   列出已登记智能体',
     '  yotta-memory token revoke --agent <id>    吊销某智能体 token',
     '  yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]  启动 MCP 记忆引擎（streamable HTTP；--stdio 本地零进程模式）',
@@ -870,7 +993,7 @@ function usage() {
     '  yotta-memory --version                    版本',
     '',
     '类型: FACT(公共共享) / PREF(偏好) / BOUND(边界) / COMMIT(承诺)',
-    '环境变量: YOTTA_MEMORY_HOME 临时覆盖用户级位置; YOTTA_AGENT_ID/AGENT_ID 当前 agent 标识（读取分区）',
+    '环境变量: YOTTA_MEMORY_HOME 临时覆盖用户级位置; YOTTA_AGENT_ID/AGENT_ID 当前 agent 标识（本机声明身份用；私密记忆必须有 owner）',
     '远端接入: MCP url http://<主机IP>:8787/mcp；请求头 Authorization: Bearer <token> + X-Agent-Id: <id>',
     '',
   ].join('\n'));
@@ -892,6 +1015,7 @@ function main() {
     else if (a === '--no-auth') opts.noAuth = true;
     else if (a === '--stdio') opts.stdio = true;
     else if (a === '--onstart') opts.onstart = true;
+    else if (a === '--force') opts.force = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;
@@ -914,6 +1038,8 @@ function main() {
   }
   switch (first) {
     case 'init': cmdInit(opts); break;
+    case 'whoami': cmdWhoami(); break;
+    case 'iam': cmdIam(positional[0], opts); break;
     case 'config': {
       const sub = positional[0];
       if (sub === 'set') cmdConfigSet(positional[1], positional[2]);
@@ -930,7 +1056,7 @@ function main() {
     case 'import': cmdImport(positional[0]); break;
     case 'token': {
       const sub = positional[0];
-      if (sub === 'new') cmdTokenNew(opts.agent);
+      if (sub === 'new') cmdTokenNew(opts.agent, opts);
       else if (sub === 'list') cmdTokenList();
       else if (sub === 'revoke') cmdTokenRevoke(opts.agent);
       else { console.error('token 子命令: new --agent <id> / list / revoke --agent <id>'); process.exit(2); }

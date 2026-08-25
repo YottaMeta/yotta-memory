@@ -1,14 +1,14 @@
 ---
 name: yotta-memory
 description: "元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆"
-version: 0.4.1
+version: 0.4.2
 license: MIT
 ---
 
 # yotta-memory（元忆）— 有权限边界的文件式智能体记忆
 
 > 一句话：元忆 —— 有权限边界的文件式智能体记忆（不注入、可 diff、能回滚；FACT 共享、PREF / BOUND / COMMIT 私密隔离）。
-> 版本：0.4.1 | 最后更新：2026-08-25
+> 版本：0.4.2 | 最后更新：2026-08-25
 
 ## 这是什么
 
@@ -26,10 +26,41 @@ license: MIT
 
 ## 核心流程
 
-1. **开工定向**：运行 `yotta-memory recall`（可带关键词）恢复上下文；项目级记忆优先，其次用户级。
+1. **开工定向**：先按「开工第一步：确认记忆位置 + 智能体身份」检测记忆库与身份，再运行 `yotta-memory recall`（可带关键词）恢复上下文；项目级记忆优先，其次用户级。
 2. **进行中落盘**：重要信息立即 `yotta-memory remember <type> <subject> <statement>`，不攒到收工。
 3. **收工归档**：写会话小结（COMMIT / 笔记），旧记录定期 `yotta-memory archive`。
 4. **多智能体纪律**：FACT 写入公共区，PREF / BOUND / COMMIT 只写本智能体私密区；不读取其他智能体私密区。
+
+
+### 开工第一步：确认记忆位置 + 智能体身份（每次会话先做，必做）
+
+**A. 确认记忆库位置**（AI 不会自动知道记忆库在哪，先检测，避免「recall 读空库 / 错库」）：
+
+1. 运行 `yotta-memory config get`。
+   - 输出 `memory_home: <目录>`（已显式设置）→ 直接用该位置。
+   - 输出 `memory_home: (未设置，默认 ~/.yottamemory)` → 🔒 征得同意后引导设置：问用户用默认还是指定目录（项目级 `<repo>/.yottamemory`、记忆盘等），确认后 AI 执行 `yotta-memory config set memory_home <目录>`，回读 `config get` 验证。
+2. **已有记忆**：目标目录已存在 `facts/` 等子目录或 `index.json` → 直接 recall；全新目录 → 按「便携记忆盘模式 §0.3」初始化。
+
+**B. 确认本智能体唯一身份（强制，写私密记忆前必做）**：
+
+1. 运行 `yotta-memory whoami`（远端经 MCP 用 `agent_info`）确认「我是谁」。
+   - 已显示身份 + 已登记 + 有自我档案 → 用它，进入第 3 步。
+   - 显示「未声明身份」或「未登记」→ 进入第 2 步。
+2. **登记唯一 ID（AI 自己定义，须用户确认）**：
+   - AI 提议一个**全局唯一** ID（建议 `<主机名>-<角色>` 或带随机后缀，如 `win-zhiwei` / `kali-dashu`；禁止用 `dashu` / `codex` 这类易撞名）。
+   - 🔒 征得用户同意后执行 `yotta-memory iam <id>`：引擎**强制唯一性**（ID 已被其它主机/来源占用 → 拒绝并提示换 ID；确认是同一智能体才 `--force`），并**自动写自我档案**到本智能体私密区。
+   - 回读：`yotta-memory whoami` 显示「已登记 + 自我档案」。
+3. **自我档案校验**：`yotta-memory recall "自我接入档案"`（本智能体）能读回字段才算就绪：
+   `agent_id / host / memory_home / mcp_mode（stdio|http）/ engine_url（仅远端）/ token（仅远端；本机不存 token）`。
+4. **本机多智能体**：本机多个 AI 智能体共用引擎时，**每个都必须**在它自己的 MCP 配置里声明唯一 `YOTTA_AGENT_ID`（如 `env: { YOTTA_AGENT_ID: "<该智能体唯一ID>" }`），各自 `whoami` 各回各的、互不撞；本机走 stdio 免 token。
+
+**C. 身份红线（强制）**：
+
+- 智能体 ID **必须全局唯一**；**禁止**「从记忆里读到别人的 ID 就当自己的」（如看到「Kali 智能体 ID 为 dashu」就把自己当 dashu）。
+- 不确定自己的 ID → 先 `whoami` / `agent_info`，再向用户确认；**禁止猜**。
+- 私密记忆（PREF / BOUND / COMMIT）**必须有 owner**：未声明身份写私密会被引擎拒绝（公共 FACT 不受影响）。
+
+> 已用 `YOTTA_MEMORY_HOME` 临时覆盖时不必改 config；本步骤是常规 CLI 直连用户级位置的引导。
 
 ## CLI 速查
 
@@ -43,13 +74,17 @@ license: MIT
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
 | `yotta-memory config set memory_home <目录>` / `config get` | 持久记住 / 查看记忆库位置（`~/.yottamemory/config.json`）|
-| `yotta-memory token new --agent <id>` / `token list` / `token revoke --agent <id>` | 每智能体访问 token：生成 / 列出 / 吊销（登记 `<记忆库>/.server/tokens.json`）|
+| `yotta-memory whoami` | 查看当前智能体身份与登记状态（读 `YOTTA_AGENT_ID` / `X-Agent-Id`，不猜不默认）|
+| `yotta-memory iam <id> [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一）|
+| `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 每智能体访问 token：生成 / 列出 / 吊销（登记 `<记忆库>/.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
 | `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id 鉴权）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows 计划任务，默认 ONLOGON 登录自启；--onstart 开机即启需管理员）|
 
 ## 存储格式（摘要）
 
-`<YYYY-MM-DD>-<NNNN>.md`，frontmatter 含 `type / subject / statement / confidence / created / updated / tags / immutable / scope / owner / access_count / last_accessed`；正文为记忆内容。顶层另有 `index.json`（反向索引 + TF 打分）。
+`<YYYY-MM-DD>-<NNNN>.md`，frontmatter 含 `type / subject / statement / confidence / created / updated / tags / immutable / scope / owner / access_count / last_accessed`；正文为记忆内容。顶层另有 `index.json`（反向索引 + TF 打分，其 `tokens` 字段是分词词频，非访问令牌）与 `agents.json`（智能体身份登记表，唯一性）。
+
+自我档案（本智能体身份，强制落盘）：PREF，`subject=自我接入档案`，`owner=<本智能体ID>`，statement 为 `; ` 分隔的 key:value——`agent_id / host / memory_home / mcp_mode（stdio|http）/ engine_url（仅远端）/ token（仅远端；本机不存 token）`。
 
 ## 便携记忆盘模式（局域网多机共享）
 
