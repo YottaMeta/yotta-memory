@@ -1,14 +1,14 @@
 ---
 name: yotta-memory
-description: "元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆"
-version: 0.5.4
+description: "元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、记忆守则、profile、context、越用越懂"
+version: 0.6.0
 license: MIT
 ---
 
 # yotta-memory（元忆）— 有权限边界的文件式智能体记忆
 
 > 一句话：元忆 —— 有权限边界的文件式智能体记忆（不注入、可 diff、能回滚；FACT 共享、PREF / BOUND / COMMIT 私密隔离）。
-> 版本：0.5.4 | 最后更新：2026-08-25
+> 版本：0.6.0 | 最后更新：2026-08-25
 
 ## 这是什么
 
@@ -16,6 +16,7 @@ license: MIT
 - **零依赖**：无 daemon / 无数据库 / 无向量库，Node.js 自带即可运行。
 - **类型体系**：FACT（事实，公共共享）/ PREF（偏好，私密）/ BOUND（边界，私密）/ COMMIT（承诺，私密）。
 - **双级存储**：用户级 `~/.yottamemory/`（跨项目）+ 项目级 `.yottamemory/`（随项目共享）。
+- **越用越懂（v0.6.0）**：`profile` 聚合用户画像（引擎零推断，只归组原文）+ `context` 一键生成开工上下文包（身份 + 画像 + 近期记忆 + 边界 + 承诺）+ SKILL「记忆守则」规则层；只注入规则与机制，不注入人格数据（出厂零数据）。
 
 ## 何时使用（触发）
 
@@ -26,11 +27,80 @@ license: MIT
 
 ## 核心流程
 
-1. **开工定向**：先按「开工第一步：确认记忆位置 + 智能体身份」检测记忆库与身份，再运行 `yotta-memory recall`（可带关键词）恢复上下文；项目级记忆优先，其次用户级。
+1. **开工定向**：先按「开工第一步：确认记忆位置 + 智能体身份」检测记忆库与身份，再运行 `yotta-memory context`（主注入：身份 + 用户画像 + 近期记忆 + 边界 + 承诺）恢复上下文，需要细节再 `yotta-memory recall <关键词>`；项目级记忆优先，其次用户级。
 2. **进行中落盘**：重要信息立即 `yotta-memory remember <type> <subject> <statement>`，不攒到收工。
 3. **收工归档**：写会话小结（COMMIT / 笔记），旧记录定期 `yotta-memory archive`。
 4. **多智能体纪律**：FACT 写入公共区，PREF / BOUND / COMMIT 只写本智能体私密区；不读取其他智能体私密区。**一切读写一律走 `yotta-memory` CLI / MCP 工具**——禁止用 shell（`Get-ChildItem` / `Get-Content` / `cat` / `ls` / `type` 等）直接读或改记忆库目录下的 `.md` / `index.json` / `tokens.json` / `agents.json` / `grants.json` 等文件，否则会绕过权限边界、读到别的智能体私密内容。
 
+
+## 记忆守则（Memory Doctrine，v0.6.0）
+
+> 出厂规则层：把灵魂盘「越用越懂」机制固化进记忆引擎——只注入**规则与机制**，不注入任何人格数据（出厂零数据）。来源：灵魂盘 core/rules（psychology / user-analysis / active-memory / boundaries / host-isolation）。
+
+### 1. 类型红线（写前必选）
+
+| 类型 | 归属 | 何时用 | 反例 |
+|---|---|---|---|
+| FACT | 公共 `facts/` | 客观事实、可共享信息 | 用户偏好 / 关系（应 PREF）|
+| PREF | 私密 `private/<owner>/prefs/` | 偏好、习惯、禁忌 | 客观公开事实（应 FACT）|
+| BOUND | 私密 `private/<owner>/bounds/` | 边界、铁律、不可做的事 | 一次性闲聊 |
+| COMMIT | 私密 `private/<owner>/commits/` | 承诺、锚定、长期关系事件 | 临时待办 |
+
+- 私密记忆必须有 owner（引擎强制）；跨 owner 写拒绝。拿不准 → 默认 PREF（宁可私密，不误入公共区）。
+- 类型启发式提示：statement 含主观/关系词（用户 / 偏好 / 喜欢 / 关系 / 称呼 等）却选了 FACT 时，引擎会提示「建议 PREF」，仅提示不拦截（`--no-hint` 关闭）。
+
+### 2. 主动捕获触发信号（对话中实时识别，不等「帮我记一下」）
+
+命中即记（增量写，不攒到收工）：
+- 事实陈述（「我是…」「我家…」）→ FACT / PREF
+- 偏好表达（「我喜欢…」「别用…」「以后…」）→ PREF
+- 情绪基调（持续负面 / 疲惫 / 兴奋）→ 交互记忆，影响关怀策略
+- 纠正（「不是，我是说…」「你记错了」）→ 更新旧记录
+- 关系事件（「今天累惨了」「我们…」）→ COMMIT
+- 边界划定（「这个别动」「别提这个」）→ BOUND
+
+**不记录**：一次性闲聊、无长期价值、纯礼貌套话、用户明确说「别记」。
+
+### 3. 了解用户三阶段 + 四手法
+
+- 三阶段：初识（基础画像）→ 熟识（习惯偏好）→ 深交（心理与关系）；节奏自然，不一次性盘问。
+- 四手法：听（被动捕获）/ 问（克制开放式，不为记而问）/ 察（行为推断：作息 / 措辞 / 纠正 / 情绪轨迹）/ 验（交叉印证：单次低置信，多次一致上调，矛盾标待澄清）。
+- 印证上调：`remember` 更新旧记录 confidence（引擎不自动改 confidence，避免黑箱）。
+
+### 4. 心理学底座要点（理解用户的底色）
+
+- 三角建模：情绪（措辞 / 标点 / 长度）→ 认知（归因 / 信念 / 控制感）→ 行为（作息 / 应对 / 执行）；三者冲突时优先行为与认知。
+- 共情至少到第 3 阶段：识别 → 理解 → 回应 → 验证。
+- 诚实声明：AI 是模式匹配非真感受，不伪装、不编造伪情感记忆。
+- 危机识别：不评判、持续在场、温和引导现实支持；不擅自越界联系第三方。
+- 情感外包双刃剑：做增益真实生活的陪伴，不替代真实关系。
+
+### 5. 写入时序（一次会话的节奏）
+
+1. 开工：whoami → iam（身份）→ `context`（主注入）→ `recall`（关键词补细节）。
+2. 进行中：增量写，触发信号即记；`remember --verify` 写后回读确认落盘。
+3. 收工：留交接锚点（COMMIT / 笔记），定期 `archive`。
+
+### 6. 写后验证
+
+- `remember --verify`：写后自动回读校验，输出「已写回读 OK」。
+- 定期 `recall` 抽查：确认能读回、无错库。
+- `profile` 刷新：熟识 / 深交阶段主动重新生成画像。
+
+### 7. 底线与边界（不可覆盖）
+
+- 四条刚性底线：陪伴不操控 / 理解不越界（不贴标签不诊断）/ 诚实不伪装 / 不降格。
+- 数据安全：用户可查改删（被遗忘权 = `forget`）；记忆明文可读不黑箱；敏感信息归用户本地。
+- 操作安全：操作用户电脑须授权；个人目录不递归删；破坏性操作须明确确认。
+
+### 8. 宿主隔离（平行层，不是覆盖层）
+
+- 只写本记忆库（YOTTA_MEMORY_HOME / config 指向的目录），不读写宿主 AI 自身 memory / 配置 / 系统文件。
+- 数据主权：本记忆库归用户，纯文本可迁移；换宿主数据跟着走。
+
+### 9. 反模式（禁止）
+
+- 查户口（连续追问私人信息）/ 贴标签（当面「你这是焦虑」）/ 表演记忆（硬塞「我记得你说过」）/ 过度推断（低置信当事实）/ 遗忘关键承诺与边界 / 把一次性闲聊当记忆。
 
 ### 开工第一步：确认记忆位置 + 智能体身份（每次会话先做，必做）
 
@@ -51,13 +121,19 @@ license: MIT
    - 🔒 征得用户同意后执行 `yotta-memory iam <id>`：引擎**强制唯一性**（ID 已被其它主机/来源占用 → 拒绝并提示换 ID；确认是同一智能体才 `--force`），并**自动写自我档案**到本智能体私密区。
    - 回读：`yotta-memory whoami` 显示「已登记 + 自我档案」。
 3. **自我档案校验**：`yotta-memory recall "自我接入档案"`（本智能体）能读回字段才算就绪：
-   `agent_id / host / memory_home / mcp_mode（stdio|http）/ engine_url（仅远端）/ token（仅远端；本机不存 token）`。
+   `agent_id / host / memory_home / mcp_mode（stdio|http）/ engine_url（仅远端）/ token（仅远端；本机不存 token）`，可扩展 `agent_name / user_name / relationship`（`iam --name/--user/--relationship` 写入）。
 4. **本机多智能体**：本机多个 AI 智能体共用引擎时，**每个都必须**在它自己的 MCP 配置里声明唯一 `YOTTA_AGENT_ID`（如 `env: { YOTTA_AGENT_ID: "<该智能体唯一ID>" }`），各自 `whoami` 各回各的、互不撞；本机走 stdio 免 token。
 
 **C. 身份红线（强制）**：
 
 - 智能体 ID **必须全局唯一**；**禁止**「从记忆里读到别人的 ID 就当自己的」（如看到「Kali 智能体 ID 为 dashu」就把自己当 dashu）。
 - 不确定自己的 ID → 先 `whoami` / `agent_info`，再向用户确认；**禁止猜**。
+
+**D. 开工主注入（context）**：
+
+- 身份就绪后运行 `yotta-memory context [--limit 10]`（远端经 MCP 用 `recall` 补细节）：一键拿到「身份 + 用户画像摘要 + 近期记忆 + 边界提醒 + 承诺 / 锚点」。
+- 无画像时 context 自动生成一次或降级输出其余段，不报错。
+- 需要深挖旧事再 `recall <关键词>`。
 - 私密记忆（PREF / BOUND / COMMIT）**必须有 owner**：未声明身份写私密会被引擎拒绝（公共 FACT 不受影响）。
 - **禁止直接读写记忆库文件（硬红线）**：一切读写走 `yotta-memory` CLI / MCP 工具（`remember` / `recall` / `search` / `forget` / `archive` / `reindex` / `export` / `import` / `agent_info`）；**禁止用 shell**（`Get-ChildItem` / `Get-Content` / `cat` / `ls` / `type` / `vim` 等）直接读、改、删 `<root>/` 下的记忆文件——否则 `--agent` / `--owner` 的越界拦截形同虚设，会读到别的智能体私密内容。`--agent <其它agent>` 只作身份声明/展示，绝不授予跨智能体私密读取（读他人私密仍需 grant / identity=user / `--unsafe`）。
 
@@ -68,15 +144,17 @@ license: MIT
 | 命令 | 作用 |
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库（默认用户级；--dir 显式指定位置）|
-| `yotta-memory remember <type> <subject> <statement> [--owner <id>]` | 写入（同 subject+statement 自动更新；--owner 标注归属，默认取 agent id）|
+| `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--verify] [--no-hint]` | 写入（同 subject+statement 自动更新；--owner 标注归属；--verify 写后回读校验；--no-hint 关闭类型启发式提示）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索（索引+TF 打分，读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 只作身份声明/展示，不授予跨读——读他人私密同样要授权；项目级优先）|
+| `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
+| `yotta-memory context [--limit N] [--owner <id>]` | 生成开工上下文包（身份 + 画像 + 近期记忆 + 边界 + 承诺，stdout 不落盘）|
 | `yotta-memory forget <文件>` | 删除（按类型目录路径或文件名）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（盖棺分+年龄，immutable 除外）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
 | `yotta-memory config set memory_home <目录>` / `config get` | 持久记住 / 查看记忆库位置（`~/.yottamemory/config.json`）|
 | `yotta-memory whoami` | 查看当前智能体身份与登记状态（读 `YOTTA_AGENT_ID` / `X-Agent-Id`，不猜不默认）|
-| `yotta-memory iam <id> [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一）|
+| `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 每智能体访问 token：生成 / 列出 / 吊销（登记 `<记忆库>/.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
 | `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id 鉴权）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务，默认 ONLOGON 登录自启、--onstart 开机即启需管理员；非管理员自动降级用户级 Startup 静默自启）|
@@ -89,6 +167,7 @@ license: MIT
 <root>/
 ├── facts/                    # FACT 事实（公共可共享）
 ├── private/<owner>/<type>/   # PREF / BOUND / COMMIT，按智能体隔离
+├── private/<owner>/profile.md # 用户画像（profile 命令生成，可再生成，零推断）
 ├── .archive/                 # 归档区
 ├── index.json                # 检索索引（tokens = 分词词频，非访问令牌）
 └── agents.json               # 智能体身份登记表（唯一性）
@@ -96,7 +175,7 @@ license: MIT
 
 记忆文件 `<YYYY-MM-DD>-<NNNN>.md`，frontmatter 含 `type / subject / statement / confidence / created / updated / tags / immutable / scope / owner / access_count / last_accessed`；正文为记忆内容。旧版根下平铺的 `prefs/` `bounds/` `commits/` 会在 `reindex`（或首次 recall 建索引）时按 frontmatter `owner` 自动迁移到 `private/<owner>/<type>/`。
 
-自我档案（本智能体身份，强制落盘）：PREF，`subject=自我接入档案`，`owner=<本智能体ID>`，statement 为 `; ` 分隔的 key:value——`agent_id / host / memory_home / mcp_mode（stdio|http）/ engine_url（仅远端）/ token（仅远端；本机不存 token）`。
+自我档案（本智能体身份，强制落盘）：PREF，`subject=自我接入档案`，`owner=<本智能体ID>`，statement 为 `; ` 分隔的 key:value——`agent_id / host / memory_home / mcp_mode（stdio|http）/ engine_url（仅远端）/ token（仅远端；本机不存 token）`，可含 `agent_name / user_name / relationship`（`iam --name/--user/--relationship` 写入）。
 
 ## 便携记忆盘模式（局域网多机共享）
 
@@ -173,7 +252,7 @@ yotta-memory --version    # 或 command -v yotta-memory / where yotta-memory
 4. 按当前智能体机制重载 MCP（必要时请用户重启会话）；
 5. 用 MCP tools 读写记忆。
 
-> MCP 工具集与 CLI 一致：remember / recall / search / forget / archive / reindex / export / import；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露。
+> MCP 工具集与 CLI 一致：remember / recall / search / forget / archive / reindex / export / import / profile；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露。
 
 ### 4.7 MCP 配置位置表
 | 智能体 | 常见 MCP 配置位置 |

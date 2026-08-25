@@ -5,6 +5,7 @@
 // v0.4.2 新增：iam/whoami 智能体身份自注册（agents.json 唯一性）+ 自我档案 PREF + 私密记忆须声明 owner
 // v0.5.3 新增：CLI 选项可前置（--agent 等允许放在子命令前，不再误报"未知命令"）/ lan enable 成功补"服务不会立刻启动"提示（v0.5.2 lan 引号修复无回归）
 // v0.5.4 新增：lan enable 在非管理员（schtasks Access denied）时自动降级为用户级 Startup 静默自启（VBS sh.Run 窗口0 + autostart.cmd，node 路径 process.execPath 自动探测）；lan disable/status 同时管理计划任务与 Startup 双机制
+// v0.6.0 新增：灵魂盘核心——profile（用户画像聚合，零推断）/ context（开工上下文包）/ iam 扩展（--name/--user/--relationship）/ remember --verify（写后回读）与 --no-hint（关闭类型启发式提示）+ SKILL「记忆守则」
 'use strict';
 
 const fs = require('fs');
@@ -14,7 +15,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.5.4';
+const VERSION = '0.6.0';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -28,6 +29,9 @@ const CONFIG_FILE = 'config.json';
 const SERVER_SUBDIR = '.server';
 const TOKENS_FILE = 'tokens.json';
 const AGENTS_FILE = 'agents.json';
+const PROFILE_FILE = 'profile.md';
+// remember 类型启发式提示关键词（statement 含主观/关系词且 type=FACT 时提示改 PREF，仅提示不拦截）
+const HINT_KEYWORDS = ['用户', '偏好', '喜欢', '关系', '称呼', '本人', '希望', '讨厌', '欣赏', '习惯', '忌讳', '介意', '不要', '别用'];
 
 // ---- 全局配置（记忆库位置持久化，固定 ~/.yottamemory/config.json）----
 function configPath() {
@@ -384,7 +388,18 @@ function rememberCore(type, subject, statement, opts) {
         if (scope && !meta.scope) patch.scope = scope;
         rewriteFrontmatter(fp, patch);
         upsertIndexEntry(root, readEntry(fp, root));
-        return { error: false, text: '已更新: ' + fp };
+        let text = '已更新: ' + fp;
+        if (opts.hint !== false && t === 'FACT') {
+          const hit = HINT_KEYWORDS.filter(function (w) { return stmt.indexOf(w) !== -1; });
+          if (hit.length) text += '\n[提示] statement 含主观/关系词（' + hit.join('、') + '），疑似用户偏好 / 关系内容——若属此类建议改用 PREF（私密，仅本人可读）。仅提示不拦截；--no-hint 可关闭。';
+        }
+        if (opts.verify) {
+          const rel = path.relative(root, fp).replace(/\\/g, '/');
+          const rr = recallCore(subj, { limit: 10, agent: selfAgent || opts.agent });
+          const ok = rr.text.replace(/\\/g, '/').indexOf(rel) !== -1;
+          text += '\n[verify] ' + (ok ? '已写回读 OK: ' + rel : '回读未命中，请检查: ' + rel);
+        }
+        return { error: false, text: text };
       }
     }
   }
@@ -398,7 +413,18 @@ function rememberCore(type, subject, statement, opts) {
   };
   fs.writeFileSync(file, frontmatterToText(rec, stmt), 'utf8');
   upsertIndexEntry(root, readEntry(file, root));
-  return { error: false, text: '已记录: ' + file };
+  let text = '已记录: ' + file;
+  if (opts.hint !== false && t === 'FACT') {
+    const hit = HINT_KEYWORDS.filter(function (w) { return stmt.indexOf(w) !== -1; });
+    if (hit.length) text += '\n[提示] statement 含主观/关系词（' + hit.join('、') + '），疑似用户偏好 / 关系内容——若属此类建议改用 PREF（私密，仅本人可读）。仅提示不拦截；--no-hint 可关闭。';
+  }
+  if (opts.verify) {
+    const rel = path.relative(root, file).replace(/\\/g, '/');
+    const rr = recallCore(subj, { limit: 10, agent: selfAgent || opts.agent });
+    const ok = rr.text.replace(/\\/g, '/').indexOf(rel) !== -1;
+    text += '\n[verify] ' + (ok ? '已写回读 OK: ' + rel : '回读未命中，请检查: ' + rel);
+  }
+  return { error: false, text: text };
 }
 function recallCore(query, opts) {
   const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
@@ -536,7 +562,9 @@ function cmdInit(opts) {
   console.log(r.text);
 }
 function cmdRemember(type, subject, statement, opts) {
-  const r = rememberCore(type, subject, statement, opts);
+  const o = Object.assign({}, opts);
+  if (o.noHint) o.hint = false;
+  const r = rememberCore(type, subject, statement, o);
   console.log(r.text);
   if (r.error) process.exit(2);
 }
@@ -698,6 +726,14 @@ function findSelfProfile(root, agentId) {
   }
   return '';
 }
+function parseKvBody(body) {
+  const out = {};
+  for (const seg of String(body || '').split(';')) {
+    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([\s\S]*)$/.exec(seg);
+    if (m && m[2] !== undefined) out[m[1]] = m[2].trim();
+  }
+  return out;
+}
 function selfProfileBody(agentId, root, extra) {
   const lines = [];
   lines.push('agent_id: ' + agentId);
@@ -706,14 +742,41 @@ function selfProfileBody(agentId, root, extra) {
   lines.push('mcp_mode: ' + (extra.mcpMode || 'stdio'));
   if (extra.engineUrl) lines.push('engine_url: ' + extra.engineUrl);
   if (extra.token) lines.push('token: ' + extra.token);
+  if (extra.name) lines.push('agent_name: ' + extra.name);
+  if (extra.userName) lines.push('user_name: ' + extra.userName);
+  if (extra.relationship) lines.push('relationship: ' + extra.relationship);
   return lines.join('; ');
 }
 function writeSelfProfile(root, agentId, extra) {
+  extra = extra || {};
   const dir = selfPrefsDir(root, agentId);
   fs.mkdirSync(dir, { recursive: true });
+  const existing = findSelfProfile(root, agentId);
+  if (existing) {
+    // 已有自我档案：合并 kv 字段更新（不重复建文件）
+    const fp = path.join(dir, existing);
+    const parsed = parseFrontmatter(fs.readFileSync(fp, 'utf8'));
+    const kv = parseKvBody(parsed.body);
+    kv.agent_id = agentId;
+    kv.host = os.hostname();
+    kv.memory_home = root;
+    kv.mcp_mode = extra.mcpMode || kv.mcp_mode || 'stdio';
+    if (extra.engineUrl) kv.engine_url = extra.engineUrl;
+    if (extra.token) kv.token = extra.token;
+    if (extra.name) kv.agent_name = extra.name;
+    if (extra.userName) kv.user_name = extra.userName;
+    if (extra.relationship) kv.relationship = extra.relationship;
+    const body = Object.keys(kv).map(function (k) { return k + ': ' + kv[k]; }).join('; ');
+    const meta = Object.assign({}, parsed.meta);
+    meta.updated = today();
+    meta.statement = body;
+    fs.writeFileSync(fp, frontmatterToText(meta, body), 'utf8');
+    upsertIndexEntry(root, readEntry(fp, root));
+    return fp;
+  }
   const seq = nextSeq(dir);
   const file = path.join(dir, today() + '-' + seq + '.md');
-  const body = selfProfileBody(agentId, root, extra || {});
+  const body = selfProfileBody(agentId, root, extra);
   const rec = {
     type: 'PREF', subject: SELF_PROFILE_SUBJECT, statement: body,
     confidence: 1.0, created: today(), updated: today(),
@@ -736,7 +799,7 @@ function identityConflict(root, agentId) {
 function cmdIam(agentId, opts) {
   const root = userRoot();
   ensureInit(root);
-  if (!agentId) { console.error('请指定 <id>：yotta-memory iam <id> [--force]'); process.exit(2); }
+  if (!agentId) { console.error('请指定 <id>：yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]'); process.exit(2); }
   const conflict = identityConflict(root, agentId);
   if (conflict && !opts.force) {
     console.error("错误: ID '" + agentId + "' " + conflict + '。每个 AI 智能体的 ID 必须唯一。请换一个唯一 ID，或确认是同一智能体后加 --force 覆盖。');
@@ -749,8 +812,11 @@ function cmdIam(agentId, opts) {
   const existed = data.agents[agentId];
   data.agents[agentId] = { host: host, created: (existed && existed.created) || today() };
   saveAgents(root, data);
-  const file = writeSelfProfile(root, agentId, { mcpMode: 'stdio' });
+  const file = writeSelfProfile(root, agentId, { mcpMode: 'stdio', name: opts.name, userName: opts.user, relationship: opts.relationship });
   console.log('已登记智能体身份: ' + agentId + '（host=' + host + '，' + (conflict ? '--force 覆盖' : '新建') + '）');
+  if (opts.name || opts.user || opts.relationship) {
+    console.log('自我档案扩展: ' + [opts.name && '显示名=' + opts.name, opts.user && '用户=' + opts.user, opts.relationship && '关系=' + opts.relationship].filter(Boolean).join(' / '));
+  }
   console.log('已写入自我档案: ' + file);
   console.log('本机免 token：以后用 whoami 确认身份；远端接入需 token new --agent ' + agentId);
 }
@@ -772,7 +838,182 @@ function cmdWhoami() {
   console.log('当前智能体身份: ' + id);
   console.log('登记状态: ' + reg);
   console.log('自我档案: ' + (profile ? profile : '未写入（请执行 yotta-memory iam ' + id + '）'));
+  if (profile) {
+    const kv = parseKvBody(parseFrontmatter(fs.readFileSync(path.join(selfPrefsDir(root, id), profile), 'utf8')).body);
+    if (kv.agent_name) console.log('显示名: ' + kv.agent_name);
+    if (kv.user_name) console.log('用户: ' + kv.user_name);
+    if (kv.relationship) console.log('关系: ' + kv.relationship);
+  }
   if (!agents[id] && !tokens[id]) console.log('提示: 请先 yotta-memory iam ' + id + ' 登记唯一身份并落自我档案，再写私密记忆。');
+}
+
+// ---- 用户画像聚合（v0.6.0，零推断：只归组呈现原文，结论由承载 AI 依据「记忆守则」内部形成）----
+function profileGroups(root, owner) {
+  const groups = [];
+  const map = {};
+  for (const t of PRIVATE_LEAF) {
+    const dir = path.join(root, PRIVATE_DIR, owner, t);
+    if (!fs.existsSync(dir)) continue;
+    for (const f of fs.readdirSync(dir)) {
+      const fp = path.join(dir, f);
+      if (!fs.statSync(fp).isFile()) continue;
+      const e = readEntry(fp, root);
+      const key = e.type + '\u0000' + (e.subject || '') + '\u0000' + e.tags.join(',');
+      if (!map[key]) {
+        map[key] = { type: e.type, subject: e.subject || '', tags: e.tags || [], items: [] };
+        groups.push(map[key]);
+      }
+      map[key].items.push({
+        file: e.file, statement: e.statement, confidence: e.confidence,
+        last_accessed: e.last_accessed, updated: e.updated,
+      });
+    }
+  }
+  return groups;
+}
+function profileCore(opts) {
+  opts = opts || {};
+  const root = userRoot();
+  const selfAgent = opts.selfAgent !== undefined ? opts.selfAgent : currentAgent();
+  const owner = opts.owner || selfAgent;
+  if (!owner) return { error: true, exitCode: 2, text: '请先声明身份（YOTTA_AGENT_ID / AGENT_ID）或传 --owner <id>，再生成画像。' };
+  if (selfAgent && owner !== selfAgent && owner !== 'user' && !opts.unsafe && !hasGrant(selfAgent, owner)) {
+    return { error: true, exitCode: 3, text: '拒绝: 不能生成其它智能体 ' + owner + ' 的画像（private/' + owner + '/ 为私密区）。如需读取请 --owner user 或 --unsafe（用户显式授权）。' };
+  }
+  const ownerDir = path.join(root, PRIVATE_DIR, owner);
+  if (!fs.existsSync(ownerDir)) return { error: false, text: '该智能体（' + owner + '）暂无画像：private/' + owner + '/ 不存在或为空。' };
+  const groups = profileGroups(root, owner);
+  if (!groups.length) return { error: false, text: '该智能体（' + owner + '）暂无画像：private/' + owner + '/ 下无 PREF / BOUND / COMMIT 条目。' };
+  const lines = [];
+  lines.push('# 用户画像（' + owner + '）');
+  lines.push('');
+  lines.push('> 生成: yotta-memory profile | 引擎零推断：以下为私密记忆原文的结构化归组，画像结论由承载 AI 依据「记忆守则」在内部形成，不当面贴标签。');
+  lines.push('> 刷新: ' + today());
+  lines.push('');
+  for (const g of groups) {
+    lines.push('## ' + g.type + ' · ' + (g.subject || '（无主题）') + (g.tags.length ? '  [tags: ' + g.tags.join(', ') + ']' : ''));
+    lines.push('');
+    for (const it of g.items) {
+      const acc = it.last_accessed ? '最近访问 ' + it.last_accessed : '未访问';
+      lines.push('- ' + it.statement + '（confidence ' + it.confidence + ' · ' + acc + '）');
+      lines.push('  - ' + it.file);
+    }
+    lines.push('');
+  }
+  const text = lines.join('\n');
+  const outFile = path.join(ownerDir, PROFILE_FILE);
+  fs.writeFileSync(outFile, text + '\n', 'utf8');
+  return { error: false, text: text + '\n\n[已写入] ' + outFile };
+}
+function cmdProfile(opts) {
+  const r = profileCore(opts);
+  console.log(r.text);
+  if (r.exitCode) process.exit(r.exitCode);
+  if (r.error) process.exit(2);
+}
+
+// ---- 开工上下文包（v0.6.0：身份 + 画像 + 近期记忆 + 边界 + 承诺，stdout 不落盘）----
+function selfProfileKv(root, id) {
+  const profile = findSelfProfile(root, id);
+  if (!profile) return {};
+  return parseKvBody(parseFrontmatter(fs.readFileSync(path.join(selfPrefsDir(root, id), profile), 'utf8')).body);
+}
+function contextCore(opts) {
+  opts = opts || {};
+  const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
+  if (!roots.length) return { error: false, exitCode: 0, text: '记忆库不存在，请先运行: yotta-memory init' };
+  const root = userRoot();
+  const limit = opts.limit || 10;
+  const selfAgent = opts.selfAgent !== undefined ? opts.selfAgent : currentAgent();
+  const owner = opts.owner || selfAgent;
+  const unsafe = !!opts.unsafe;
+  const lines = [];
+  lines.push('# 开工上下文包（yotta-memory context）');
+  lines.push('');
+  lines.push('## 1. 身份');
+  lines.push('');
+  if (!owner) {
+    lines.push('- 未声明智能体身份（无 YOTTA_AGENT_ID / --owner）。私密记忆与画像不可用；请先 whoami / iam。');
+  } else {
+    lines.push('- agent_id: ' + owner);
+    const kv = selfProfileKv(root, owner);
+    if (kv.agent_name) lines.push('- agent_name: ' + kv.agent_name);
+    if (kv.user_name) lines.push('- user_name: ' + kv.user_name);
+    if (kv.relationship) lines.push('- relationship: ' + kv.relationship);
+    lines.push('- host: ' + os.hostname());
+    lines.push('- memory_home: ' + root);
+  }
+  lines.push('');
+  lines.push('## 2. 用户画像摘要');
+  lines.push('');
+  if (owner) {
+    const pf = path.join(root, PRIVATE_DIR, owner, PROFILE_FILE);
+    if (fs.existsSync(pf)) {
+      lines.push('```markdown');
+      lines.push(fs.readFileSync(pf, 'utf8').trim());
+      lines.push('```');
+    } else {
+      const pr = profileCore({ owner: owner, unsafe: unsafe, selfAgent: selfAgent });
+      if (!pr.error && pr.text.indexOf('[已写入]') !== -1 && fs.existsSync(pf)) {
+        lines.push('（画像不存在，已自动生成一次，见下）');
+        lines.push('```markdown');
+        lines.push(fs.readFileSync(pf, 'utf8').trim());
+        lines.push('```');
+      } else {
+        lines.push('（该身份暂无画像；可运行 yotta-memory profile 生成）');
+      }
+    }
+  } else {
+    lines.push('（未声明身份，跳过画像；先 iam 登记后可生成）');
+  }
+  lines.push('');
+  lines.push('## 3. 近期记忆（按活跃度前 ' + limit + ' 条）');
+  lines.push('');
+  const recent = [];
+  for (const r of roots) {
+    for (const e of ensureIndex(r)) {
+      if (classifyRead(e, owner, '', unsafe, selfAgent) === 'denied') continue;
+      recent.push({ e: e, v: vitality(e) });
+    }
+  }
+  recent.sort(function (a, b) { return b.v - a.v; });
+  const recentShown = recent.slice(0, limit);
+  if (!recentShown.length) lines.push('（暂无记忆）');
+  for (const h of recentShown) {
+    lines.push('- [' + h.e.type + '] ' + h.e.subject + ': ' + h.e.statement);
+  }
+  lines.push('');
+  lines.push('## 4. 边界提醒（BOUND）');
+  lines.push('');
+  const bounds = [];
+  for (const r of roots) {
+    for (const e of ensureIndex(r)) {
+      if (e.type !== 'BOUND') continue;
+      if (classifyRead(e, owner, '', unsafe, selfAgent) === 'denied') continue;
+      bounds.push(e);
+    }
+  }
+  if (!bounds.length) lines.push('（无）');
+  for (const e of bounds) lines.push('- ' + (e.subject || '边界') + ': ' + e.statement);
+  lines.push('');
+  lines.push('## 5. 承诺 / 锚点（COMMIT）');
+  lines.push('');
+  const commits = [];
+  for (const r of roots) {
+    for (const e of ensureIndex(r)) {
+      if (e.type !== 'COMMIT') continue;
+      if (classifyRead(e, owner, '', unsafe, selfAgent) === 'denied') continue;
+      commits.push(e);
+    }
+  }
+  if (!commits.length) lines.push('（无）');
+  for (const e of commits) lines.push('- ' + (e.subject || '承诺') + ': ' + e.statement);
+  return { error: false, exitCode: 0, text: lines.join('\n') };
+}
+function cmdContext(opts) {
+  const r = contextCore(opts);
+  console.log(r.text);
+  if (r.exitCode) process.exit(r.exitCode);
 }
 
 // ---- config 命令 ----
@@ -803,6 +1044,7 @@ function mcpTools() {
     { name: 'export', description: '导出全部记忆到引擎主机上的 JSON 文件。out 可选（默认 <记忆库>/yottamemory-export-<日期>.json）', inputSchema: { type: 'object', properties: { out: { type: 'string' } } } },
     { name: 'import', description: '从引擎主机上的 JSON 文件导入记忆。src 为文件路径（可绝对路径，或相对记忆库目录）', inputSchema: { type: 'object', properties: { src: { type: 'string' } }, required: ['src'] } },
     { name: 'agent_info', description: '查看当前智能体身份与登记状态（远端读经 token 校验的 X-Agent-Id；本机读 YOTTA_AGENT_ID）。开工先确认「我是谁」，禁止从记忆里抄别人的 ID', inputSchema: { type: 'object', properties: {} } },
+    { name: 'profile', description: '生成当前智能体的用户画像（只读聚合 private/<owner>/ 下 PREF/BOUND/COMMIT 原文，零推断，写入 private/<owner>/profile.md）。owner 默认当前智能体', inputSchema: { type: 'object', properties: { owner: { type: 'string' } } } },
   ];
 }
 function callTool(name, args, ctx) {
@@ -850,7 +1092,19 @@ function callTool(name, args, ctx) {
       if (agents[id]) reg = 'agents.json 已登记（host=' + agents[id].host + '）';
       else if (tokens[id]) reg = 'tokens.json 已登记（远端）';
       const profile = findSelfProfile(root, id);
-      return { text: '当前智能体身份: ' + id + '\n登记状态: ' + reg + '\n自我档案: ' + (profile || '未写入（本地引擎主机执行 yotta-memory iam ' + id + '）'), error: false };
+      let rel = '';
+      if (profile) {
+        const kv = selfProfileKv(root, id);
+        if (kv.agent_name) rel += '\n显示名: ' + kv.agent_name;
+        if (kv.user_name) rel += '\n用户: ' + kv.user_name;
+        if (kv.relationship) rel += '\n关系: ' + kv.relationship;
+      }
+      return { text: '当前智能体身份: ' + id + '\n登记状态: ' + reg + '\n自我档案: ' + (profile || '未写入（本地引擎主机执行 yotta-memory iam ' + id + '）') + rel, error: false };
+    }
+    if (name === 'profile') {
+      const ownerArg = args.owner ? String(args.owner) : '';
+      const r = profileCore({ owner: ownerArg || agent, selfAgent: agent });
+      return { text: r.text, error: r.error };
     }
     return { text: '未知工具: ' + name, error: true };
   } catch (e) {
@@ -1134,7 +1388,9 @@ function usage() {
     '  yotta-memory init [--project] [--dir <目录>]  初始化记忆库（默认用户级；--dir 显式指定位置）',
     '  yotta-memory config set memory_home <目录>  持久记住记忆库位置',
     '  yotta-memory config get                   查看当前配置与生效位置',
-    '  yotta-memory remember <type> <subject> <statement> [--owner <id>]   写入记忆',
+    '  yotta-memory remember <type> <subject> <statement> [--owner <id>] [--verify] [--no-hint]   写入记忆（--verify 写后回读校验；--no-hint 关闭类型启发式提示）',
+    '  yotta-memory profile [--owner <id>]    生成用户画像（聚合 private/<owner>/ 原文，零推断，写 profile.md）',
+    '  yotta-memory context [--limit N] [--owner <id>]  生成开工上下文包（身份+画像+近期记忆+边界+承诺，stdout 不落盘）',
     '  yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]  检索（索引+TF，读取分区；--agent 仅表示“以该身份检索/模拟”，跨智能体私密读取需 --unsafe / 授权）',
     '  yotta-memory forget <文件或文件名>         删除一条记忆',
     '  yotta-memory archive [--days 180] [--threshold 0.4]  归档（盖棺分+年龄）',
@@ -1142,7 +1398,7 @@ function usage() {
     '  yotta-memory export [--out 文件.json]      导出全部记忆',
     '  yotta-memory import <文件.json>            导入记忆',
     '  yotta-memory whoami                       查看当前智能体身份与登记状态（读 YOTTA_AGENT_ID / X-Agent-Id，不猜不默认）',
-    '  yotta-memory iam <id> [--force]           登记本智能体唯一身份并自动落自我档案（agents.json；ID 必须唯一）',
+    '  yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]  登记本智能体唯一身份并自动落自我档案（agents.json；ID 必须唯一）',
     '  yotta-memory token new --agent <id> [--force]  生成/重置某智能体访问 token（同 ID 已被其它来源占用需 --force 覆盖）',
     '  yotta-memory token list                   列出已登记智能体',
     '  yotta-memory token revoke --agent <id>    吊销某智能体 token',
@@ -1162,7 +1418,7 @@ function main() {
   if (!args.length) { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship']);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--version' || a === '-v') { console.log(VERSION); return; }
@@ -1174,6 +1430,8 @@ function main() {
     else if (a === '--stdio') opts.stdio = true;
     else if (a === '--onstart') opts.onstart = true;
     else if (a === '--force') opts.force = true;
+    else if (a === '--verify') opts.verify = true;
+    else if (a === '--no-hint') opts.noHint = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;
@@ -1187,6 +1445,9 @@ function main() {
       else if (a === '--host') opts.host = v;
       else if (a === '--port') opts.port = parseInt(v, 10) || 8787;
       else if (a === '--dir') opts.dir = v;
+      else if (a === '--name') opts.name = v;
+      else if (a === '--user') opts.user = v;
+      else if (a === '--relationship') opts.relationship = v;
     } else if (a.startsWith('--')) {
       console.error('未知选项: ' + a);
       process.exit(2);
@@ -1212,6 +1473,8 @@ function main() {
     case 'forget': cmdForget(rest[0]); break;
     case 'archive': cmdArchive(opts); break;
     case 'reindex': cmdReindex(); break;
+    case 'profile': cmdProfile(opts); break;
+    case 'context': cmdContext(opts); break;
     case 'export': cmdExport(opts.out); break;
     case 'import': cmdImport(rest[0]); break;
     case 'token': {
@@ -1246,6 +1509,8 @@ module.exports = {
   projectRoot: projectRoot,
   rememberCore: rememberCore,
   recallCore: recallCore,
+  profileCore: profileCore,
+  contextCore: contextCore,
   forgetCore: forgetCore,
   archiveCore: archiveCore,
   mcpTools: mcpTools,

@@ -7,6 +7,7 @@
 <p align="center">元忆 —— 有权限边界的文件式智能体记忆：让任何 AI 智能体活过会话，而不是只活在单次对话里。</p>
 <p align="center">开工 <code>recall</code> 恢复上下文、重要信息 <code>remember</code> 落盘、收工归档；记忆是落在用户自己目录里的 Markdown 文件——<b>可读、可改、可审计、可回滚</b>，零依赖、即装即用。</p>
 <p align="center">FACT 共享、PREF / BOUND / COMMIT 私密隔离——<b>谁该读、谁不该读，由机制而非 AI 自觉决定</b>；一份记忆可跨智能体共用，记忆库随盘走、局域网可共享。</p>
+<p align="center">v0.6.0 起「越用越懂」：<code>profile</code> 聚合用户画像（零推断）+ <code>context</code> 一键开工上下文包（身份 + 画像 + 近期记忆 + 边界 + 承诺），记忆从「存储」成长为「会成长的记忆系统」。</p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
@@ -26,6 +27,7 @@
 - **记忆就是文件**：每条记忆是一个带 YAML frontmatter 的 Markdown 文件，放在用户自己的目录里。任何编辑器都能看、能改、能删；git 直接做版本管理与回滚，团队同步与交接走同一条标准工具链。
 - **隔离由机制保证**：FACT 进公共区共享，PREF / BOUND / COMMIT 进私密区、按 owner 物理分目录（`private/<owner>/<type>/`）。读取按 scope/owner 分区过滤，越界内容由 CLI 拦截、永不返回（默认静默跳过；显式跨读无授权报错拒绝）；读写一律走 CLI / MCP，禁止 shell 直读写库文件——权限由机制把关，不依赖 AI 的「自觉」。
 - **零依赖、即装即用**：无守护进程、无数据库、无向量库，只需 Node.js。安装即用，数据留在本机，任何机器都能部署。
+- **越用越懂（v0.6.0）**：`profile` 聚合用户画像（引擎零推断，只归组原文）+ `context` 一键生成开工上下文包（身份 + 画像 + 近期记忆 + 边界 + 承诺）；SKILL「记忆守则」注入灵魂盘规则层（类型红线 / 触发信号 / 了解用户 / 底线 / 宿主隔离），只注入规则与机制、不注入人格数据，出厂零数据。
 - **便携记忆盘**：记忆库本身就是记忆引擎——装在硬盘或主机上随盘走，局域网内其它主机上的智能体可远程读写；本地零进程与局域网常驻两种模式可并存，插上硬盘即恢复全部记忆。
 
 ## 核心优势
@@ -38,6 +40,7 @@
 | **轻量零依赖** | 无 daemon / 无数据库 / 无向量库；Node.js 自带即跑，任何机器可部署 |
 | **双级存储** | 用户级 `~/.yottamemory/`（跨项目）+ 项目级 `.yottamemory/`（随项目共享 / 交接）|
 | **检索与生命周期** | 索引 + TF 打分（中文分词友好）；质量分 / 盖棺分 / 自动归档，记忆库不会无限膨胀 |
+| **越用越懂（v0.6.0）** | `profile` 画像聚合（零推断）+ `context` 开工上下文包（身份 / 画像 / 近期记忆 / 边界 / 承诺）+ SKILL「记忆守则」规则层，记忆随使用成长 |
 | **生态分发** | GitHub + npm 双源同步发布；npx skills / npm / install.sh 三种方式，覆盖 17+ 类智能体目录 |
 | **便携记忆盘（随盘走）** | 记忆库即引擎：装在硬盘 / 主机上，插上即恢复全部记忆；引擎主机只需装 CLI 当存放点，无需装任何 AI 智能体 |
 | **局域网共享与自启** | 每智能体独立 token（Bearer + X-Agent-Id）鉴权、可吊销；`lan enable` 注册开机自启（Windows：优先计划任务；非管理员自动降级用户级 Startup 静默自启）；MCP 工具集与 CLI 一致（8 个工具），管理动作不远程暴露 |
@@ -83,6 +86,12 @@
 - **本机免 token**：本机 CLI / stdio 直连不经网络、不校验 token；身份经该智能体 MCP 配置的 `env.YOTTA_AGENT_ID` 声明。本机多个智能体各自声明唯一 ID，互不撞。
 - **私密记忆必须有 owner**：写 PREF / BOUND / COMMIT 时未声明身份会被拒绝（公共 FACT 不受影响），从机制上防止「抄别人的 ID」。
 
+### 画像与开工上下文（v0.6.0）
+
+- **profile**：聚合 `private/<owner>/` 下 PREF / BOUND / COMMIT 原文，按 type + subject + tags 归组，写 `profile.md`；引擎零推断，画像结论由 AI 依据「记忆守则」内部形成，不当面贴标签。
+- **context**：一键生成开工上下文包——身份 + 用户画像摘要 + 近期记忆（按活跃度）+ 边界提醒 + 承诺 / 锚点，作为会话主注入（替代裸 `recall`）。
+- **记忆守则**：SKILL.md 内置规则层（类型红线 / 主动捕获触发信号 / 了解用户三阶段四手法 / 心理学底座 / 底线与边界 / 宿主隔离 / 反模式），让 AI「越用越懂」有章法。
+
 ### 检索：索引 + 中文分词打分
 
 - `remember` 时自动构建 `index.json` 索引；recall 用 TF 打分排序，中文按 bigram 分词，不用额外模型。
@@ -100,7 +109,7 @@
 
 ### 智能体接入
 
-把技能装进智能体后，SKILL.md 会自动教会智能体一套工作流：**开工 `recall` 恢复上下文 → 重要信息 `remember` 落盘 → 收工归档**。也可在对话中直接说「记住 XXX」「上次说到哪了」「记一笔」触发。
+把技能装进智能体后，SKILL.md 会自动教会智能体一套工作流：**开工 `context` 主注入（身份 + 画像 + 近期记忆 + 边界 + 承诺）→ 重要信息 `remember` 落盘 → 收工归档**，并遵循「记忆守则」（类型红线 / 触发信号 / 底线 / 宿主隔离）。也可在对话中直接说「记住 XXX」「上次说到哪了」「记一笔」触发。
 
 ### 便携记忆盘（记忆库即引擎）
 
@@ -174,15 +183,17 @@ npm i -g @yottameta/yotta-memory
 | 命令 | 作用 |
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库（默认用户级 `~/.yottamemory/`；--dir 显式指定位置）|
-| `yotta-memory remember <type> <subject> <statement> [--owner <id>]` | 写入记忆（同 subject+statement 自动更新；--owner 标注归属）|
+| `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--verify] [--no-hint]` | 写入记忆（同 subject+statement 自动更新；--owner 标注归属；--verify 写后回读校验；--no-hint 关闭类型启发式提示）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索记忆（索引+TF 打分，读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 仅作身份声明、不授予跨读；项目级优先）|
+| `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
+| `yotta-memory context [--limit N] [--owner <id>]` | 生成开工上下文包（身份 + 画像 + 近期记忆 + 边界 + 承诺，stdout 不落盘）|
 | `yotta-memory forget <文件>` | 删除一条记忆（按类型目录路径或文件名）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（盖棺分+年龄，immutable 除外）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
 | `yotta-memory config set memory_home <目录>` / `config get` | 持久记住 / 查看记忆库位置（`~/.yottamemory/config.json`）|
 | `yotta-memory whoami` | 查看当前智能体身份与登记状态（读 `YOTTA_AGENT_ID` / `X-Agent-Id`，不猜不默认）|
-| `yotta-memory iam <id> [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一）|
+| `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 为智能体生成 / 列出 / 吊销访问 token（登记于记忆库 `.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
 | `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id 鉴权）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务，默认 ONLOGON 登录自启、--onstart 开机即启需管理员；非管理员自动降级用户级 Startup 静默自启）|
@@ -194,6 +205,8 @@ npm i -g @yottameta/yotta-memory
 yotta-memory init
 yotta-memory remember PREF 用户 偏好短回复，不要用表情
 yotta-memory recall 偏好
+yotta-memory profile
+yotta-memory context --limit 10
 yotta-memory recall --type FACT --limit 10
 ```
 

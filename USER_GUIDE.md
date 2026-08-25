@@ -26,6 +26,7 @@
 - **多智能体共享**：FACT 进公共区共享，PREF / BOUND / COMMIT 各自私密隔离。
 - **交接与团队协作**：项目级 `.yottamemory` 随仓库走，交接即恢复。
 - **便携记忆盘**：记忆装在固定主机上，本机与局域网其它主机共享同一份记忆（见第 4 / 5 篇）。
+- **越用越懂（v0.6.0）**：AI 按「记忆守则」主动捕获信号，`profile` 聚合画像、`context` 开工注入——用得越久越懂你。
 
 ## 2. 安装（CLI + 技能）
 
@@ -66,6 +67,18 @@ yotta-memory config get                              # 查看记忆库位置
 
 - 想换记忆位置：`yotta-memory config set memory_home <目录>`，之后所有命令自动用新位置。
 - 项目级记忆：在项目目录里 `yotta-memory init --project`，该项目的智能体优先读项目级记忆。
+
+### 画像与开工上下文（v0.6.0）
+
+```bash
+yotta-memory profile                          # 生成用户画像（写 private/<owner>/profile.md）
+yotta-memory context --limit 10               # 生成开工上下文包（身份+画像+近期记忆+边界+承诺）
+yotta-memory iam <id> --name 元忆 --user 老张 --relationship 伙伴   # 自我档案扩展显示名/用户/关系
+```
+
+- `profile` 引擎零推断：只按类型 / 主题 / 标签归组呈现原文，画像结论由 AI 内部形成，不当面贴标签。
+- `context` 是每次会话开工的主注入，替代裸 `recall`；无画像时自动生成一次或降级，不报错。
+- `remember --verify` 写后回读校验；`remember --no-hint` 关闭「疑似偏好，建议 PREF」的提示。
 
 ### 记忆库位置：本机智能体如何找到记忆
 
@@ -231,15 +244,17 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 | 命令 | 作用 |
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库 |
-| `yotta-memory remember <类型> <主题> <内容> [--owner <id>]` | 写入记忆 |
+| `yotta-memory remember <类型> <主题> <内容> [--owner <id>] [--verify] [--no-hint]` | 写入记忆（--verify 写后回读；--no-hint 关闭类型提示）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索记忆（读取分区过滤；`--agent <其它>` 仅作身份声明、不授予跨读；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`）|
+| `yotta-memory profile [--owner <id>]` | 生成用户画像（零推断，写 `profile.md`）|
+| `yotta-memory context [--limit N] [--owner <id>]` | 开工上下文包（身份+画像+近期记忆+边界+承诺）|
 | `yotta-memory forget <文件>` | 删除一条记忆 |
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆 |
 | `yotta-memory reindex` | 重建索引 |
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |
 | `yotta-memory config set memory_home <目录>` / `config get` | 记忆库位置 |
 | `yotta-memory whoami` | 查看当前智能体身份与登记状态（读 `YOTTA_AGENT_ID` / `X-Agent-Id`，不猜不默认）|
-| `yotta-memory iam <id> [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一）|
+| `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 访问 token（同 ID 已被其它来源占用需 `--force` 覆盖）|
 | `yotta-memory serve [--port 8787] [--stdio] [--no-auth]` | 启动记忆引擎（--no-auth 关闭鉴权，仅限可信内网）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务；非管理员自动降级用户级 Startup 静默自启）|
@@ -277,6 +292,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 - 管理动作（init / config / token / lan / serve）不通过 MCP 暴露，远程只能读写记忆，不能改配置、不能管 token。
 - `--no-auth` 会关闭鉴权，仅限可信内网使用。
 - 数据主权在用户：所有数据都是本地明文文件，随时可看、可改、可删。
+- 「记忆守则」内置底线：陪伴不操控 / 理解不越界（不贴标签）/ 诚实不伪装 / 不降格；数据安全（被遗忘权 = `forget`）；宿主隔离（只写本记忆库，不读写宿主 AI 自身 memory / 配置 / 系统文件）。
 
 **确实需要读取其它智能体的私密记忆时（三种授权方式，满足任一即可）：**
 

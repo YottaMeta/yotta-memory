@@ -1,4 +1,4 @@
-# yotta-memory 协议规范 v0.5.4
+# yotta-memory 协议规范 v0.6.0
 
 > 本文件定义 yotta-memory 记忆标准：存储位置、目录结构、文件格式、类型体系与 CLI 命令参考。
 > 目标：任何支持 Agent Skills 开放标准的智能体，装完即可读写同一份记忆。
@@ -22,7 +22,8 @@
 │   └── <owner>/            # 每个智能体一个子目录
 │       ├── prefs/          # PREF 偏好（该 owner 私密）
 │       ├── bounds/         # BOUND 边界（该 owner 私密）
-│       └── commits/        # COMMIT 承诺（该 owner 私密）
+│       ├── commits/        # COMMIT 承诺（该 owner 私密）
+│       └── profile.md      # 用户画像（profile 命令生成，零推断，可再生成）
 ├── .archive/               # 归档区（archive 命令移入）
 ├── index.json              # 反向索引 + TF 打分（见下方说明）
 ├── agents.json             # 智能体身份登记表（iam 写入，唯一性强制）
@@ -37,7 +38,7 @@
 
 - **agent ID 必须全局唯一**：`iam <id>` 写入 `agents.json`（记忆库根目录），唯一性强制——ID 已被其它主机 / 来源（含远端 token 登记）占用则拒绝，确认是同一智能体才 `--force`。
 - **当次身份声明**：`whoami` / MCP `agent_info` 读「当次声明身份」——本机 `YOTTA_AGENT_ID`（stdio 由 MCP 配置 `env` 注入，CLI 用 `--agent`/环境变量）；远端 `X-Agent-Id` 请求头（经 token 绑定校验）。不猜不默认。
-- **自我档案**：`iam` 自动写一条 PREF `subject=自我接入档案`（owner=自己），statement 为 `; ` 分隔的 key:value——`agent_id / host / memory_home / mcp_mode(stdio|http) / engine_url(仅远端) / token(仅远端；本机不存 token)`。
+- **自我档案**：`iam` 自动写一条 PREF `subject=自我接入档案`（owner=自己），statement 为 `; ` 分隔的 key:value——`agent_id / host / memory_home / mcp_mode(stdio|http) / engine_url(仅远端) / token(仅远端；本机不存 token)`，可含 `agent_name / user_name / relationship`（`iam --name/--user/--relationship` 写入）。
 - **私密记忆必须有 owner**：PREF / BOUND / COMMIT 写入时未声明身份（owner 空）直接拒绝（公共 FACT 不受影响），从机制上防止「抄别人的 ID」。
 
 ## 3. 文件格式
@@ -111,14 +112,39 @@ immutable: false
 | 命令 | 行为 |
 |---|---|
 | `init [--project]` | 创建目录结构；默认用户级，`--project` 建项目级 |
-| `remember <type> <subject> <statement> [--owner <id>]` | 写入；同 subject+statement 已存在则只更新 `updated`；`--owner` 标注归属 |
+| `remember <type> <subject> <statement> [--owner <id>] [--verify] [--no-hint]` | 写入；同 subject+statement 已存在则只更新 `updated`；`--owner` 标注归属；`--verify` 写后回读校验；`--no-hint` 关闭类型启发式提示 |
 | `recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 索引+TF 打分匹配；读取分区过滤；越界（读其它智能体私密）默认拒绝，需 grant / identity=user / `--unsafe` 授权；项目级优先；默认 50 条 |
 | `forget <文件>` | 删除（按路径或文件名）|
 | `archive [--days 180] [--threshold 0.4]` | 按盖棺分+年龄移入 `.archive/`（`vitality < threshold` 且超过 N 天）|
 | `reindex` | 全量扫描重建 `index.json`（手动改 .md 后校正）|
 | `export [--out f.json]` | 导出全部记忆为 JSON |
 | `import <f.json>` | 从 JSON 导入（幂等）|
+| `profile [--owner <id>]` | 用户画像聚合（零推断，写 `private/<owner>/profile.md`；跨 owner 默认拒绝）|
+| `context [--limit N] [--owner <id>]` | 开工上下文包（stdout：身份 + 画像 + 近期记忆 + 边界 + 承诺）|
+| `iam <id> [--name] [--user] [--relationship] [--force]` | 登记身份 + 自我档案（可选扩展显示名 / 用户 / 关系）|
 
+
+### profile（用户画像聚合，v0.6.0）
+
+- `profile [--owner <id>]`：扫描 `private/<owner>/{prefs,bounds,commits}`，按 type + subject + tags 归组，输出各条 statement 原文 + confidence + 最近访问，写 `private/<owner>/profile.md`。
+- 零推断：引擎只做结构化归组与原文呈现，不做语义推断；画像结论由承载 AI 依据 SKILL「记忆守则」内部形成。
+- 权限：profile.md 属私密区（按 owner）；跨 owner 生成默认拒绝（exit 3），需 `--owner user` / `--unsafe` / grant 授权。
+- profile.md 为生成物，可随时重新生成；不进入 index.json。
+
+### context（开工上下文包，v0.6.0）
+
+- `context [--limit N] [--owner <id>]`：stdout 输出开工上下文包（不落盘），五段：
+  1. 身份：agent_id / agent_name / user_name / relationship / host / memory_home（读自我档案）
+  2. 用户画像摘要：profile.md（不存在则自动生成一次或降级跳过）
+  3. 近期记忆：按 vitality（活跃度）排序前 N 条（默认 10），读取分区过滤
+  4. 边界提醒：BOUND 全列（可读范围内）
+  5. 承诺 / 锚点：COMMIT 全列（可读范围内）
+
+### remember / iam 扩展（v0.6.0）
+
+- `remember ... --verify`：写后自动回读校验（recall 命中刚写入条目），输出「已写回读 OK」。
+- `remember ... --no-hint`：关闭类型启发式提示。默认开启：statement 含主观/关系词（用户 / 偏好 / 喜欢 / 关系 / 称呼 等）且 type=FACT 时 stdout 提示「疑似用户偏好 / 关系，建议 PREF」，仅提示不拦截。
+- `iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]`：自我档案 PREF 扩展 `agent_name / user_name / relationship`；不带新参数行为与 0.4.2 一致。
 ### 去重与更新
 
 - remember 时若同 `type + subject + statement` 已存在，仅刷新 `updated`，不产生重复文件。
