@@ -1,4 +1,4 @@
-# yotta-memory 协议规范 v0.2.9
+# yotta-memory 协议规范 v0.5.0
 
 > 本文件定义 yotta-memory 记忆标准：存储位置、目录结构、文件格式、类型体系与 CLI 命令参考。
 > 目标：任何支持 Agent Skills 开放标准的智能体，装完即可读写同一份记忆。
@@ -17,17 +17,21 @@
 
 ```
 <root>/
-├── facts/       # FACT 事实（公共可共享）
-├── prefs/       # PREF 偏好（私密）
-├── bounds/      # BOUND 边界（私密）
-├── commits/     # COMMIT 承诺（私密）
-├── .archive/    # 归档区（archive 命令移入）
-├── index.json   # 反向索引 + TF 打分（见下方说明）
-├── agents.json   # 智能体身份登记表（iam 写入，唯一性强制）
-└── README.md    # 记忆库说明
+├── facts/                  # FACT 事实（公共可共享）
+├── private/                # 私密区（按 owner 物理分目录）
+│   └── <owner>/            # 每个智能体一个子目录
+│       ├── prefs/          # PREF 偏好（该 owner 私密）
+│       ├── bounds/         # BOUND 边界（该 owner 私密）
+│       └── commits/        # COMMIT 承诺（该 owner 私密）
+├── .archive/               # 归档区（archive 命令移入）
+├── index.json              # 反向索引 + TF 打分（见下方说明）
+├── agents.json             # 智能体身份登记表（iam 写入，唯一性强制）
+└── README.md               # 记忆库说明
 ```
 
 > **`index.json` 说明**：条目内的 `tokens` 字段是中文分词的「词频表」，供 recall 的 TF 打分使用，**不是**访问令牌。真正的访问令牌由 `token` 命令生成，存放在 `<root>/.server/tokens.json`，仅在局域网 `serve` 模式下用于请求鉴权。
+
+> **目录结构（v0.5.0）**：私密记忆按 `owner` 物理分目录存放于 `private/<owner>/<type>/`。旧版根下平铺的 `prefs/` `bounds/` `commits/` 会在 `reindex`（或首次 recall 建索引）时按 frontmatter `owner` 自动迁移到 `private/<owner>/<type>/`。**AI 读写红线**：记忆读写一律走 `yotta-memory` CLI / MCP 工具；禁止用 shell（`Get-ChildItem` / `Get-Content` / `cat` / `ls` / `type` 等）直接读改记忆库目录下的文件——否则会绕过 `scope/owner` 权限边界，读到其它智能体的私密内容。
 
 ## 2.5 智能体身份（谁在写 / 谁在读）
 
@@ -82,11 +86,13 @@ immutable: false
 | `COMMIT` | 承诺 / 约定 | 私密 |
 
 - 写入纪律：公共事实用 FACT；涉及用户偏好 / 边界 / 承诺一律用私密类型，避免公共区泄露。
-- 多智能体协作：每个智能体只读自己的私密区（如 `~/.yottamemory/<agent-id>/prefs/` 可自行约定），公共 FACT 共享。
+- 多智能体协作：每个智能体只读自己的私密区（如 `private/<owner>/<type>/` 可自行约定），公共 FACT 共享。
 
 ## 隔离说明
 
 > 隔离说明：scope: private 保证的是"AI 之间的语义隔离"——其他智能体在正常 recall 会话中不会被搜到、也不会主动去读本条私密记忆。但它不是文件系统级机密保护：在你自己的机器上，作为所有者你有权看到任何记忆文件，数据主权在你。本工具不承诺对抗同权限的本地进程主动读取。
+
+> **`--agent` 语义**：`--agent <其它agent>` 仅作身份声明 / 展示用（以该身份检索或模拟），并不授予跨智能体私密读取——读取其它智能体私密仍需满足 grant / identity=user / `--unsafe` 任一授权。
 
 读分区边界（recall 三态）：
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // yotta-memory（元忆）: 有权限边界的文件式智能体记忆 CLI（零依赖）
 // v0.4.0 新增：lan（Windows 计划任务开机自启 serve）/ init --dir（显式指定位置）/ serve --stdio（本地零进程模式）/ MCP 工具补 reindex/export/import
+// v0.5.0 新增：隐私硬隔离——私密物理分目录 private/<agent_id>/{prefs,bounds,commits}/ + 关闭 --agent 越权读 + 私密写跨智能体需 --unsafe + 禁 shell 直读写（文档红线）
 // v0.4.2 新增：iam/whoami 智能体身份自注册（agents.json 唯一性）+ 自我档案 PREF + 私密记忆须声明 owner
 'use strict';
 
@@ -11,9 +12,12 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.4.2';
+const VERSION = '0.5.0';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
+const PUBLIC_DIR = 'facts';
+const PRIVATE_DIR = 'private';
+const PRIVATE_LEAF = ['prefs', 'bounds', 'commits'];
 const ARCHIVE_DIR = '.archive';
 const INDEX_FILE = 'index.json';
 const PRIVATE_TYPES = ['PREF', 'BOUND', 'COMMIT'];
@@ -58,6 +62,14 @@ function typeDir(type) {
     process.exit(2);
   }
   return TYPE_DIRS[t];
+}
+function privateIdDir(root, id) { return path.join(root, PRIVATE_DIR, id); }
+// 布局：FACT -> <root>/facts；PREF/BOUND/COMMIT -> <root>/private/<owner>/<type>
+function typeSubdir(type, owner) {
+  const t = String(type).toUpperCase();
+  if (t === 'FACT') return PUBLIC_DIR;
+  const id = owner || '';
+  return path.join(PRIVATE_DIR, id, TYPE_DIRS[t]);
 }
 function defaultScope(type) {
   return PRIVATE_TYPES.indexOf(String(type).toUpperCase()) === -1 ? 'public' : 'private';
@@ -125,14 +137,12 @@ function frontmatterToText(meta, body) {
   return lines.join('\n') + String(b).replace(/^\n+/, '') + '\n';
 }
 function ensureInit(root) {
-  fs.mkdirSync(path.join(root, 'facts'), { recursive: true });
-  fs.mkdirSync(path.join(root, 'prefs'), { recursive: true });
-  fs.mkdirSync(path.join(root, 'bounds'), { recursive: true });
-  fs.mkdirSync(path.join(root, 'commits'), { recursive: true });
+  fs.mkdirSync(path.join(root, PUBLIC_DIR), { recursive: true });
+  fs.mkdirSync(path.join(root, PRIVATE_DIR), { recursive: true });
   fs.mkdirSync(path.join(root, ARCHIVE_DIR), { recursive: true });
   const readme = path.join(root, 'README.md');
   if (!fs.existsSync(readme)) {
-    fs.writeFileSync(readme, '# yotta-memory（元忆）记忆库\n\n有权限边界的文件式智能体记忆存储目录。结构：facts/ prefs/ bounds/ commits/ .archive/。\n', 'utf8');
+    fs.writeFileSync(readme, '# yotta-memory（元忆）记忆库\n\n有权限边界的文件式智能体记忆存储目录。结构：facts/（公共 FACT） private/<agent_id>/{prefs,bounds,commits}/（各智能体私密，物理隔离） .archive/（归档）。\n', 'utf8');
   }
 }
 function nextSeq(dir) {
@@ -162,17 +172,54 @@ function saveIndex(root, entries) {
   const clean = entries.map(function (e) { const c = Object.assign({}, e); delete c.meta; return c; });
   fs.writeFileSync(indexPath(root), JSON.stringify({ version: 2, updated: today(), entries: clean }, null, 2), 'utf8');
 }
-function buildIndex(root) {
-  const entries = [];
-  for (const t of Object.keys(TYPE_DIRS)) {
-    const dir = path.join(root, TYPE_DIRS[t]);
+function collectEntryFiles(root) {
+  const dirs = [];
+  const facts = path.join(root, PUBLIC_DIR);
+  if (fs.existsSync(facts)) dirs.push(path.join(root, PUBLIC_DIR));
+  const pdir = path.join(root, PRIVATE_DIR);
+  if (fs.existsSync(pdir)) {
+    for (const id of fs.readdirSync(pdir)) {
+      const idDir = path.join(pdir, id);
+      if (!fs.statSync(idDir).isDirectory()) continue;
+      for (const t of PRIVATE_LEAF) {
+        const d = path.join(idDir, t);
+        if (fs.existsSync(d)) dirs.push(d);
+      }
+    }
+  }
+  const out = [];
+  for (const dir of dirs) {
+    for (const f of fs.readdirSync(dir)) {
+      const fp = path.join(dir, f);
+      if (fs.statSync(fp).isFile()) out.push(fp);
+    }
+  }
+  return out;
+}
+// 迁移：把根下旧平铺 prefs|bounds|commits/*.md 按 frontmatter owner 迁入 private/<owner>/<type>/
+function migrateLayout(root) {
+  let moved = 0;
+  for (const t of PRIVATE_LEAF) {
+    const dir = path.join(root, t);
     if (!fs.existsSync(dir)) continue;
     for (const f of fs.readdirSync(dir)) {
       const fp = path.join(dir, f);
       if (!fs.statSync(fp).isFile()) continue;
-      entries.push(readEntry(fp, root));
+      const meta = parseFrontmatter(fs.readFileSync(fp, 'utf8')).meta;
+      const owner = meta.owner || '';
+      if (!owner) continue;
+      const target = path.join(root, PRIVATE_DIR, owner, t, f);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.renameSync(fp, target);
+      moved++;
     }
   }
+  return moved;
+}
+function buildIndex(root) {
+  migrateLayout(root);
+  const entries = [];
+  for (const fp of collectEntryFiles(root)) entries.push(readEntry(fp, root));
   saveIndex(root, entries);
   return entries;
 }
@@ -284,14 +331,15 @@ function hasGrant(userAgent, ownerAgent) {
   return false;
 }
 // 三态读取判定：'read' | 'denied'
-function classifyRead(entry, agent, ownerFilter, unsafe) {
+// selfAgent 为可信身份（env 声明 / 调用方上下文）；--agent 仅供授权与展示，不得授予跨智能体私密读取。
+function classifyRead(entry, agent, ownerFilter, unsafe, selfAgent) {
   if (entry.scope === 'public') return 'read';
   const owner = entry.owner || '';
   if (!owner) return 'read';
-  if (agent && owner === agent) return 'read';
-  if (ownerFilter && owner === ownerFilter && agent && ownerFilter === agent) return 'read';
-  if (unsafe || String(ownerFilter).toLowerCase() === 'user' || String(agent && '' + agent).toLowerCase() === 'user') return 'read';
-  if (hasGrant(agent, owner)) return 'read';
+  const own = selfAgent || agent;
+  if (own && owner === own) return 'read';
+  if (unsafe || String(ownerFilter).toLowerCase() === 'user' || String(agent || '').toLowerCase() === 'user') return 'read';
+  if (hasGrant(agent || selfAgent, owner)) return 'read';
   return 'denied';
 }
 
@@ -302,20 +350,26 @@ function initCore(opts) {
   return { error: false, text: '已初始化记忆库: ' + root };
 }
 function rememberCore(type, subject, statement, opts) {
+  opts = opts || {};
   const root = userRoot();
   ensureInit(root);
   const t = String(type).toUpperCase();
   if (!TYPE_DIRS[t]) return { error: true, text: '未知记忆类型: ' + type + '（可用: ' + TYPES.join(' / ') + '）' };
-  const dir = path.join(root, TYPE_DIRS[t]);
   const stmt = String(statement || '').trim();
   const subj = String(subject || '').trim();
   if (!stmt) return { error: true, text: 'statement 不能为空' };
   if (!subj) return { error: true, text: 'subject 不能为空' };
-  const owner = opts.owner || currentAgent();
+  const selfAgent = opts.selfAgent || currentAgent();
+  const owner = opts.owner || selfAgent;
   const scope = opts.scope || defaultScope(t);
   if (scope === 'private' && !owner) {
     return { error: true, text: '私密记忆必须声明归属智能体：请设环境变量 YOTTA_AGENT_ID（或 AGENT_ID）、传 --owner <id>，或先 yotta-memory whoami / iam 登记唯一身份。公共记忆(FACT)不受影响。' };
   }
+  if (scope === 'private' && owner && selfAgent && owner !== selfAgent && !opts.unsafe) {
+    return { error: true, text: '拒绝: 当前声明身份 ' + selfAgent + ' 不能写入其它智能体 ' + owner + ' 的私密区。请用 YOTTA_AGENT_ID 声明自己的身份，或加 --unsafe（用户显式授权）。' };
+  }
+  const dir = path.join(root, typeSubdir(t, owner));
+  fs.mkdirSync(dir, { recursive: true });
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
       const fp = path.join(dir, f);
@@ -350,17 +404,19 @@ function recallCore(query, opts) {
   const limit = opts.limit || 50;
   const onlyType = opts.type ? String(opts.type).toUpperCase() : null;
   const q = query ? String(query).toLowerCase() : '';
-  const agent = opts.agent || currentAgent();
+  const selfAgent = currentAgent();
+  const agent = opts.agent || selfAgent;
   const ownerFilter = opts.owner || '';
   const allSafe = !!opts.unsafe;
-  const explicitCross = !!opts.all || (!!ownerFilter && ownerFilter.toLowerCase() !== 'user' && ownerFilter !== agent);
+  const impersonation = !!(opts.agent && selfAgent && opts.agent !== selfAgent);
+  const explicitCross = !!opts.all || impersonation || (!!ownerFilter && ownerFilter.toLowerCase() !== 'user' && ownerFilter !== agent);
   const hits = [];
   let deniedCount = 0;
   for (const root of roots) {
     const entries = ensureIndex(root);
     for (const e of entries) {
       if (onlyType && e.type !== onlyType) continue;
-      const r = classifyRead(e, agent, ownerFilter, allSafe);
+      const r = classifyRead(e, agent, ownerFilter, allSafe, selfAgent);
       if (r === 'denied') { deniedCount++; continue; }
       let score = 0;
       if (q) {
@@ -408,38 +464,38 @@ function recallCore(query, opts) {
   }
   return { error: false, exitCode: 0, text: lines.join('\n') };
 }
-function forgetCore(fileRef) {
+function resolveMemoryFile(root, ref) {
+  const map = {};
+  for (const fp of collectEntryFiles(root)) {
+    const rel = path.relative(root, fp).replace(/\\/g, '/');
+    map[rel] = fp;
+    const base = path.basename(rel);
+    if (!map[base]) map[base] = fp;
+  }
+  if (map[ref]) return { fp: map[ref], rel: relOf(root, map[ref]) };
+  const base = path.basename(ref.replace(/\\/g, '/'));
+  if (map[base]) return { fp: map[base], rel: relOf(root, map[base]) };
+  return null;
+}
+function relOf(root, fp) { return path.relative(root, fp).replace(/\\/g, '/'); }
+function forgetCore(fileRef, opts) {
+  opts = opts || {};
+  const selfAgent = opts.selfAgent || currentAgent();
   const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
   const ref = String(fileRef || '').replace(/\\/g, '/');
-  const slash = ref.indexOf('/');
-  const dynTypeDir = slash === -1 ? '' : ref.slice(0, slash);
-  const dynBase = slash === -1 ? ref : ref.slice(slash + 1);
   let target = null, targetRoot = null, targetRel = null;
   for (const root of roots) {
-    if (dynTypeDir) {
-      const dir = path.join(root, dynTypeDir);
-      if (!fs.existsSync(dir)) continue;
-      const cand = path.join(dir, dynBase);
-      if (fs.existsSync(cand)) {
-        target = cand; targetRoot = root;
-        targetRel = dynTypeDir + '/' + path.basename(dynBase);
-        break;
-      }
-      continue;
-    }
-    for (const t of Object.keys(TYPE_DIRS)) {
-      const dir = path.join(root, TYPE_DIRS[t]);
-      if (!fs.existsSync(dir)) continue;
-      const cand = path.join(dir, dynBase);
-      if (fs.existsSync(cand)) {
-        target = cand; targetRoot = root;
-        targetRel = TYPE_DIRS[t] + '/' + path.basename(dynBase);
-        break;
-      }
-    }
-    if (target) break;
+    const found = resolveMemoryFile(root, ref);
+    if (found) { target = found.fp; targetRoot = root; targetRel = found.rel; break; }
   }
   if (!target) return { error: true, text: '未找到记忆文件: ' + fileRef };
+  const seg = targetRel.replace(/\\/g, '/').split('/');
+  if (seg[0] === 'private') {
+    const owner = seg[1] || '';
+    if (!opts.unsafe && (owner && (selfAgent ? owner !== selfAgent : true))) {
+      return { error: true, text: '拒绝: 不能删除其它智能体 ' + owner + ' 的私密记忆（当前身份 ' + (selfAgent || '未声明') + '）。请用 YOTTA_AGENT_ID 声明自己的身份，或加 --unsafe（用户显式授权）。' };
+    }
+  }
   fs.unlinkSync(target);
   if (targetRoot) removeIndexEntry(targetRoot, targetRel);
   return { error: false, text: '已删除: ' + target };
@@ -452,24 +508,20 @@ function archiveCore(opts) {
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   let moved = 0;
   const movedFiles = [];
-  for (const t of Object.keys(TYPE_DIRS)) {
-    const dir = path.join(root, TYPE_DIRS[t]);
-    if (!fs.existsSync(dir)) continue;
-    for (const f of fs.readdirSync(dir)) {
-      const fp = path.join(dir, f);
-      if (!fs.statSync(fp).isFile()) continue;
-      const meta = parseFrontmatter(fs.readFileSync(fp, 'utf8')).meta;
-      if (meta.immutable === 'true') continue;
-      if (!meta.created) continue;
-      const createdTs = new Date(meta.created).getTime();
-      if (isNaN(createdTs)) continue;
-      if (vitality(meta) < threshold && createdTs < cutoff) {
-        const destDir = path.join(root, ARCHIVE_DIR, TYPE_DIRS[t]);
-        fs.mkdirSync(destDir, { recursive: true });
-        fs.renameSync(fp, path.join(destDir, f));
-        movedFiles.push(TYPE_DIRS[t] + '/' + f);
-        moved++;
-      }
+  for (const fp of collectEntryFiles(root)) {
+    const meta = parseFrontmatter(fs.readFileSync(fp, 'utf8')).meta;
+    if (meta.immutable === 'true') continue;
+    if (!meta.created) continue;
+    const createdTs = new Date(meta.created).getTime();
+    if (isNaN(createdTs)) continue;
+    const t = (meta.type || 'FACT').toUpperCase();
+    if (vitality(meta) < threshold && createdTs < cutoff) {
+      const destDir = path.join(root, ARCHIVE_DIR, TYPE_DIRS[t]);
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.renameSync(fp, path.join(destDir, path.basename(fp)));
+      const rel = relOf(root, fp);
+      movedFiles.push(rel);
+      moved++;
     }
   }
   if (movedFiles.length) removeIndexEntries(root, movedFiles);
@@ -510,15 +562,9 @@ function cmdReindex() {
 }
 function collectAll(root) {
   const out = [];
-  for (const t of Object.keys(TYPE_DIRS)) {
-    const dir = path.join(root, TYPE_DIRS[t]);
-    if (!fs.existsSync(dir)) continue;
-    for (const f of fs.readdirSync(dir)) {
-      const fp = path.join(dir, f);
-      if (!fs.statSync(fp).isFile()) continue;
-      const e = readEntry(fp, root);
-      out.push({ file: e.file, meta: e.meta });
-    }
+  for (const fp of collectEntryFiles(root)) {
+    const e = readEntry(fp, root);
+    out.push({ file: e.file, meta: e.meta });
   }
   return out;
 }
@@ -546,7 +592,8 @@ function importCore(root, src) {
     const meta = item.meta || {};
     const t = (meta.type || 'FACT').toUpperCase();
     if (!TYPE_DIRS[t]) continue;
-    const dir = path.join(root, TYPE_DIRS[t]);
+    const dir = path.join(root, typeSubdir(t, meta.owner || ''));
+    fs.mkdirSync(dir, { recursive: true });
     let seq = nextSeq(dir);
     let file = path.join(dir, today() + '-' + seq + '.md');
     while (fs.existsSync(file)) { seq = String(parseInt(seq, 10) + 1).padStart(4, '0'); file = path.join(dir, today() + '-' + seq + '.md'); }
@@ -637,8 +684,9 @@ function saveAgents(root, data) {
   fs.writeFileSync(agentsPath(root), JSON.stringify(data, null, 2), 'utf8');
 }
 const SELF_PROFILE_SUBJECT = '自我接入档案';
+function selfPrefsDir(root, agentId) { return path.join(root, PRIVATE_DIR, agentId, 'prefs'); }
 function findSelfProfile(root, agentId) {
-  const dir = path.join(root, TYPE_DIRS.PREF);
+  const dir = selfPrefsDir(root, agentId);
   if (!fs.existsSync(dir)) return '';
   for (const f of fs.readdirSync(dir)) {
     const fp = path.join(dir, f);
@@ -659,7 +707,8 @@ function selfProfileBody(agentId, root, extra) {
   return lines.join('; ');
 }
 function writeSelfProfile(root, agentId, extra) {
-  const dir = path.join(root, TYPE_DIRS.PREF);
+  const dir = selfPrefsDir(root, agentId);
+  fs.mkdirSync(dir, { recursive: true });
   const seq = nextSeq(dir);
   const file = path.join(dir, today() + '-' + seq + '.md');
   const body = selfProfileBody(agentId, root, extra || {});
@@ -758,7 +807,9 @@ function callTool(name, args, ctx) {
   const agent = ctx.agent || '';
   try {
     if (name === 'remember') {
-      const r = rememberCore(String(args.type || ''), String(args.subject || ''), String(args.statement || ''), { owner: args.owner || agent });
+      const ownerArg = args.owner ? String(args.owner) : '';
+      if (ownerArg && ownerArg !== agent) return { text: '拒绝: MCP 写入的 owner 必须等于当前智能体身份（' + agent + '），不能写其它智能体私密区。', error: true };
+      const r = rememberCore(String(args.type || ''), String(args.subject || ''), String(args.statement || ''), { owner: agent, selfAgent: agent });
       return { text: r.text, error: r.error };
     }
     if (name === 'recall' || name === 'search') {
@@ -766,7 +817,7 @@ function callTool(name, args, ctx) {
       return { text: r.text, error: r.error };
     }
     if (name === 'forget') {
-      const r = forgetCore(String(args.file || ''));
+      const r = forgetCore(String(args.file || ''), { selfAgent: agent });
       return { text: r.text, error: r.error };
     }
     if (name === 'archive') {
@@ -977,7 +1028,7 @@ function usage() {
     '  yotta-memory config set memory_home <目录>  持久记住记忆库位置',
     '  yotta-memory config get                   查看当前配置与生效位置',
     '  yotta-memory remember <type> <subject> <statement> [--owner <id>]   写入记忆',
-    '  yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]  检索（索引+TF，读取分区）',
+    '  yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]  检索（索引+TF，读取分区；--agent 仅表示“以该身份检索/模拟”，跨智能体私密读取需 --unsafe / 授权）',
     '  yotta-memory forget <文件或文件名>         删除一条记忆',
     '  yotta-memory archive [--days 180] [--threshold 0.4]  归档（盖棺分+年龄）',
     '  yotta-memory reindex                       重建索引',
@@ -994,6 +1045,7 @@ function usage() {
     '',
     '类型: FACT(公共共享) / PREF(偏好) / BOUND(边界) / COMMIT(承诺)',
     '环境变量: YOTTA_MEMORY_HOME 临时覆盖用户级位置; YOTTA_AGENT_ID/AGENT_ID 当前 agent 标识（本机声明身份用；私密记忆必须有 owner）',
+    '隔离: 公共 FACT 在 facts/；私密 PREF/BOUND/COMMIT 物理分目录 private/<agent_id>/<type>/，禁止 shell 直读写记忆库，一律走本命令',
     '远端接入: MCP url http://<主机IP>:8787/mcp；请求头 Authorization: Bearer <token> + X-Agent-Id: <id>',
     '',
   ].join('\n'));
@@ -1094,4 +1146,7 @@ module.exports = {
   saveConfig: saveConfig,
   loadTokens: loadTokens,
   saveTokens: saveTokens,
+  collectEntryFiles: collectEntryFiles,
+  migrateLayout: migrateLayout,
+  typeSubdir: typeSubdir,
 };

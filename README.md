@@ -22,7 +22,7 @@
 多数记忆方案把「记住」做成了黑盒：数据进了数据库或云端，用户既看不到内容、也难以审计，更控制不了「哪个智能体能看到什么」。元忆换了一条路：
 
 - **记忆就是文件**：每条记忆是一个带 YAML frontmatter 的 Markdown 文件，放在用户自己的目录里。用任何编辑器都能查看、修改、删除，用 git 就能做版本管理与回滚。
-- **隔离由机制保证**：FACT 进公共区共享，PREF / BOUND / COMMIT 进私密区、按 agent 隔离。读取按 scope/owner 分区过滤，越界内容由 CLI 拦截、永不返回（默认静默跳过；显式跨读无授权才报错拒绝）——不依赖智能体的「自觉」。
+- **隔离由机制保证**：FACT 进公共区共享，PREF / BOUND / COMMIT 进私密区、按 owner 物理分目录隔离（`private/<owner>/<type>/`）。读取按 scope/owner 分区过滤，越界内容由 CLI 拦截、永不返回（默认静默跳过；显式跨读无授权才报错拒绝）；读写一律走 CLI / MCP，禁止 shell 直读写库文件——不依赖智能体的「自觉」。
 - **零依赖、即装即用**：无守护进程、无数据库、无向量库，只需要 Node.js。安装即用，数据留在本机。
 - **便携记忆盘**：记忆库本身就是记忆引擎——装在硬盘或主机上随盘走，局域网内其它主机上的智能体可远程读写；本地零进程模式与局域网常驻模式可并存，插上硬盘即恢复全部记忆。
 
@@ -31,7 +31,7 @@
 | 优势 | 说明 |
 |---|---|
 | **数据主权在用户** | 明文文件存储，可读、可改、可审计；git 可版本化，回滚 / 团队同步都走标准工具 |
-| **真正的权限边界** | 公共 / 私密分区 + scope/owner 过滤 + 授权机制（grant / identity=user / `--unsafe`），越界内容由 CLI 过滤、永不返回（默认静默；显式跨读 `--all`/`--owner <其它>` 无授权时 exit 3），不靠 AI 自律 |
+| **真正的权限边界** | 公共 / 私密分区 + 按 owner 物理分目录（`private/<owner>/<type>/`）+ scope/owner 过滤 + 授权机制（grant / identity=user / `--unsafe`），越界内容由 CLI 过滤、永不返回（默认静默；显式跨读 `--all`/`--owner <其它>` 无授权时 exit 3）；`--agent <其它>` 仅作身份声明、不授予跨读。读写走 CLI / MCP，禁 shell 直读写，不靠 AI 自律 |
 | **跨智能体标准** | 符合 Agent Skills 开放标准（agentskills.io）；装一次，Claude Code / Codex / Cursor / OpenCode 等 78+ 智能体可共用同一份记忆 |
 | **轻量零依赖** | 无 daemon / 无数据库 / 无向量库；Node.js 自带即跑，任何机器可部署 |
 | **双级存储** | 用户级 `~/.yottamemory/`（跨项目）+ 项目级 `.yottamemory/`（随项目共享 / 交接）|
@@ -61,12 +61,15 @@
 ### 权限与隔离
 
 - **读取三态**：公共 FACT 始终可读；自身私密始终可读；其它 agent 私密默认拒绝（不返回内容）。
+- **物理隔离目录**：私密记忆按 owner 存放于 `private/<owner>/<type>/`，不同智能体的私密文件物理分离；旧版根下平铺的 `prefs/` `bounds/` `commits/` 在 `reindex` 时自动迁移。
 - **三种授权入口（满足任一即可读他人私密）**：
   1. `grants.json` 显式授权：`{"<userAgent>": ["<ownerAgent>", ...]}`；
   2. identity=user：`--agent user` / `--owner user` / 环境变量 `YOTTA_AGENT_ID=user`；
   3. 显式 `--unsafe`（用户显式授权）。
 - **默认静默、显式跨读才报错**：默认 recall 遇其它 agent 私密静默跳过（不泄露「存在 N 条私密不可见」）；仅当显式跨智能体读取（`--all` / `--owner <其它>`）且无授权命中时才报错 / 警告。
+- **`--agent <其它>` 不越界**：`--agent <其它agent>` 仅作身份声明 / 展示用，不授予读取他人私密；读其它智能体私密仍需 grant / identity=user / `--unsafe`。
 - **隔离定位**：scope: private 保证的是 AI 之间的语义隔离（正常 recall 不会被搜到、不会主动去读），不是文件系统级机密保护——数据主权在用户，作为所有者有权看到任何记忆文件。
+- **禁止 shell 直读写**：记忆读写一律走 CLI / MCP 工具；用 shell（`Get-ChildItem` / `Get-Content` / `cat` / `ls` / `type` 等）直接读改库文件会绕过 scope/owner 权限边界，读到其它智能体私密内容。
 
 ### 智能体身份（唯一 ID + 自我档案）
 
@@ -170,7 +173,7 @@ npm i -g @yottameta/yotta-memory
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库（默认用户级 `~/.yottamemory/`；--dir 显式指定位置）|
 | `yotta-memory remember <type> <subject> <statement> [--owner <id>]` | 写入记忆（同 subject+statement 自动更新；--owner 标注归属）|
-| `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索记忆（索引+TF 打分，读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；项目级优先）|
+| `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索记忆（索引+TF 打分，读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 仅作身份声明、不授予跨读；项目级优先）|
 | `yotta-memory forget <文件>` | 删除一条记忆（按类型目录路径或文件名）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（盖棺分+年龄，immutable 除外）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|

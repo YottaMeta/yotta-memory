@@ -76,7 +76,7 @@ yotta-memory config get                              # 查看记忆库位置
 
 ### 手动添加 / 编辑记忆
 
-记忆就是文件：直接在 `facts/` `prefs/` `bounds/` `commits/` 目录下新建或修改 `.md` 文件即可，frontmatter 至少包含 `type` / `subject` / `statement`：
+记忆就是文件：读写一律走 `yotta-memory` CLI / MCP 工具，**请勿用 shell（`Get-ChildItem` / `Get-Content` / `cat` / `ls` / `type` 等）直接读改记忆库目录下的文件**——那会绕过 scope/owner 权限边界，可能读到其它智能体的私密内容。确需手改时，请把文件放对分类目录：公共事实放 `facts/`；私密的偏好 / 边界 / 承诺放 `private/<owner>/<type>/`（`<owner>` 用你登记的智能体 ID），frontmatter 至少包含 `type` / `subject` / `statement`：
 
 > 说明：`index.json` 是引擎自动维护的检索索引，其 `tokens` 字段是中文分词的词频表（供 TF 打分），**不是**访问令牌。手动改过 `.md` 后可用 `yotta-memory reindex` 校正索引，无需手动编辑 `index.json`。
 
@@ -103,7 +103,7 @@ statement: 本周完成发布
 
 ```bash
 yotta-memory config set memory_home /srv/yotta-memory   # 改成你的实际目录
-yotta-memory init --dir /srv/yotta-memory               # 新库：初始化（自动建 facts/prefs/bounds/commits/.archive）
+yotta-memory init --dir /srv/yotta-memory               # 新库：初始化（自动建 facts/private/.archive）
 ```
 
 如果目标目录**已经是记忆库**（里面有 `facts/` 等子目录或 `index.json`，例如从旧机复制或 git 克隆来的），直接 `config set memory_home <目录>` 接入即可，**不要重复 init**。
@@ -156,7 +156,7 @@ yotta-memory token new --agent 我的智能体ID
 
 **第 6 步：备份与迁移**
 
-- 备份 = 复制整个记忆目录（`facts/` `prefs/` `bounds/` `commits/` `.archive/` + `index.json` + `agents.json` + `.server/`），复制到哪、哪就是记忆库；迁移同理，整个目录拷走即可。
+- 备份 = 复制整个记忆目录（`facts/` `private/` `.archive/` + `index.json` + `agents.json` + `.server/`），复制到哪、哪就是记忆库；迁移同理，整个目录拷走即可。
 - `export` / `import` 是把记忆导出成单个 JSON 或从 JSON 导入，适合跨工具交换或归档，不是日常备份的必需步骤。
 
 ## 5. 智能体接入篇（本机 / 局域网其它主机）
@@ -192,7 +192,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 
 **本机智能体装好技能后如何获取记忆存放位置？** 按优先级：`YOTTA_MEMORY_HOME` 环境变量 > `config set memory_home` 持久化的 `~/.yottamemory/config.json` > 默认 `~/.yottamemory`。AI 开工执行 `yotta-memory config get` 查看当前生效位置；记忆库移动后执行一次 `config set memory_home <新目录>` 即可。
 
-**给本机智能体设置唯一身份（强制）**：私密记忆（PREF / BOUND / COMMIT）按 owner 隔离，owner 取当前智能体的 agent ID。流程如下：
+**给本机智能体设置唯一身份（强制）**：私密记忆（PREF / BOUND / COMMIT）按 owner 物理分目录隔离（存于 `private/<owner>/<type>/`），owner 取当前智能体的 agent ID。流程如下：
 
 1. 开工先 `yotta-memory whoami` 确认「我是谁」。
 2. 未登记 → 向用户确认一个**全局唯一** ID（建议 `<主机名>-<角色>`，别用 `dashu` / `codex` 这类易撞名），执行 `yotta-memory iam <id>`：引擎**强制唯一性**（被其它主机 / 来源占用会拒绝），并自动落一条「自我接入档案」PREF（owner=自己）。
@@ -232,7 +232,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库 |
 | `yotta-memory remember <类型> <主题> <内容> [--owner <id>]` | 写入记忆 |
-| `yotta-memory recall [关键词] [--type T] [--limit N]` | 检索记忆 |
+| `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索记忆（读取分区过滤；`--agent <其它>` 仅作身份声明、不授予跨读；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`）|
 | `yotta-memory forget <文件>` | 删除一条记忆 |
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆 |
 | `yotta-memory reindex` | 重建索引 |
@@ -244,7 +244,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 | `yotta-memory serve [--port 8787] [--stdio] [--no-auth]` | 启动记忆引擎（--no-auth 关闭鉴权，仅限可信内网）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理 |
 
-类型：`FACT`（事实，共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺），后三类按智能体隔离。
+类型：`FACT`（事实，共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺），后三类按智能体物理分目录隔离（`private/<owner>/<type>/`）。
 
 ## 7. 故障排查
 
@@ -273,6 +273,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 
 - token 等同密码：只给需要接入的智能体，别外传。
 - 元忆不做加密：PREF / BOUND / COMMIT 私密记忆的隔离是「权限边界」机制（谁该读由 scope/owner 决定），属于纪律层保护，不是机密数据保护层。
+- 记忆读写一律走 CLI / MCP；禁止用 shell（`Get-ChildItem` / `cat` / `ls` / `type` 等）直接读改记忆库目录下的文件——否则会绕过 scope/owner 权限边界。
 - 管理动作（init / config / token / lan / serve）不通过 MCP 暴露，远程只能读写记忆，不能改配置、不能管 token。
 - `--no-auth` 会关闭鉴权，仅限可信内网使用。
 - 数据主权在用户：所有数据都是本地明文文件，随时可看、可改、可删。
