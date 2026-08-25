@@ -12,7 +12,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.5.0';
+const VERSION = '0.5.2';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -964,7 +964,9 @@ const LAN_TASK_NAME = 'YottaMemoryServe';
 function lanTaskRunCmd(opts) {
   const host = opts.host || '0.0.0.0';
   const port = opts.port || 8787;
-  return '"' + process.execPath + '" "' + __filename + '" serve --host ' + host + ' --port ' + port;
+  // schtasks /tr 不接受多余内嵌引号：路径无空格不加引号，含空格/引号用 \" 转义（0.5.2 修复）
+  const q = (p) => /[\s"]/.test(p) ? '\\"' + p.replace(/"/g, '\\"') + '\\"' : p;
+  return q(process.execPath) + ' ' + q(__filename) + ' serve --host ' + host + ' --port ' + port;
 }
 function cmdLanEnable(opts) {
   if (process.platform !== 'win32') {
