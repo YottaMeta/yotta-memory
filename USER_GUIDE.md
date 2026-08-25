@@ -7,7 +7,7 @@
 1. 这是什么
 2. 安装
 3. 本机单机使用
-4. 便携记忆盘 · 记忆盘主机篇
+4. 便携记忆盘 · 记忆引擎主机篇（Linux / Windows）
 5. 便携记忆盘 · 智能体接入篇
 6. CLI 命令速查
 7. 故障排查
@@ -44,26 +44,45 @@ yotta-memory config get                              # 查看记忆库位置
 - 想换记忆位置：`yotta-memory config set memory_home <目录>`，之后所有命令自动用新位置。
 - 项目级记忆：在项目目录里 `yotta-memory init --project`，该项目的智能体优先读项目级记忆。
 
-## 4. 便携记忆盘 · 记忆盘主机篇
+## 4. 便携记忆盘 · 记忆引擎主机篇
 
-场景：记忆放在一台物理机（或一块硬盘）上，局域网内其它主机上的 AI 智能体远程接入。物理机只需装工具，不需要装任何 AI 智能体。
+场景：记忆放在一台主机上（Linux / Windows 均可），本机直接 CLI 读写；局域网内其它主机上的 AI 智能体经 MCP 远程接入。引擎主机只需装 CLI，不需要装任何 AI 智能体。
 
 **第 1 步：安装 CLI**（见第 2 节）。
 
 **第 2 步：指定记忆位置并初始化**
 
 ```bash
-yotta-memory config set memory_home D:\memory         # 改成你的实际目录
-yotta-memory init --dir D:\memory                     # 初始化（自动建 facts/prefs/bounds/commits/.archive）
+yotta-memory config set memory_home /srv/yotta-memory   # 改成你的实际目录
+yotta-memory init --dir /srv/yotta-memory               # 初始化（自动建 facts/prefs/bounds/commits/.archive）
 ```
 
 **第 3 步：注册开机自启（可选，推荐）**
 
 ```bash
-yotta-memory lan enable              # 登录后自动启动记忆引擎（默认）
-yotta-memory lan enable --onstart    # 开机即启（需要管理员权限）
-yotta-memory lan status              # 查看自启状态
-yotta-memory lan disable             # 取消自启
+# Windows：内置命令（计划任务）
+yotta-memory lan enable              # 登录后自动启动（默认）
+yotta-memory lan enable --onstart    # 开机即启（需管理员）
+yotta-memory lan status              # 查看状态
+yotta-memory lan disable             # 取消
+
+# Linux：用 systemd 开机自启（lan 命令当前仅支持 Windows）
+# 先查 yotta-memory 实际路径：which yotta-memory（npm 全局默认 /usr/local/bin/yotta-memory）
+sudo tee /etc/systemd/system/yotta-memory.service > /dev/null <<'EOF'
+[Unit]
+Description=yotta-memory memory engine
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/yotta-memory serve --host 0.0.0.0 --port 8787
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now yotta-memory
+systemctl status yotta-memory        # 查看状态
 ```
 
 **第 4 步：为每个智能体生成访问 token**
@@ -80,13 +99,13 @@ yotta-memory token new --agent 我的智能体ID
 - 该智能体的 token：`ytm_...`
 - 智能体 ID（对应 X-Agent-Id 请求头）
 
-查本机 IP：运行 `ipconfig`，找「IPv4 地址」那一行。首次监听时 Windows 防火墙会询问是否放行，请选择允许，否则局域网其它主机连不进来。
+查本机 IP：Linux 运行 `hostname -I`（或 `ip a`）；Windows 运行 `ipconfig` 找「IPv4 地址」。防火墙：Linux 若启用了 ufw，执行 `sudo ufw allow 8787/tcp`；Windows 首次监听时允许放行。否则局域网其它主机连不进来。
 
 ## 5. 便携记忆盘 · 智能体接入篇
 
-场景：你的智能体需要读写远程记忆盘上的记忆。
+场景：你的智能体在其它主机上，需要读写远程记忆引擎上的记忆。若智能体就在引擎主机本机，直接用 CLI（`yotta-memory recall` 等），不需要 MCP、不需要 token。
 
-**第 1 步：向记忆盘主机获取**：引擎 IP、端口（默认 8787）、本智能体的 token、智能体 ID。
+**第 1 步：向记忆引擎主机获取**：引擎 IP、端口（默认 8787）、本智能体的 token、智能体 ID。
 
 **第 2 步：配置 MCP**（可以让 AI 按 `SKILL.md` 引导自动完成；也可以手动在你的智能体 MCP 配置里加这段）：
 
@@ -130,10 +149,10 @@ yotta-memory token new --agent 我的智能体ID
 
 **远程连不上时，按顺序检查：**
 
-1. 引擎在运行吗？记忆盘主机执行 `yotta-memory lan status`（自启任务存在）或 `yotta-memory --version`。
-2. IP 对吗？记忆盘主机执行 `ipconfig` 确认 IPv4 地址。
+1. 引擎在运行吗？Windows：`yotta-memory lan status`；Linux（systemd 自启时）：`systemctl status yotta-memory`，或 `ps aux | grep yotta-memory`；也可直接 `yotta-memory --version`。
+2. IP 对吗？引擎主机执行 `hostname -I`（Linux）或 `ipconfig`（Windows）确认。
 3. 端口对吗？默认 8787，两端要一致。
-4. 防火墙放行了吗？首次监听需允许 0.0.0.0 入站。
+4. 防火墙放行了吗？Linux：`sudo ufw status`，未放行则 `sudo ufw allow 8787/tcp`；Windows：允许首次监听的入站请求。
 5. token 有效吗？记忆盘主机执行 `yotta-memory token list` 看该智能体是否登记；无效就 `token new --agent <id>` 重新生成。
 6. 网络通吗？任意一台主机执行 `curl http://<引擎IP>:8787/mcp`：
    - 返回 401：服务在运行，是鉴权问题（token / 请求头不对）。
