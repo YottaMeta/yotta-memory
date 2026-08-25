@@ -20,9 +20,18 @@
 - 零依赖：只需要 Node.js，没有数据库、没有常驻服务（除非你开启便携记忆盘模式）。
 - 记忆即文件：数据主权在你手里。
 
-## 2. 安装
+**典型使用场景：**
 
-任选一种方式：
+- **跨会话续接**：AI 开工 `recall` 恢复上次上下文，不丢记忆。
+- **多智能体共享**：FACT 进公共区共享，PREF / BOUND / COMMIT 各自私密隔离。
+- **交接与团队协作**：项目级 `.yottamemory` 随仓库走，交接即恢复。
+- **便携记忆盘**：记忆装在固定主机上，本机与局域网其它主机共享同一份记忆（见第 4 / 5 篇）。
+
+## 2. 安装（CLI + 技能）
+
+使用元忆需要两部分：**CLI**（命令行工具，负责读写记忆）与**技能**（SKILL.md，负责教 AI 智能体怎么用）。先装 CLI，再把技能装进要用的智能体。
+
+**CLI：任选一种方式**
 
 | 方式 | 命令 | 适用 |
 |---|---|---|
@@ -31,6 +40,20 @@
 | install.sh | `bash <(curl -s https://raw.githubusercontent.com/YottaMeta/yotta-memory/main/install.sh)` | 离线 / 无 npm |
 
 安装后验证：`yotta-memory --version` 能输出版本号即成功。
+
+**技能（SKILL.md）：装进要用的 AI 智能体**
+
+| 方式 | 命令 | 适用 |
+|---|---|---|
+| npx skills（生态标准入口） | `npx skills add YottaMeta/yotta-memory` | 自动检测已装智能体 |
+| 安装器（npm 全局时） | `yotta-memory-install -g` / `yotta-memory-install --agent codex` | 装进所有 / 指定智能体 |
+| 手动 | 把 `SKILL.md` 复制到智能体的 skills 目录 | 离线 |
+
+> CLI 与技能分工不同：CLI 让命令行能读写记忆；技能让 AI 知道「开工 recall 恢复上下文、重要信息 remember 落盘、收工归档」。只装 CLI 不装技能，AI 不会自动使用这套工作流。
+
+**更新：** `npm i -g @yottameta/yotta-memory@latest` 升级 CLI，再把 SKILL.md 重新装进智能体（重复执行上面的技能安装命令即可）。
+
+**卸载：** `npm rm -g @yottameta/yotta-memory`，并从智能体的 skills 目录删除 SKILL.md。
 
 ## 3. 本机单机使用
 
@@ -44,18 +67,44 @@ yotta-memory config get                              # 查看记忆库位置
 - 想换记忆位置：`yotta-memory config set memory_home <目录>`，之后所有命令自动用新位置。
 - 项目级记忆：在项目目录里 `yotta-memory init --project`，该项目的智能体优先读项目级记忆。
 
+### 记忆库位置：本机智能体如何找到记忆
+
+位置解析优先级：`YOTTA_MEMORY_HOME`（环境变量，临时覆盖）> `config.json#memory_home`（`config set memory_home` 持久记住）> 默认 `~/.yottamemory`。
+
+- 本机智能体装好技能后，AI 开工执行 `yotta-memory config get` 即可看到当前生效位置，`recall` 会自动读对位置。
+- 记忆库换位置后，执行一次 `yotta-memory config set memory_home <新目录>` 即可，无需改技能。
+
+### 手动添加 / 编辑记忆
+
+记忆就是文件：直接在 `facts/` `prefs/` `bounds/` `commits/` 目录下新建或修改 `.md` 文件即可，frontmatter 至少包含 `type` / `subject` / `statement`：
+
+```markdown
+---
+type: FACT
+subject: 项目
+statement: 本周完成发布
+---
+本周完成发布
+```
+
+手动改过文件后运行 `yotta-memory reindex` 重建索引，`recall` 才能按索引检索到。整个记忆目录可以用 git 做版本管理与回滚。
+
 ## 4. 便携记忆盘 · 记忆引擎主机篇
 
 场景：记忆放在一台主机上（Linux / Windows 均可），本机直接 CLI 读写；局域网内其它主机上的 AI 智能体经 MCP 远程接入。引擎主机只需装 CLI，不需要装任何 AI 智能体。
 
+**本机与局域网可同时用同一个记忆库**：引擎 `serve` 运行期间，本机智能体照常用 CLI（或 stdio MCP）读写（不经网络、不需要 token），局域网其它主机的智能体同时经 MCP + token 接入——两条通道并存、互不干扰。
+
 **第 1 步：安装 CLI**（见第 2 节）。
 
-**第 2 步：指定记忆位置并初始化**
+**第 2 步：指定记忆位置并初始化（或接入现有记忆库）**
 
 ```bash
 yotta-memory config set memory_home /srv/yotta-memory   # 改成你的实际目录
-yotta-memory init --dir /srv/yotta-memory               # 初始化（自动建 facts/prefs/bounds/commits/.archive）
+yotta-memory init --dir /srv/yotta-memory               # 新库：初始化（自动建 facts/prefs/bounds/commits/.archive）
 ```
+
+如果目标目录**已经是记忆库**（里面有 `facts/` 等子目录或 `index.json`，例如从旧机复制或 git 克隆来的），直接 `config set memory_home <目录>` 接入即可，**不要重复 init**。
 
 **第 3 步：注册开机自启（可选，推荐）**
 
@@ -93,6 +142,8 @@ yotta-memory token new --agent 我的智能体ID
 
 命令会打印一次 `ytm_...`，请妥善保管（它就是访问凭证）。多个智能体就重复执行、用不同 ID。**本机上的 AI 智能体不需要 token**（见第 5 篇）。
 
+> token 丢失或要更换：重新执行 `token new --agent <id>` 会生成新 token 并覆盖旧的，旧 token 立即失效；`token list` 可查看已登记哪些智能体。
+
 **第 5 步：把连接信息交给远程智能体的用户**
 
 - 引擎地址：`http://<本机IP>:8787/mcp`
@@ -100,6 +151,11 @@ yotta-memory token new --agent 我的智能体ID
 - 智能体 ID（对应 X-Agent-Id 请求头）
 
 查本机 IP：Linux 运行 `hostname -I`（或 `ip a`）；Windows 运行 `ipconfig` 找「IPv4 地址」。防火墙：Linux 若启用了 ufw，执行 `sudo ufw allow 8787/tcp`；Windows 首次监听时允许放行。否则局域网其它主机连不进来。
+
+**第 6 步：备份与迁移**
+
+- 备份 = 复制整个记忆目录（`facts/` `prefs/` `bounds/` `commits/` `.archive/` + `index.json` + `.server/`），复制到哪、哪就是记忆库；迁移同理，整个目录拷走即可。
+- `export` / `import` 是把记忆导出成单个 JSON 或从 JSON 导入，适合跨工具交换或归档，不是日常备份的必需步骤。
 
 ## 5. 智能体接入篇（本机 / 局域网其它主机）
 
@@ -130,6 +186,10 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 ```
 
 本机接入不需要 token，也不需要启动 HTTP 服务。
+
+**本机智能体装好技能后如何获取记忆存放位置？** 按优先级：`YOTTA_MEMORY_HOME` 环境变量 > `config set memory_home` 持久化的 `~/.yottamemory/config.json` > 默认 `~/.yottamemory`。AI 开工执行 `yotta-memory config get` 查看当前生效位置；记忆库移动后执行一次 `config set memory_home <新目录>` 即可。
+
+**给本机智能体设置身份（重要）**：私密记忆（PREF / BOUND / COMMIT）按 owner 隔离，owner 取当前智能体的 agent ID。请在本机智能体的运行环境里设置 `YOTTA_AGENT_ID=<智能体ID>`（或 `AGENT_ID`），写入的私密记忆就归属该 ID、其它智能体默认读不到。**不设则 owner 为空，私密隔离会退化**（所有无主私密都可读），多智能体共用时务必设置。
 
 ### 5.2 局域网其它主机的 AI 智能体
 
@@ -168,7 +228,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |
 | `yotta-memory config set memory_home <目录>` / `config get` | 记忆库位置 |
 | `yotta-memory token new --agent <id>` / `token list` / `token revoke --agent <id>` | 访问 token |
-| `yotta-memory serve [--port 8787] [--stdio]` | 启动记忆引擎 |
+| `yotta-memory serve [--port 8787] [--stdio] [--no-auth]` | 启动记忆引擎（--no-auth 关闭鉴权，仅限可信内网）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理 |
 
 类型：`FACT`（事实，共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺），后三类按智能体隔离。
@@ -188,6 +248,12 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 
 **`lan enable` 失败提示 Access denied：** 需要管理员权限，请用管理员终端重新执行；`--onstart` 模式必须管理员。
 
+**启动引擎报端口被占用（EADDRINUSE）：** 用 `--port <其它端口>` 换端口启动，两端保持一致；或先查占用：Linux `ss -tlnp | grep 8787`，Windows `netstat -ano | findstr 8787`。
+
+**recall 没有结果：** 关键词太细或确实没有这条记忆；先 `recall`（不带关键词）看库里的全部记忆核对。
+
+**systemd 自启的引擎看日志：** `journalctl -u yotta-memory -n 50`。
+
 **记错位置了？** `yotta-memory config get` 查看当前生效位置；`config set memory_home <正确目录>` 改正。
 
 ## 8. 安全与边界
@@ -195,4 +261,13 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 - token 等同密码：只给需要接入的智能体，别外传。
 - 元忆不做加密：PREF / BOUND / COMMIT 私密记忆的隔离是「权限边界」机制（谁该读由 scope/owner 决定），属于纪律层保护，不是机密数据保护层。
 - 管理动作（init / config / token / lan / serve）不通过 MCP 暴露，远程只能读写记忆，不能改配置、不能管 token。
+- `--no-auth` 会关闭鉴权，仅限可信内网使用。
 - 数据主权在用户：所有数据都是本地明文文件，随时可看、可改、可删。
+
+**确实需要读取其它智能体的私密记忆时（三种授权方式，满足任一即可）：**
+
+1. 显式授权 `grants.json`：在记忆库根目录写 `{"<你的agentID>": ["<对方agentID>"]}`；
+2. identity=user：以 `--agent user` / `--owner user` / 环境变量 `YOTTA_AGENT_ID=user` 读取；
+3. 显式放行 `--unsafe`：用户明确同意时使用。
+
+**协作纪律**：FACT 写入公共区共享；PREF / BOUND / COMMIT 只写自己的私密区；不主动读取其它智能体的私密记忆。
