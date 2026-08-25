@@ -7,6 +7,7 @@
 // v0.5.4 新增：lan enable 在非管理员（schtasks Access denied）时自动降级为用户级 Startup 静默自启（VBS sh.Run 窗口0 + autostart.cmd，node 路径 process.execPath 自动探测）；lan disable/status 同时管理计划任务与 Startup 双机制
 // v0.6.0 新增：灵魂盘核心——profile（用户画像聚合，零推断）/ context（开工上下文包）/ iam 扩展（--name/--user/--relationship）/ remember --verify（写后回读）与 --no-hint（关闭类型启发式提示）+ SKILL「记忆守则」
 // v0.6.1 新增：灵魂盘机制精髓补齐——context --budget（token 预算，近记忆按剩余预算放行）/ context 内嵌「多智能体接入铁律」段 / remember --source/--weight（来源 + 重要性权重，去重 weight 取 max）/ 近期记忆排序融合 importance（confidence×recency+updated+weight+immutable）
+// v0.6.2 修复：remember --verify 写后回读改为直查索引 + 权限判定 + 召回匹配性（不再依赖 recall top-N 排序，消除泛化 subject 下偶发误报「回读未命中」）
 'use strict';
 
 const fs = require('fs');
@@ -16,7 +17,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.6.1';
+const VERSION = '0.6.2';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -366,6 +367,24 @@ function classifyRead(entry, agent, ownerFilter, unsafe, selfAgent) {
   if (hasGrant(agent || selfAgent, owner)) return 'read';
   return 'denied';
 }
+// verify 写后回读：直查索引 + 权限判定 + 召回匹配性，不依赖 recall top-N 排序
+// （v0.6.2 修复：泛化 subject 下新条目被挤出前 N 条导致误报「回读未命中」）
+function verifyWrittenReadable(root, rel, subj, agent) {
+  const entries = ensureIndex(root);
+  let target = null;
+  for (const e of entries) { if (e.file === rel) { target = e; break; } }
+  if (!target) return false;
+  if (classifyRead(target, agent, '', false, agent) !== 'read') return false;
+  const q = String(subj || '').toLowerCase();
+  const qtoks = tokenize(q);
+  let score = 0;
+  for (const tt of qtoks) { if (target.tokens && target.tokens[tt]) score += target.tokens[tt]; }
+  if (score === 0) {
+    const hay = ((target.subject || '') + ' ' + (target.statement || '') + ' ' + target.tags.join(' ')).toLowerCase();
+    if (hay.indexOf(q) !== -1) score = 1;
+  }
+  return score > 0;
+}
 
 // ---- 命令 core（CLI 与 MCP 共用；返回 { error, exitCode, text }，不 process.exit）----
 function initCore(opts) {
@@ -415,8 +434,7 @@ function rememberCore(type, subject, statement, opts) {
         }
         if (opts.verify) {
           const rel = path.relative(root, fp).replace(/\\/g, '/');
-          const rr = recallCore(subj, { limit: 10, agent: selfAgent || opts.agent });
-          const ok = rr.text.replace(/\\/g, '/').indexOf(rel) !== -1;
+          const ok = verifyWrittenReadable(root, rel, subj, selfAgent || opts.agent);
           text += '\n[verify] ' + (ok ? '已写回读 OK: ' + rel : '回读未命中，请检查: ' + rel);
         }
         return { error: false, text: text };
@@ -443,8 +461,7 @@ function rememberCore(type, subject, statement, opts) {
   }
   if (opts.verify) {
     const rel = path.relative(root, file).replace(/\\/g, '/');
-    const rr = recallCore(subj, { limit: 10, agent: selfAgent || opts.agent });
-    const ok = rr.text.replace(/\\/g, '/').indexOf(rel) !== -1;
+    const ok = verifyWrittenReadable(root, rel, subj, selfAgent || opts.agent);
     text += '\n[verify] ' + (ok ? '已写回读 OK: ' + rel : '回读未命中，请检查: ' + rel);
   }
   return { error: false, text: text };
