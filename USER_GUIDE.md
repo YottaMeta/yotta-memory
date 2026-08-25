@@ -1,0 +1,151 @@
+# 元忆（yotta-memory）用户使用手册
+
+> 面向最终用户的操作手册：从安装、初始化，到便携记忆盘（局域网多机共享）的部署与接入。AI 智能体的自动引导流程见 `SKILL.md`。
+
+## 目录
+
+1. 这是什么
+2. 安装
+3. 本机单机使用
+4. 便携记忆盘 · 记忆盘主机篇
+5. 便携记忆盘 · 智能体接入篇
+6. CLI 命令速查
+7. 故障排查
+8. 安全与边界
+
+## 1. 这是什么
+
+元忆（yotta-memory）是一个文件式智能体记忆工具：每条记忆是一个 Markdown 文件，放在你自己的目录里，可以用任何编辑器查看、修改，用 git 做版本管理。FACT 记忆共享给所有智能体，PREF / BOUND / COMMIT 记忆按智能体隔离。
+
+- 零依赖：只需要 Node.js，没有数据库、没有常驻服务（除非你开启便携记忆盘模式）。
+- 记忆即文件：数据主权在你手里。
+
+## 2. 安装
+
+任选一种方式：
+
+| 方式 | 命令 | 适用 |
+|---|---|---|
+| npm 全局（推荐） | `npm i -g @yottameta/yotta-memory` | 长期使用 |
+| npx 临时 | `npx -y @yottameta/yotta-memory` | 临时试用 |
+| install.sh | `bash <(curl -s https://raw.githubusercontent.com/YottaMeta/yotta-memory/main/install.sh)` | 离线 / 无 npm |
+
+安装后验证：`yotta-memory --version` 能输出版本号即成功。
+
+## 3. 本机单机使用
+
+```bash
+yotta-memory init                                    # 初始化记忆库（默认 ~/.yottamemory）
+yotta-memory remember FACT 项目 本周完成发布           # 记一条事实
+yotta-memory recall 项目                              # 检索记忆
+yotta-memory config get                              # 查看记忆库位置
+```
+
+- 想换记忆位置：`yotta-memory config set memory_home <目录>`，之后所有命令自动用新位置。
+- 项目级记忆：在项目目录里 `yotta-memory init --project`，该项目的智能体优先读项目级记忆。
+
+## 4. 便携记忆盘 · 记忆盘主机篇
+
+场景：记忆放在一台物理机（或一块硬盘）上，局域网内其它主机上的 AI 智能体远程接入。物理机只需装工具，不需要装任何 AI 智能体。
+
+**第 1 步：安装 CLI**（见第 2 节）。
+
+**第 2 步：指定记忆位置并初始化**
+
+```bash
+yotta-memory config set memory_home D:\memory         # 改成你的实际目录
+yotta-memory init --dir D:\memory                     # 初始化（自动建 facts/prefs/bounds/commits/.archive）
+```
+
+**第 3 步：注册开机自启（可选，推荐）**
+
+```bash
+yotta-memory lan enable              # 登录后自动启动记忆引擎（默认）
+yotta-memory lan enable --onstart    # 开机即启（需要管理员权限）
+yotta-memory lan status              # 查看自启状态
+yotta-memory lan disable             # 取消自启
+```
+
+**第 4 步：为每个智能体生成访问 token**
+
+```bash
+yotta-memory token new --agent 我的智能体ID
+```
+
+命令会打印一次 `ytm_...`，请妥善保管（它就是访问凭证）。多个智能体就重复执行、用不同 ID。
+
+**第 5 步：把连接信息交给远程智能体的用户**
+
+- 引擎地址：`http://<本机IP>:8787/mcp`
+- 该智能体的 token：`ytm_...`
+- 智能体 ID（对应 X-Agent-Id 请求头）
+
+查本机 IP：运行 `ipconfig`，找「IPv4 地址」那一行。首次监听时 Windows 防火墙会询问是否放行，请选择允许，否则局域网其它主机连不进来。
+
+## 5. 便携记忆盘 · 智能体接入篇
+
+场景：你的智能体需要读写远程记忆盘上的记忆。
+
+**第 1 步：向记忆盘主机获取**：引擎 IP、端口（默认 8787）、本智能体的 token、智能体 ID。
+
+**第 2 步：配置 MCP**（可以让 AI 按 `SKILL.md` 引导自动完成；也可以手动在你的智能体 MCP 配置里加这段）：
+
+```json
+{
+  "mcpServers": {
+    "yotta-memory": {
+      "url": "http://<引擎主机IP>:8787/mcp",
+      "headers": {
+        "Authorization": "Bearer <TOKEN>",
+        "X-Agent-Id": "<本智能体ID>"
+      }
+    }
+  }
+}
+```
+
+**第 3 步：验证**：让 AI 调一次 `recall` / `search`，能读到记忆即连接成功。
+
+**第 4 步：复用**：连接成功后就一直复用；token 失效（被吊销）时回到第 1 步重新获取。
+
+## 6. CLI 命令速查
+
+| 命令 | 作用 |
+|---|---|
+| `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库 |
+| `yotta-memory remember <类型> <主题> <内容> [--owner <id>]` | 写入记忆 |
+| `yotta-memory recall [关键词] [--type T] [--limit N]` | 检索记忆 |
+| `yotta-memory forget <文件>` | 删除一条记忆 |
+| `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆 |
+| `yotta-memory reindex` | 重建索引 |
+| `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |
+| `yotta-memory config set memory_home <目录>` / `config get` | 记忆库位置 |
+| `yotta-memory token new --agent <id>` / `token list` / `token revoke --agent <id>` | 访问 token |
+| `yotta-memory serve [--port 8787] [--stdio]` | 启动记忆引擎 |
+| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理 |
+
+类型：`FACT`（事实，共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺），后三类按智能体隔离。
+
+## 7. 故障排查
+
+**远程连不上时，按顺序检查：**
+
+1. 引擎在运行吗？记忆盘主机执行 `yotta-memory lan status`（自启任务存在）或 `yotta-memory --version`。
+2. IP 对吗？记忆盘主机执行 `ipconfig` 确认 IPv4 地址。
+3. 端口对吗？默认 8787，两端要一致。
+4. 防火墙放行了吗？首次监听需允许 0.0.0.0 入站。
+5. token 有效吗？记忆盘主机执行 `yotta-memory token list` 看该智能体是否登记；无效就 `token new --agent <id>` 重新生成。
+6. 网络通吗？任意一台主机执行 `curl http://<引擎IP>:8787/mcp`：
+   - 返回 401：服务在运行，是鉴权问题（token / 请求头不对）。
+   - 连接被拒 / 超时：服务没启动，或防火墙拦截。
+
+**`lan enable` 失败提示 Access denied：** 需要管理员权限，请用管理员终端重新执行；`--onstart` 模式必须管理员。
+
+**记错位置了？** `yotta-memory config get` 查看当前生效位置；`config set memory_home <正确目录>` 改正。
+
+## 8. 安全与边界
+
+- token 等同密码：只给需要接入的智能体，别外传。
+- 元忆不做加密：PREF / BOUND / COMMIT 私密记忆的隔离是「权限边界」机制（谁该读由 scope/owner 决定），属于纪律层保护，不是机密数据保护层。
+- 管理动作（init / config / token / lan / serve）不通过 MCP 暴露，远程只能读写记忆，不能改配置、不能管 token。
+- 数据主权在用户：所有数据都是本地明文文件，随时可看、可改、可删。

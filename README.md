@@ -15,6 +15,8 @@
   <a href="https://github.com/YottaMeta/yotta-memory"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen" /></a>
 </p>
 
+> 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
+
 ## 核心价值
 
 多数记忆方案把「记住」做成了黑盒：数据进了数据库或云端，用户既看不到内容、也难以审计，更控制不了「哪个智能体能看到什么」。元忆换了一条路：
