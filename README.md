@@ -139,7 +139,21 @@ bash install.sh --dir /path/to/skills
 ```
 也可把整个 `yotta-memory` 文件夹复制到目标智能体的 skills 目录（常见位置见 install.sh --list）。
 
+## 升级
+
+两种升级方式对应两种安装方式：
+
+**升级 CLI**（重新执行一次安装命令即可，不带版本号默认装最新）：
+```bash
+npm i -g @yottameta/yotta-memory
+```
+
+**升级技能**：重新执行你当初的安装命令即可（`npx skills add YottaMeta/yotta-memory` 或 `yotta-memory-install -g`），覆盖旧版本技能文件夹。
+
+> 升级只影响命令与技能文件，**不会动你已存的记忆**（记忆是独立于安装的文件，保留在原目录）。
+
 ## CLI 用法
+
 
 | 命令 | 作用 |
 |---|---|
