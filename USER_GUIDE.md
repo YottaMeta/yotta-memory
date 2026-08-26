@@ -131,24 +131,15 @@ yotta-memory lan enable --onstart    # 开机即启（需管理员）
 yotta-memory lan status              # 查看状态
 yotta-memory lan disable             # 取消
 
-# Linux：用 systemd 开机自启（lan 命令当前仅支持 Windows）
-# 先查 yotta-memory 实际路径：which yotta-memory（npm 全局默认 /usr/local/bin/yotta-memory）
-sudo tee /etc/systemd/system/yotta-memory.service > /dev/null <<'EOF'
-[Unit]
-Description=yotta-memory memory engine
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/yotta-memory serve --host 0.0.0.0 --port 8787
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF
-sudo systemctl daemon-reload
-sudo systemctl enable --now yotta-memory
-systemctl status yotta-memory        # 查看状态
+# Linux：内置命令（v0.6.4 起）——优先 systemd 用户单元（登录自启）；
+# systemd 不可用时自动降级用户 crontab @reboot（开机自启，免管理员）
+yotta-memory lan enable              # 登录后自动启动（默认）
+yotta-memory lan enable --onstart    # 开机即启（无需登录，需系统支持 loginctl）
+yotta-memory lan status              # 查看状态
+yotta-memory lan disable             # 取消
 ```
+
+> 说明：`lan enable` 默认「登录后自启」；如需系统级（整机、开机即启）服务，可手动创建 `/etc/systemd/system/yotta-memory.service`（ExecStart 指向 `which yotta-memory` 实际路径）并 `sudo systemctl enable --now yotta-memory`；桌面环境也可在 `~/.config/autostart/` 放置 `yotta-memory.desktop` 实现图形登录自启。
 
 **第 4 步：为局域网其它主机的智能体生成访问 token**
 
@@ -258,7 +249,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 访问 token（同 ID 已被其它来源占用需 `--force` 覆盖）|
 | `yotta-memory serve [--port 8787] [--stdio] [--no-auth]` | 启动记忆引擎（--no-auth 关闭鉴权，仅限可信内网）|
-| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务；非管理员自动降级用户级 Startup 静默自启）|
+| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务/用户级 Startup 静默自启；Linux：systemd 用户单元/用户 crontab @reboot）|
 
 类型：`FACT`（事实，共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺），后三类按智能体物理分目录隔离（`private/<owner>/<type>/`）。
 
@@ -266,7 +257,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 
 **远程连不上时，按顺序检查：**
 
-1. 引擎在运行吗？Windows：`yotta-memory lan status`；Linux（systemd 自启时）：`systemctl status yotta-memory`，或 `ps aux | grep yotta-memory`；也可直接 `yotta-memory --version`。
+1. 引擎在运行吗？`yotta-memory lan status`（Windows / Linux 通用）；Linux 也可 `systemctl --user status yotta-memory-serve.service`（systemd 自启时）或 `ps aux | grep yotta-memory`；也可直接 `yotta-memory --version`。
 2. IP 对吗？引擎主机执行 `hostname -I`（Linux）或 `ipconfig`（Windows）确认。
 3. 端口对吗？默认 8787，两端要一致。
 4. 防火墙放行了吗？Linux：`sudo ufw status`，未放行则 `sudo ufw allow 8787/tcp`；Windows：允许首次监听的入站请求。
@@ -281,7 +272,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 
 **recall 没有结果：** 关键词太细或确实没有这条记忆；先 `recall`（不带关键词）看库里的全部记忆核对。
 
-**systemd 自启的引擎看日志：** `journalctl -u yotta-memory -n 50`。
+**systemd 自启的引擎看日志：** `journalctl --user -u yotta-memory-serve.service -n 50`（系统级手动服务为 `journalctl -u yotta-memory -n 50`）。
 
 **记错位置了？** `yotta-memory config get` 查看当前生效位置；`config set memory_home <正确目录>` 改正。
 
