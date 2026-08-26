@@ -7,6 +7,7 @@
 // v0.5.4 新增：lan enable 在非管理员（schtasks Access denied）时自动降级为用户级 Startup 静默自启（VBS sh.Run 窗口0 + autostart.cmd，node 路径 process.execPath 自动探测）；lan disable/status 同时管理计划任务与 Startup 双机制
 // v0.6.0 新增：灵魂盘核心——profile（用户画像聚合，零推断）/ context（开工上下文包）/ iam 扩展（--name/--user/--relationship）/ remember --verify（写后回读）与 --no-hint（关闭类型启发式提示）+ SKILL「记忆守则」
 // v0.6.1 新增：灵魂盘机制精髓补齐——context --budget（token 预算，近记忆按剩余预算放行）/ context 内嵌「多智能体接入铁律」段 / remember --source/--weight（来源 + 重要性权重，去重 weight 取 max）/ 近期记忆排序融合 importance（confidence×recency+updated+weight+immutable）
+// v0.6.3 修复：lan 开机自启 VBS 自愈——VBS 内联 autostart.cmd 内容，启动时自动重建 .cmd（根治 80070002：wscript 找不到被引用启动文件）
 // v0.6.2 修复：remember --verify 写后回读改为直查索引 + 权限判定 + 召回匹配性（不再依赖 recall top-N 排序，消除泛化 subject 下偶发误报「回读未命中」）
 'use strict';
 
@@ -17,7 +18,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.6.2';
+const VERSION = '0.6.3';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -1300,23 +1301,51 @@ function lanAutostartCmdContent(opts) {
   const host = opts.host || '0.0.0.0';
   const port = opts.port || 8787;
   const q = (p) => '"' + String(p).replace(/"/g, '""') + '"';
-  // 生成文件用纯 ASCII（避免 cmd/VBS 按系统代码页读取中文注释乱码）
+  // 生成文件用纯 ASCII（避免 cmd/VBS 按系统代码页读取中文注释乱码；VBS 自愈内联同一内容）
   return '@echo off\r\n'
     + 'chcp 65001 >nul\r\n'
-    + 'rem ' + LAN_GEN_MARKER + '; remove with: yotta-memory lan disable\r\n'
+    + 'rem ' + LAN_GEN_MARKER + '; remove with: yotta-memory lan disable (English only, keep ASCII)\r\n'
     + q(process.execPath) + ' ' + q(__filename) + ' serve --host ' + host + ' --port ' + port + ' >> ' + q(lanLogPath(opts)) + ' 2>&1\r\n';
 }
-function lanVbsContent() {
-  return "' " + LAN_GEN_MARKER + '; remove with: yotta-memory lan disable\r\n'
-    + 'Set sh = CreateObject("WScript.Shell")\r\n'
-    + 'sh.Run "' + String(lanAutostartCmdPath()).replace(/"/g, '""') + '", 0, False\r\n';
+function lanVbsContent(opts) {
+  // v0.6.3 自愈：VBS 内联 autostart.cmd 内容，启动时若 .cmd 缺失/被清理即就地重建，
+  // 根治 80070002（wscript 找不到被引用的启动文件）。VBS 写 UTF-16LE，wscript 按 Unicode 读取。
+  const cmdContent = lanAutostartCmdContent(opts || {});
+  // VBS 字符串字面量不能含原始换行：把 CRLF 编码为 Chr(13) & Chr(10) & 拼接，
+  // 生成的 VBS 保持单行合法（否则 wscript 报语法错误，.cmd 重建失败）。
+  const vbsCmdLiteral = cmdContent
+    .replace(/\r\n/g, '\n')
+    .replace(/\n/g, '\n')
+    .split('\n')
+    .map(function (seg) {
+      // 每段都带引号（VBS 字符串字面量），换行用 Chr(13) & Chr(10) 拼接
+      return '"' + seg.replace(/"/g, '""') + '"';
+    })
+    .join(' & Chr(13) & Chr(10) & ');
+  const vbsCmdPath = String(lanAutostartCmdPath()).replace(/"/g, '""');
+  const lines = [
+    "' " + LAN_GEN_MARKER + '; remove with: yotta-memory lan disable',
+    "' v0.6.3 self-heal: always rebuild autostart.cmd from embedded content, then run it (fix 80070002)",
+    'Set fso = CreateObject("Scripting.FileSystemObject")',
+    'Set sh = CreateObject("WScript.Shell")',
+    'cmdPath = "' + vbsCmdPath + '"',
+    'On Error Resume Next',
+    'Set dir = fso.GetParentFolderName(cmdPath)',
+    'If Not fso.FolderExists(dir) Then fso.CreateFolder(dir)',
+    'Set f = fso.CreateTextFile(cmdPath, True)',
+    'f.Write ' + vbsCmdLiteral,
+    'f.Close',
+    'sh.Run cmdPath, 0, False',
+    '',
+  ];
+  return lines.join('\r\n') + '\r\n';
 }
 function lanInstallStartup(opts) {
   fs.mkdirSync(lanAutostartDir(), { recursive: true });
   fs.writeFileSync(lanAutostartCmdPath(), lanAutostartCmdContent(opts), 'utf8');
   fs.mkdirSync(lanStartupDir(), { recursive: true });
   // VBS 用 UTF-16LE+BOM：wscript 按 Unicode 读取，中文路径不乱码（纯 ANSI 读取会按系统代码页误读）
-  fs.writeFileSync(lanVbsPath(), '\ufeff' + lanVbsContent(), 'utf16le');
+  fs.writeFileSync(lanVbsPath(), '\ufeff' + lanVbsContent(opts), 'utf16le');
 }
 function lanRemoveStartupFiles() {
   // 只删除带产品标记的生成文件，绝不误删用户自己的 Startup 文件

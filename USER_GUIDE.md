@@ -124,7 +124,8 @@ yotta-memory init --dir /srv/yotta-memory               # 新库：初始化（�
 **第 3 步：注册开机自启（可选，推荐）**
 
 ```bash
-# Windows：内置命令（优先计划任务；非管理员自动降级用户级 Startup 静默自启）
+# Windows：内置命令（优先计划任务；非管理员自动降级用户级 Startup 静默自启；
+# v0.6.3 起启动脚本自愈——启动文件被清理也会在开机时自动重建，无需手动处理）
 yotta-memory lan enable              # 登录后自动启动（默认）
 yotta-memory lan enable --onstart    # 开机即启（需管理员）
 yotta-memory lan status              # 查看状态

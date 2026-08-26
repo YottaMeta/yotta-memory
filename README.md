@@ -115,7 +115,7 @@
 
 - **记忆库即引擎**：`serve` 把记忆目录挂成 MCP 服务，目录随盘走；引擎主机只需装 CLI 当存放点，无需装任何 AI 智能体。
 - **双模式可并存**：本地 `serve --stdio` 零进程（客户端按需拉起）；局域网 streamable HTTP（默认 `0.0.0.0:8787`）+ 每智能体 token 鉴权。
-- **开机自启**：`lan enable` 注册 Windows 开机自启——优先计划任务（默认登录自启，`--onstart` 开机即启需管理员）；非管理员（计划任务被拒）自动降级为**用户级 Startup 静默自启**（免管理员）；`lan disable` 移除，`lan status` 查询。
+- **开机自启**：`lan enable` 注册 Windows 开机自启——优先计划任务（默认登录自启，`--onstart` 开机即启需管理员）；非管理员（计划任务被拒）自动降级为**用户级 Startup 静默自启**（免管理员），启动脚本（VBS）内联启动命令，即使启动文件被外部清理也会在开机时自动重建（v0.6.3 自愈，不再出现 80070002 弹窗）；`lan disable` 移除，`lan status` 查询。
 - **安全边界**：管理动作（init / config / token / lan / serve）不进 MCP，token 不远程暴露；远程智能体只能读写记忆，不能改配置、不能管 token。
 - 完整操作步骤见上文「局域网多机共享」章节与 [USER_GUIDE.md](USER_GUIDE.md)。
 
