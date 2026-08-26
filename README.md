@@ -97,6 +97,7 @@
 - `remember` 时自动构建 `index.json` 索引；recall 用 TF 打分排序，中文按 bigram 分词，不用额外模型。
 - `index.json` 的 `tokens` 字段是中文分词的词频表（TF 打分用），**不是**访问凭证；鉴权令牌在记忆目录下 `.server/tokens.json`。
 - 支持关键词、`--type` 过滤、`--limit` 截断、项目级优先。
+- **根位置去重（v0.6.5）**：当项目级与用户级记忆库指向同一目录（如 cwd = home 或其父）时，`recall` / `context` 自动唯一化根，同一文件只展示一次。
 - 命中展示会累加 `access_count` / `last_accessed`，为生命周期管理提供依据。
 
 ### 生命周期管理

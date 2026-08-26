@@ -9,6 +9,7 @@
 // v0.6.1 新增：灵魂盘机制精髓补齐——context --budget（token 预算，近记忆按剩余预算放行）/ context 内嵌「多智能体接入铁律」段 / remember --source/--weight（来源 + 重要性权重，去重 weight 取 max）/ 近期记忆排序融合 importance（confidence×recency+updated+weight+immutable）
 // v0.6.3 修复：lan 开机自启 VBS 自愈——VBS 内联 autostart.cmd 内容，启动时自动重建 .cmd（根治 80070002：wscript 找不到被引用启动文件）
 // v0.6.4 新增：lan 命令扩展 Linux——systemd 用户单元（systemctl --user enable/start，登录自启；--onstart 附加 loginctl enable-linger 开机即启）/ systemd 不可用时自动降级用户 crontab @reboot；lanPlatform 测试钩子（YOTTA_LAN_PLATFORM）
+// v0.6.5 修复：recall/context 对同一文件显示 2 条——projectRoot 与 userRoot 指向同一目录（如 cwd=home 或其父）时同一索引被遍历两次；新增 memoryRoots() 唯一化根，hasGrant/recallCore/forgetCore/cmdReindex/contextCore 统一走 memoryRoots()
 // v0.6.2 修复：remember --verify 写后回读改为直查索引 + 权限判定 + 召回匹配性（不再依赖 recall top-N 排序，消除泛化 subject 下偶发误报「回读未命中」）
 'use strict';
 
@@ -19,7 +20,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.6.4';
+const VERSION = '0.6.5';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -56,6 +57,19 @@ function userRoot() {
 }
 function projectRoot() {
   return path.join(process.cwd(), '.yottamemory');
+}
+// 唯一化记忆库根：projectRoot 与 userRoot 可能指向同一目录（如 cwd=home 或其父时），
+// 若不唯一化，recall/context 等会对同一索引遍历两次 -> 同一条记忆重复展示（v0.6.5 修复）。
+function memoryRoots() {
+  const out = [], seen = new Set();
+  for (const r of [projectRoot(), userRoot()]) {
+    const abs = path.resolve(r);
+    if (!fs.existsSync(abs)) continue;
+    if (seen.has(abs)) continue;
+    seen.add(abs);
+    out.push(abs);
+  }
+  return out;
 }
 function today() {
   const d = new Date();
@@ -349,7 +363,7 @@ function loadGrants(root) {
 }
 function hasGrant(userAgent, ownerAgent) {
   if (!userAgent || !ownerAgent) return false;
-  for (const root of [projectRoot(), userRoot()]) {
+  for (const root of memoryRoots()) {
     if (!fs.existsSync(root)) continue;
     const grants = loadGrants(root);
     const list = grants[userAgent];
@@ -469,7 +483,7 @@ function rememberCore(type, subject, statement, opts) {
   return { error: false, text: text };
 }
 function recallCore(query, opts) {
-  const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
+  const roots = memoryRoots();
   if (!roots.length) return { error: false, exitCode: 0, text: '记忆库不存在，请先运行: yotta-memory init' };
   const limit = opts.limit || 50;
   const onlyType = opts.type ? String(opts.type).toUpperCase() : null;
@@ -551,7 +565,7 @@ function relOf(root, fp) { return path.relative(root, fp).replace(/\\/g, '/'); }
 function forgetCore(fileRef, opts) {
   opts = opts || {};
   const selfAgent = opts.selfAgent || currentAgent();
-  const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
+  const roots = memoryRoots();
   const ref = String(fileRef || '').replace(/\\/g, '/');
   let target = null, targetRoot = null, targetRel = null;
   for (const root of roots) {
@@ -625,7 +639,7 @@ function cmdArchive(opts) {
   console.log(r.text);
 }
 function cmdReindex() {
-  const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
+  const roots = memoryRoots();
   if (!roots.length) { console.log('记忆库不存在。'); return; }
   for (const root of roots) {
     const n = buildIndex(root).length;
@@ -964,7 +978,7 @@ function selfProfileKv(root, id) {
 }
 function contextCore(opts) {
   opts = opts || {};
-  const roots = [projectRoot(), userRoot()].filter(function (r) { return fs.existsSync(r); });
+  const roots = memoryRoots();
   if (!roots.length) return { error: false, exitCode: 0, text: '记忆库不存在，请先运行: yotta-memory init' };
   const root = userRoot();
   const limit = opts.limit || 10;
@@ -1830,6 +1844,7 @@ module.exports = {
   VERSION: VERSION,
   userRoot: userRoot,
   projectRoot: projectRoot,
+  memoryRoots: memoryRoots,
   rememberCore: rememberCore,
   recallCore: recallCore,
   profileCore: profileCore,
