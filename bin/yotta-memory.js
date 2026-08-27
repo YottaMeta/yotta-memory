@@ -5,11 +5,12 @@
 // v0.4.2 新增：iam/whoami 智能体身份自注册（agents.json 唯一性）+ 自我档案 PREF + 私密记忆须声明 owner
 // v0.5.3 新增：CLI 选项可前置（--agent 等允许放在子命令前，不再误报"未知命令"）/ lan enable 成功补"服务不会立刻启动"提示（v0.5.2 lan 引号修复无回归）
 // v0.5.4 新增：lan enable 在非管理员（schtasks Access denied）时自动降级为用户级 Startup 静默自启（VBS sh.Run 窗口0 + autostart.cmd，node 路径 process.execPath 自动探测）；lan disable/status 同时管理计划任务与 Startup 双机制
-// v0.6.0 新增：灵魂盘核心——profile（用户画像聚合，零推断）/ context（开工上下文包）/ iam 扩展（--name/--user/--relationship）/ remember --verify（写后回读）与 --no-hint（关闭类型启发式提示）+ SKILL「记忆守则」
-// v0.6.1 新增：灵魂盘机制精髓补齐——context --budget（token 预算，近记忆按剩余预算放行）/ context 内嵌「多智能体接入铁律」段 / remember --source/--weight（来源 + 重要性权重，去重 weight 取 max）/ 近期记忆排序融合 importance（confidence×recency+updated+weight+immutable）
+// v0.6.0 新增：profile（用户画像聚合，零推断）/ context（开工上下文包）/ iam 扩展（--name/--user/--relationship）/ remember --verify（写后回读）与 --no-hint（关闭类型启发式提示）+ SKILL「记忆守则」
+// v0.6.1 新增：context --budget（token 预算，近记忆按剩余预算放行）/ context 内嵌「多智能体接入铁律」段 / remember --source/--weight（来源 + 重要性权重，去重 weight 取 max）/ 近期记忆排序融合 importance（confidence×recency+updated+weight+immutable）
 // v0.6.3 修复：lan 开机自启 VBS 自愈——VBS 内联 autostart.cmd 内容，启动时自动重建 .cmd（根治 80070002：wscript 找不到被引用启动文件）
 // v0.6.4 新增：lan 命令扩展 Linux——systemd 用户单元（systemctl --user enable/start，登录自启；--onstart 附加 loginctl enable-linger 开机即启）/ systemd 不可用时自动降级用户 crontab @reboot；lanPlatform 测试钩子（YOTTA_LAN_PLATFORM）
 // v0.6.5 修复：recall/context 对同一文件显示 2 条——projectRoot 与 userRoot 指向同一目录（如 cwd=home 或其父）时同一索引被遍历两次；新增 memoryRoots() 唯一化根，hasGrant/recallCore/forgetCore/cmdReindex/contextCore 统一走 memoryRoots()
+// v0.7.0 新增：私密区机制级加密（AES-256-GCM 信封加密 + PBKDF2 主密钥 + 恢复钥匙）/ 每 owner 加密索引 / 用户查看平台 yotta-memory view / migrate 迁移 / reset-password / key 授权 / context 收工纪律 / init 新建默认加密（--no-encrypt 降级）
 // v0.6.2 修复：remember --verify 写后回读改为直查索引 + 权限判定 + 召回匹配性（不再依赖 recall top-N 排序，消除泛化 subject 下偶发误报「回读未命中」）
 'use strict';
 
@@ -20,7 +21,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.6.5';
+const VERSION = '0.7.0';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -173,11 +174,222 @@ function nextSeq(dir) {
   let max = 0;
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
-      const m = f.match(/^\d{4}-\d{2}-\d{2}-(\d{4})\.md$/);
+      const m = f.match(/^\d{4}-\d{2}-\d{2}-(\d{4})\.md(\.enc)?$/);
       if (m) max = Math.max(max, parseInt(m[1], 10));
     }
   }
   return String(max + 1).padStart(4, '0');
+}
+
+
+// ================= v0.7.0 加密（AES-256-GCM 信封加密 + PBKDF2 主密钥 + 恢复钥匙）=================
+const ENC_MAGIC = 'YTMENC1';
+const IDX_MAGIC = 'YTMIDX1';
+const KEY_MAGIC = 'YTMKEY1';
+const KEYS_DIR = 'keys';
+const KEY_CACHE_DIR = 'cache';
+const ENC_INDEX_FILE = 'index.enc';
+const ENC_SUFFIX = '.enc';
+const PBKDF2_ITER = 600000;
+const GCM_NONCE = 12;
+const GCM_TAG = 16;
+const AES_ALGO = 'aes-256-gcm';
+
+function encKeysDir(root) { return path.join(root, KEYS_DIR); }
+function encSaltPath(root) { return path.join(encKeysDir(root), 'salt'); }
+function encOwnerKeyPath(root, id) { return path.join(encKeysDir(root), id + '.key.enc'); }
+function encOwnerRecPath(root, id) { return path.join(encKeysDir(root), id + '.key.recovery'); }
+function encRecoveryEncPath(root) { return path.join(encKeysDir(root), 'recovery.key.enc'); }
+function encCacheDir(root) { return path.join(encKeysDir(root), KEY_CACHE_DIR); }
+function encCachePath(root, id) { return path.join(encCacheDir(root), id + '.key'); }
+function isEncrypted(root) { return fs.existsSync(encKeysDir(root)); }
+function isEncFile(fp) { return String(fp).slice(-ENC_SUFFIX.length) === ENC_SUFFIX; }
+function ownerFromPrivatePath(root, fp) {
+  const rel = path.relative(root, fp).replace(/\\/g, '/');
+  const seg = rel.split('/');
+  if (seg[0] === PRIVATE_DIR && seg[1]) return seg[1];
+  return '';
+}
+function collectOwners(root) {
+  const pdir = path.join(root, PRIVATE_DIR);
+  if (!fs.existsSync(pdir)) return [];
+  return fs.readdirSync(pdir).filter(function (id) {
+    try { return fs.statSync(path.join(pdir, id)).isDirectory(); } catch (e) { return false; }
+  });
+}
+function ensureKeysDir(root) { fs.mkdirSync(encCacheDir(root), { recursive: true }); }
+// owner 来源联合：private/<owner>/ 目录 + keys/*.key.enc（只授权未写记忆时 owner 只在 keys/）
+function keyOwners(root) {
+  const set = new Set();
+  for (const o of collectOwners(root)) set.add(o);
+  const kd = encKeysDir(root);
+  if (fs.existsSync(kd)) {
+    for (const f of fs.readdirSync(kd)) {
+      if (f === 'recovery.key.enc') continue;
+      const m = /^(.+)\.key\.enc$/.exec(f);
+      if (m) set.add(m[1]);
+    }
+  }
+  return Array.from(set);
+}
+function aesEncryptBytes(key, buf, aad) {
+  const nonce = crypto.randomBytes(GCM_NONCE);
+  const c = crypto.createCipheriv(AES_ALGO, key, nonce);
+  if (aad) c.setAAD(aad);
+  const ct = Buffer.concat([c.update(buf), c.final()]);
+  return Buffer.concat([nonce, c.getAuthTag(), ct]);
+}
+function aesDecryptBytes(key, env, aad) {
+  if (!env || env.length < GCM_NONCE + GCM_TAG) throw new Error('密文数据损坏');
+  const nonce = env.slice(0, GCM_NONCE);
+  const tag = env.slice(GCM_NONCE, GCM_NONCE + GCM_TAG);
+  const ct = env.slice(GCM_NONCE + GCM_TAG);
+  const d = crypto.createDecipheriv(AES_ALGO, key, nonce);
+  if (aad) d.setAAD(aad);
+  d.setAuthTag(tag);
+  return Buffer.concat([d.update(ct), d.final()]);
+}
+function deriveUmk(password, salt) {
+  return crypto.pbkdf2Sync(Buffer.from(String(password), 'utf8'), salt, PBKDF2_ITER, 32, 'sha256');
+}
+function loadSalt(root) {
+  const p = encSaltPath(root);
+  if (!fs.existsSync(p)) return null;
+  return fs.readFileSync(p);
+}
+function initEncryptionCore(root, password, recoveryKeyIn) {
+  ensureKeysDir(root);
+  const salt = crypto.randomBytes(16);
+  fs.writeFileSync(encSaltPath(root), salt);
+  const umk = deriveUmk(password, salt);
+  const rk = recoveryKeyIn ? Buffer.from(String(recoveryKeyIn), 'base64') : crypto.randomBytes(32);
+  if (rk.length !== 32) throw new Error('恢复钥匙须为 32 字节（base64）');
+  fs.writeFileSync(encRecoveryEncPath(root), Buffer.concat([Buffer.from(KEY_MAGIC, 'utf8'), aesEncryptBytes(umk, rk, Buffer.from('recovery', 'utf8'))]));
+  return { umk: umk, rk: rk, salt: salt };
+}
+function unwrapRecoveryEnc(root, umk) {
+  const p = encRecoveryEncPath(root);
+  if (!fs.existsSync(p)) return null;
+  const buf = fs.readFileSync(p);
+  if (buf.slice(0, KEY_MAGIC.length).toString('utf8') !== KEY_MAGIC) throw new Error('恢复钥匙文件格式错误');
+  return aesDecryptBytes(umk, buf.slice(KEY_MAGIC.length), Buffer.from('recovery', 'utf8'));
+}
+function wrapOwnerKey(root, umk, rk, owner) {
+  const ownerKey = crypto.randomBytes(32);
+  const aad = Buffer.from('owner:' + owner, 'utf8');
+  fs.writeFileSync(encOwnerKeyPath(root, owner), Buffer.concat([Buffer.from(KEY_MAGIC, 'utf8'), aesEncryptBytes(umk, ownerKey, aad)]));
+  fs.writeFileSync(encOwnerRecPath(root, owner), Buffer.concat([Buffer.from(KEY_MAGIC, 'utf8'), aesEncryptBytes(rk, ownerKey, aad)]));
+  return ownerKey;
+}
+function unwrapOwnerKey(root, owner, umk) {
+  const p = encOwnerKeyPath(root, owner);
+  if (!fs.existsSync(p)) return null;
+  const buf = fs.readFileSync(p);
+  if (buf.slice(0, KEY_MAGIC.length).toString('utf8') !== KEY_MAGIC) throw new Error('密钥文件格式错误: ' + p);
+  return aesDecryptBytes(umk, buf.slice(KEY_MAGIC.length), Buffer.from('owner:' + owner, 'utf8'));
+}
+function unwrapOwnerKeyRecovery(root, owner, rk) {
+  const p = encOwnerRecPath(root, owner);
+  if (!fs.existsSync(p)) return null;
+  const buf = fs.readFileSync(p);
+  if (buf.slice(0, KEY_MAGIC.length).toString('utf8') !== KEY_MAGIC) throw new Error('恢复密钥文件格式错误: ' + p);
+  return aesDecryptBytes(rk, buf.slice(KEY_MAGIC.length), Buffer.from('owner:' + owner, 'utf8'));
+}
+function writeOwnerKeyCache(root, owner, ownerKey) {
+  ensureKeysDir(root);
+  const p = encCachePath(root, owner);
+  fs.writeFileSync(p, ownerKey);
+  try { fs.chmodSync(p, 0o600); } catch (e) {}
+}
+function loadOwnerKeyCache(root, owner) {
+  const p = encCachePath(root, owner);
+  if (!fs.existsSync(p)) return null;
+  return fs.readFileSync(p);
+}
+function revokeOwnerKeyCache(root, owner) {
+  const p = encCachePath(root, owner);
+  if (fs.existsSync(p)) { fs.unlinkSync(p); return true; }
+  return false;
+}
+function getOwnerKeyFor(root, owner) {
+  if (!owner) return null;
+  if (!isEncrypted(root)) return null;
+  return loadOwnerKeyCache(root, owner);
+}
+function encryptMemoryText(text, ownerKey) {
+  const fileKey = crypto.randomBytes(32);
+  const wk = aesEncryptBytes(ownerKey, fileKey, Buffer.from('filekey', 'utf8'));
+  const data = aesEncryptBytes(fileKey, Buffer.from(text, 'utf8'), Buffer.from('file', 'utf8'));
+  return Buffer.concat([Buffer.from(ENC_MAGIC, 'utf8'), wk, data]);
+}
+function decryptMemoryText(buf, ownerKey) {
+  if (buf.slice(0, ENC_MAGIC.length).toString('utf8') !== ENC_MAGIC) throw new Error('非密文文件（缺 ' + ENC_MAGIC + ' 头）');
+  const env = buf.slice(ENC_MAGIC.length);
+  const wkEnv = env.slice(0, GCM_NONCE + GCM_TAG + 32);
+  const fileKey = aesDecryptBytes(ownerKey, wkEnv, Buffer.from('filekey', 'utf8'));
+  const dataEnv = env.slice(GCM_NONCE + GCM_TAG + 32);
+  return aesDecryptBytes(fileKey, dataEnv, Buffer.from('file', 'utf8')).toString('utf8');
+}
+function readMemoryText(root, fp, owner) {
+  if (!isEncFile(fp)) return fs.readFileSync(fp, 'utf8');
+  const key = getOwnerKeyFor(root, owner);
+  if (!key) throw new Error('私密区已加密：当前无 ' + owner + ' 的授权密钥，请在用户平台授权（yotta-memory view → 授权本智能体）。');
+  return decryptMemoryText(fs.readFileSync(fp), key);
+}
+function writeMemoryText(root, fp, text, owner) {
+  if (!isEncFile(fp)) { fs.writeFileSync(fp, text, 'utf8'); return; }
+  const key = getOwnerKeyFor(root, owner);
+  if (!key) throw new Error('私密区已加密：当前无 ' + owner + ' 的授权密钥，请在用户平台授权（yotta-memory view → 授权本智能体）。');
+  fs.writeFileSync(fp, encryptMemoryText(text, key));
+}
+function ownerIndexPath(root, owner) { return path.join(root, PRIVATE_DIR, owner, ENC_INDEX_FILE); }
+function loadOwnerIndex(root, owner, ownerKey) {
+  const p = ownerIndexPath(root, owner);
+  if (!fs.existsSync(p)) return [];
+  const buf = fs.readFileSync(p);
+  if (buf.slice(0, IDX_MAGIC.length).toString('utf8') !== IDX_MAGIC) return [];
+  const d = aesDecryptBytes(ownerKey, buf.slice(IDX_MAGIC.length), Buffer.from('index:' + owner, 'utf8'));
+  const j = JSON.parse(d.toString('utf8'));
+  return Array.isArray(j.entries) ? j.entries : [];
+}
+function saveOwnerIndex(root, owner, ownerKey, entries) {
+  const data = JSON.stringify({ version: 1, updated: today(), entries: entries }, null, 2);
+  const env = aesEncryptBytes(ownerKey, Buffer.from(data, 'utf8'), Buffer.from('index:' + owner, 'utf8'));
+  const dir = path.join(root, PRIVATE_DIR, owner);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, ENC_INDEX_FILE), Buffer.concat([Buffer.from(IDX_MAGIC, 'utf8'), env]));
+}
+function hasPlaintextPrivate(root) {
+  for (const owner of collectOwners(root)) {
+    for (const t of PRIVATE_LEAF) {
+      const d = path.join(root, PRIVATE_DIR, owner, t);
+      if (!fs.existsSync(d)) continue;
+      for (const f of fs.readdirSync(d)) if (f.endsWith('.md')) return true;
+    }
+    if (fs.existsSync(path.join(root, PRIVATE_DIR, owner, PROFILE_FILE))) return true;
+  }
+  return false;
+}
+function profilePathFor(root, owner) {
+  const base = path.join(root, PRIVATE_DIR, owner, PROFILE_FILE);
+  if (fs.existsSync(base)) return base;
+  return base + ENC_SUFFIX;
+}
+function readProfileText(root, owner) {
+  const p = profilePathFor(root, owner);
+  if (!fs.existsSync(p)) return null;
+  return readMemoryText(root, p, owner);
+}
+function writeProfileText(root, owner, text) {
+  const dir = path.join(root, PRIVATE_DIR, owner);
+  fs.mkdirSync(dir, { recursive: true });
+  const encrypted = isEncrypted(root);
+  const p = encrypted ? path.join(dir, PROFILE_FILE + ENC_SUFFIX) : path.join(dir, PROFILE_FILE);
+  writeMemoryText(root, p, text, owner);
+  if (encrypted && fs.existsSync(path.join(dir, PROFILE_FILE))) {
+    try { fs.unlinkSync(path.join(dir, PROFILE_FILE)); } catch (e) {}
+  }
+  return p;
 }
 
 // ---- 索引（index.json）----
@@ -199,7 +411,7 @@ function saveIndex(root, entries) {
 function collectEntryFiles(root) {
   const dirs = [];
   const facts = path.join(root, PUBLIC_DIR);
-  if (fs.existsSync(facts)) dirs.push(path.join(root, PUBLIC_DIR));
+  if (fs.existsSync(facts)) dirs.push(facts);
   const pdir = path.join(root, PRIVATE_DIR);
   if (fs.existsSync(pdir)) {
     for (const id of fs.readdirSync(pdir)) {
@@ -214,6 +426,7 @@ function collectEntryFiles(root) {
   const out = [];
   for (const dir of dirs) {
     for (const f of fs.readdirSync(dir)) {
+      if (!/\.md(\.enc)?$/.test(f)) continue;
       const fp = path.join(dir, f);
       if (fs.statSync(fp).isFile()) out.push(fp);
     }
@@ -242,37 +455,113 @@ function migrateLayout(root) {
 }
 function buildIndex(root) {
   migrateLayout(root);
-  const entries = [];
-  for (const fp of collectEntryFiles(root)) entries.push(readEntry(fp, root));
-  saveIndex(root, entries);
-  return entries;
+  const publicEntries = [];
+  const privateByOwner = {};
+  for (const fp of collectEntryFiles(root)) {
+    const rel = path.relative(root, fp).replace(/\\/g, '/');
+    if (rel.indexOf(PRIVATE_DIR + '/') === 0) {
+      const owner = rel.split('/')[1] || '';
+      if (!getOwnerKeyFor(root, owner)) continue;
+      let e;
+      try { e = readEntry(fp, root); } catch (err) { continue; }
+      (privateByOwner[owner] = privateByOwner[owner] || []).push(e);
+    } else {
+      try { publicEntries.push(readEntry(fp, root)); } catch (err) { /* ignore */ }
+    }
+  }
+  saveIndex(root, publicEntries);
+  for (const owner of Object.keys(privateByOwner)) {
+    const key = getOwnerKeyFor(root, owner);
+    if (key) saveOwnerIndex(root, owner, key, privateByOwner[owner]);
+  }
+  const all = publicEntries.slice();
+  for (const owner of Object.keys(privateByOwner)) all.push.apply(all, privateByOwner[owner]);
+  return all;
 }
 function ensureIndex(root) {
-  const idx = loadIndex(root);
-  if (idx) return idx;
-  return buildIndex(root);
+  if (!isEncrypted(root)) {
+    const idx = loadIndex(root);
+    return idx || buildIndex(root);
+  }
+  const all = [];
+  const pub = loadIndex(root);
+  if (pub) all.push.apply(all, pub);
+  for (const owner of collectOwners(root)) {
+    const key = getOwnerKeyFor(root, owner);
+    if (!key) continue;
+    let idx = [];
+    try { idx = loadOwnerIndex(root, owner, key); } catch (err) { idx = []; }
+    all.push.apply(all, idx);
+  }
+  return all;
 }
 function upsertIndexEntry(root, entry) {
+  if (isEncrypted(root) && entry.scope !== 'public' && String(entry.file).indexOf(PUBLIC_DIR + '/') !== 0) {
+    const owner = entry.owner || String(entry.file).split('/')[1] || '';
+    const key = getOwnerKeyFor(root, owner);
+    if (!key) return;
+    const idx = loadOwnerIndex(root, owner, key);
+    const i = idx.findIndex(function (e) { return e.file === entry.file; });
+    if (i >= 0) idx[i] = entry; else idx.push(entry);
+    saveOwnerIndex(root, owner, key, idx);
+    return;
+  }
   const idx = getIndex(root);
   const i = idx.findIndex(function (e) { return e.file === entry.file; });
   if (i >= 0) idx[i] = entry; else idx.push(entry);
   saveIndex(root, idx);
 }
 function removeIndexEntry(root, file) {
+  if (isEncrypted(root) && String(file).indexOf(PRIVATE_DIR + '/') === 0) {
+    const owner = String(file).split('/')[1] || '';
+    const key = getOwnerKeyFor(root, owner);
+    if (!key) return;
+    const idx = loadOwnerIndex(root, owner, key);
+    const next = idx.filter(function (e) { return e.file !== file; });
+    if (next.length !== idx.length) saveOwnerIndex(root, owner, key, next);
+    return;
+  }
   const idx = getIndex(root);
   const i = idx.findIndex(function (e) { return e.file === file; });
   if (i >= 0) { idx.splice(i, 1); saveIndex(root, idx); }
 }
 function removeIndexEntries(root, files) {
   const set = new Set(files);
-  const idx = getIndex(root);
-  const next = idx.filter(function (e) { return !set.has(e.file); });
-  if (next.length !== idx.length) saveIndex(root, next);
+  const byOwner = {};
+  const pub = [];
+  for (const f of files) {
+    if (String(f).indexOf(PRIVATE_DIR + '/') === 0) {
+      const o = String(f).split('/')[1] || '';
+      (byOwner[o] = byOwner[o] || []).push(f);
+    } else pub.push(f);
+  }
+  if (pub.length) {
+    const idx = getIndex(root);
+    const next = idx.filter(function (e) { return !set.has(e.file); });
+    if (next.length !== idx.length) saveIndex(root, next);
+  }
+  for (const o of Object.keys(byOwner)) {
+    const key = getKeyOwnerByOwner(root, o);
+    if (!key) continue;
+    const idx = loadOwnerIndex(root, o, key);
+    const oset = new Set(byOwner[o]);
+    const next = idx.filter(function (e) { return !oset.has(e.file); });
+    if (next.length !== idx.length) saveOwnerIndex(root, o, key, next);
+  }
 }
 
 // ---- 读取 / 写入记忆文件 ----
 function readEntry(fp, root) {
-  const parsed = parseFrontmatter(fs.readFileSync(fp, 'utf8'));
+  const owner = ownerFromPrivatePath(root, fp);
+  let text;
+  if (isEncFile(fp)) {
+    const key = getOwnerKeyFor(root, owner);
+    if (!key) throw new Error('私密区已加密：当前无 ' + owner + ' 的授权密钥（yotta-memory view → 授权本智能体）。');
+    text = decryptMemoryText(fs.readFileSync(fp), key);
+  } else {
+    text = fs.readFileSync(fp, 'utf8');
+  }
+  const parsed = parseFrontmatter(text);
   const meta = parsed.meta;
   const type = (meta.type || 'FACT').toUpperCase();
   const subject = meta.subject || '';
@@ -298,23 +587,27 @@ function readEntry(fp, root) {
     meta: meta,
   };
 }
-function rewriteFrontmatter(fp, patch) {
-  const txt = fs.readFileSync(fp, 'utf8');
-  const parsed = parseFrontmatter(txt);
+function rewriteFrontmatter(fp, patch, root, owner) {
+  let text;
+  try { text = readMemoryText(root || memoryRootForFile(fp), fp, owner || ownerFromPrivatePath(root || memoryRootForFile(fp), fp)); }
+  catch (e) { throw e; }
+  const parsed = parseFrontmatter(text);
   const meta = Object.assign({}, parsed.meta);
   for (const k of Object.keys(patch)) meta[k] = patch[k];
-  fs.writeFileSync(fp, frontmatterToText(meta, parsed.body), 'utf8');
+  writeMemoryText(root || memoryRootForFile(fp), fp, frontmatterToText(meta, parsed.body), owner || ownerFromPrivatePath(root || memoryRootForFile(fp), fp));
 }
 function bumpReadMeta(root, relFiles) {
   const now = today();
   for (const rel of relFiles) {
     const fp = path.join(root, rel);
     if (!fs.existsSync(fp)) continue;
-    const parsed = parseFrontmatter(fs.readFileSync(fp, 'utf8'));
+    const owner = ownerFromPrivatePath(root, fp);
+    let parsed;
+    try { parsed = parseFrontmatter(readMemoryText(root, fp, owner)); } catch (e) { continue; }
     const meta = parsed.meta;
     if (meta.immutable === 'true') continue;
     const acc = (parseInt(meta.access_count || '0', 10) || 0) + 1;
-    rewriteFrontmatter(fp, { access_count: acc, last_accessed: now });
+    rewriteFrontmatter(fp, { access_count: acc, last_accessed: now }, root, owner);
   }
 }
 function touchIndex(root, relFiles) {
@@ -342,7 +635,7 @@ function vitality(meta) {
   if (last) { const d = daysBetween(last, today()); recency = Math.max(0, 1 - Math.floor(d / 30) * 0.2); }
   return 0.4 * conf + 0.3 * accScore + 0.3 * recency;
 }
-// 灵魂盘 importance 融合：confidence × (0.5 + recency) + updated 加分 + weight 乘子 + immutable 加分
+// importance 融合：confidence × (0.5 + recency) + updated 加分 + weight 乘子 + immutable 加分
 function importanceScore(meta) {
   const conf = parseFloat(meta.confidence || 1.0);
   let ageDays = 999;
@@ -404,9 +697,20 @@ function verifyWrittenReadable(root, rel, subj, agent) {
 
 // ---- 命令 core（CLI 与 MCP 共用；返回 { error, exitCode, text }，不 process.exit）----
 function initCore(opts) {
+  opts = opts || {};
   const root = opts.dir ? path.resolve(String(opts.dir)) : (opts.project ? projectRoot() : userRoot());
+  const fresh = !fs.existsSync(path.join(root, PUBLIC_DIR)) && !fs.existsSync(path.join(root, PRIVATE_DIR)) && !fs.existsSync(path.join(root, INDEX_FILE));
   ensureInit(root);
-  return { error: false, text: '已初始化记忆库: ' + root };
+  const wantEncrypt = opts.encrypt || (!opts.noEncrypt && fresh);
+  if (wantEncrypt) {
+    if (isEncrypted(root)) return { error: false, text: '已初始化记忆库（已启用加密）: ' + root };
+    if (hasPlaintextPrivate(root)) return { error: true, text: '检测到明文私密区，请先 yotta-memory migrate 迁移到密文；新建空库可直接 init --encrypt。' };
+    const password = String(opts.password || process.env.YOTTA_MEMORY_PASS || '');
+    if (!password) return { error: true, text: '启用加密需要主口令：交互输入，或 YOTTA_MEMORY_PASS 环境变量（自动化）。' };
+    const r = initEncryptionCore(root, password, null);
+    return { error: false, text: '已初始化加密记忆库: ' + root + '\n[恢复钥匙]（务必离线保存，仅此一次，泄露=可解全部私密）: ' + r.rk.toString('base64') };
+  }
+  return { error: false, text: '已初始化记忆库: ' + root + (isEncrypted(root) ? '（已启用加密）' : '（明文；建议 init --encrypt 或 migrate 启用加密）') };
 }
 function rememberCore(type, subject, statement, opts) {
   opts = opts || {};
@@ -427,13 +731,18 @@ function rememberCore(type, subject, statement, opts) {
   if (scope === 'private' && owner && selfAgent && owner !== selfAgent && !opts.unsafe) {
     return { error: true, text: '拒绝: 当前声明身份 ' + selfAgent + ' 不能写入其它智能体 ' + owner + ' 的私密区。请用 YOTTA_AGENT_ID 声明自己的身份，或加 --unsafe（用户显式授权）。' };
   }
+  const encrypted = isEncrypted(root);
+  if (scope === 'private' && encrypted && !getOwnerKeyFor(root, owner)) {
+    return { error: true, text: '私密区已加密：当前无 ' + owner + ' 的授权密钥，请在用户平台授权（yotta-memory view → 授权本智能体）后再写私密记忆。公共 FACT 不受影响。' };
+  }
   const dir = path.join(root, typeSubdir(t, owner));
   fs.mkdirSync(dir, { recursive: true });
   if (fs.existsSync(dir)) {
     for (const f of fs.readdirSync(dir)) {
       const fp = path.join(dir, f);
       if (!fs.statSync(fp).isFile()) continue;
-      const parsed = parseFrontmatter(fs.readFileSync(fp, 'utf8'));
+      let parsed;
+      try { parsed = parseFrontmatter(readMemoryText(root, fp, owner)); } catch (err) { continue; }
       const meta = parsed.meta;
       if ((meta.type || '').toUpperCase() === t && meta.subject === subj && meta.statement === stmt) {
         const patch = { updated: today() };
@@ -441,7 +750,7 @@ function rememberCore(type, subject, statement, opts) {
         if (scope && !meta.scope) patch.scope = scope;
         if (opts.source && !meta.source) patch.source = opts.source;
         const w = parseFloat(opts.weight); if (w > 0) patch.weight = Math.max(parseFloat(meta.weight || '1.0') || 1.0, w);
-        rewriteFrontmatter(fp, patch);
+        rewriteFrontmatter(fp, patch, root, owner);
         upsertIndexEntry(root, readEntry(fp, root));
         let text = '已更新: ' + fp;
         if (opts.hint !== false && t === 'FACT') {
@@ -458,7 +767,8 @@ function rememberCore(type, subject, statement, opts) {
     }
   }
   const seq = nextSeq(dir);
-  const file = path.join(dir, today() + '-' + seq + '.md');
+  const suffix = (encrypted && scope === 'private') ? ENC_SUFFIX : '';
+  const file = path.join(dir, today() + '-' + seq + '.md' + suffix);
   const rec = {
     type: t, subject: subj, statement: stmt,
     confidence: 1.0, created: today(), updated: today(),
@@ -468,7 +778,7 @@ function rememberCore(type, subject, statement, opts) {
     weight: (parseFloat(opts.weight) > 0 ? parseFloat(opts.weight) : 1.0),
     access_count: 0, last_accessed: '',
   };
-  fs.writeFileSync(file, frontmatterToText(rec, stmt), 'utf8');
+  writeMemoryText(root, file, frontmatterToText(rec, stmt), owner);
   upsertIndexEntry(root, readEntry(file, root));
   let text = '已记录: ' + file;
   if (opts.hint !== false && t === 'FACT') {
@@ -593,7 +903,9 @@ function archiveCore(opts) {
   let moved = 0;
   const movedFiles = [];
   for (const fp of collectEntryFiles(root)) {
-    const meta = parseFrontmatter(fs.readFileSync(fp, 'utf8')).meta;
+    const owner = ownerFromPrivatePath(root, fp);
+    let meta;
+    try { meta = parseFrontmatter(readMemoryText(root, fp, owner)).meta; } catch (e) { continue; }
     if (meta.immutable === 'true') continue;
     if (!meta.created) continue;
     const createdTs = new Date(meta.created).getTime();
@@ -612,10 +924,367 @@ function archiveCore(opts) {
   return { error: false, text: '已归档 ' + moved + ' 条旧记忆到 ' + path.join(root, ARCHIVE_DIR) };
 }
 
-// ---- 命令包装（CLI 入口）----
-function cmdInit(opts) {
-  const r = initCore(opts);
+function promptPassword(promptText) {
+  return new Promise(function (resolve) {
+    const stdin = process.stdin;
+    if (!stdin.isTTY) { resolve(null); return; }
+    process.stdout.write(promptText);
+    let buf = '';
+    function done(abort) {
+      try { stdin.setRawMode(false); } catch (e) {}
+      stdin.pause();
+      stdin.removeListener('data', onData);
+      process.stdout.write('\n');
+      resolve(abort ? null : buf);
+    }
+    function onData(chunk) {
+      const s = String(chunk);
+      for (const c of s) {
+        if (c === '\r' || c === '\n') { done(false); return; }
+        if (c === '\u0003') { done(true); return; }
+        if (c === '\u007f' || c === '\b') buf = buf.slice(0, -1);
+        else buf += c;
+      }
+    }
+    try { stdin.setRawMode(true); } catch (e) { resolve(null); return; }
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    stdin.on('data', onData);
+  });
+}
+
+function migrateCore(root, password, recoveryKeyIn) {
+  if (!fs.existsSync(root)) return { error: true, text: '记忆库不存在，请先 yotta-memory init。' };
+  if (isEncrypted(root)) return { error: true, text: '记忆库已启用加密（keys/ 存在），无需迁移。' };
+  if (!hasPlaintextPrivate(root)) return { error: false, text: '无私密明文可迁移（private/ 下无 .md 文件）；如需新建加密库请 init --encrypt。' };
+  const salt = crypto.randomBytes(16);
+  ensureKeysDir(root);
+  fs.writeFileSync(encSaltPath(root), salt);
+  const umk = deriveUmk(password, salt);
+  const rk = crypto.randomBytes(32);
+  fs.writeFileSync(encRecoveryEncPath(root), Buffer.concat([Buffer.from(KEY_MAGIC, 'utf8'), aesEncryptBytes(umk, rk, Buffer.from('recovery', 'utf8'))]));
+  let moved = 0;
+  const owners = collectOwners(root);
+  const self = currentAgent();
+  for (const owner of owners) {
+    const ok = wrapOwnerKey(root, umk, rk, owner);
+    if (self && owner === self) writeOwnerKeyCache(root, owner, ok);
+    for (const t of PRIVATE_LEAF) {
+      const d = path.join(root, PRIVATE_DIR, owner, t);
+      if (!fs.existsSync(d)) continue;
+      for (const f of fs.readdirSync(d)) {
+        if (!f.endsWith('.md')) continue;
+        const fp = path.join(d, f);
+        const text = fs.readFileSync(fp, 'utf8');
+        fs.writeFileSync(fp + ENC_SUFFIX, encryptMemoryText(text, ok));
+        fs.unlinkSync(fp);
+        moved++;
+      }
+    }
+    const pf = path.join(root, PRIVATE_DIR, owner, PROFILE_FILE);
+    if (fs.existsSync(pf)) {
+      const text = fs.readFileSync(pf, 'utf8');
+      fs.writeFileSync(pf + ENC_SUFFIX, encryptMemoryText(text, ok));
+      fs.unlinkSync(pf);
+      moved++;
+    }
+  }
+  buildIndex(root);
+  let tail = '已迁移 ' + moved + ' 个私密文件（' + owners.length + ' 个 owner）到密文。';
+  tail += '\n[恢复钥匙]（务必离线保存，仅此一次，泄露=可解全部私密）: ' + rk.toString('base64');
+  if (self && owners.indexOf(self) !== -1) tail += '\n已为本智能体 ' + self + ' 写入授权缓存，可继续读写自己的私密。';
+  else tail += '\n各智能体需在用户平台授权（yotta-memory view → 授权本智能体）后才能读写自己的私密。';
+  return { error: false, text: tail };
+}
+
+async function cmdMigrate(opts) {
+  const root = userRoot();
+  if (isEncrypted(root)) { console.error('记忆库已启用加密，无需迁移。'); process.exit(2); }
+  if (!hasPlaintextPrivate(root)) { console.error('无私密明文可迁移。'); process.exit(2); }
+  let password = opts.password || process.env.YOTTA_MEMORY_PASS || '';
+  if (!password) {
+    password = await promptPassword('主口令（迁移后私密区加密，勿忘；忘口令可用恢复钥匙重设）: ') || '';
+    if (!password) { console.error('已取消。'); process.exit(2); }
+  }
+  const r = migrateCore(root, password, null);
   console.log(r.text);
+  if (r.error) process.exit(2);
+}
+
+function resetPasswordCore(root, opts) {
+  opts = opts || {};
+  if (!isEncrypted(root)) return { error: true, text: '记忆库未启用加密。' };
+  const salt = loadSalt(root);
+  if (!salt) return { error: true, text: '密钥库损坏（缺 keys/salt）。' };
+  const owners = keyOwners(root).filter(function (o) { return fs.existsSync(encOwnerKeyPath(root, o)); });
+  if (!owners.length) return { error: true, text: '没有可重设的 owner 密钥（keys/ 下无 *.key.enc）。' };
+  const newPass = String(opts.newPassword || '');
+  if (!newPass) return { error: true, text: '请提供新口令（--new-password 或交互输入）。' };
+  if (opts.recoveryKey) {
+    const rk = Buffer.from(String(opts.recoveryKey).trim(), 'base64');
+    if (rk.length !== 32) return { error: true, text: '恢复钥匙格式错误（须为 32 字节 base64）。' };
+    let verified = false;
+    for (const o of owners) { try { unwrapOwnerKeyRecovery(root, o, rk); verified = true; break; } catch (e) {} }
+    if (!verified) return { error: true, text: '恢复钥匙无效（无法解开任何 owner 密钥）。' };
+    const newUmk = deriveUmk(newPass, salt);
+    for (const o of owners) {
+      const ok = unwrapOwnerKeyRecovery(root, o, rk);
+      const aad = Buffer.from('owner:' + o, 'utf8');
+      fs.writeFileSync(encOwnerKeyPath(root, o), Buffer.concat([Buffer.from(KEY_MAGIC, 'utf8'), aesEncryptBytes(newUmk, ok, aad)]));
+    }
+    fs.writeFileSync(encRecoveryEncPath(root), Buffer.concat([Buffer.from(KEY_MAGIC, 'utf8'), aesEncryptBytes(newUmk, rk, Buffer.from('recovery', 'utf8'))]));
+    return { error: false, text: '口令已重设（恢复钥匙验证通过，已重新包裹全部 owner 密钥）。' };
+  }
+  const curPass = String(opts.password || '');
+  if (!curPass) return { error: true, text: '请提供当前口令（--password 或交互输入），或用 --recovery-key。' };
+  const curUmk = deriveUmk(curPass, salt);
+  let verified = false;
+  for (const o of owners) { try { unwrapOwnerKey(root, o, curUmk); verified = true; break; } catch (e) {} }
+  if (!verified) return { error: true, text: '当前口令错误。' };
+  const newUmk = deriveUmk(newPass, salt);
+  for (const o of owners) {
+    const ok = unwrapOwnerKey(root, o, curUmk);
+    const aad = Buffer.from('owner:' + o, 'utf8');
+    fs.writeFileSync(encOwnerKeyPath(root, o), Buffer.concat([Buffer.from(KEY_MAGIC, 'utf8'), aesEncryptBytes(newUmk, ok, aad)]));
+  }
+  fs.writeFileSync(encRecoveryEncPath(root), Buffer.concat([Buffer.from(KEY_MAGIC, 'utf8'), aesEncryptBytes(newUmk, unwrapRecoveryEnc(root, curUmk), Buffer.from('recovery', 'utf8'))]));
+  return { error: false, text: '口令已重设（当前口令验证通过）。' };
+}
+
+async function cmdResetPassword(opts) {
+  const root = userRoot();
+  if (!isEncrypted(root)) { console.error('记忆库未启用加密。'); process.exit(2); }
+  let cur = opts.password || '';
+  let rk = opts.recoveryKey || '';
+  let np = opts.newPassword || process.env.YOTTA_MEMORY_PASS || '';
+  if (!rk && !cur) {
+    cur = await promptPassword('当前口令（或 --recovery-key 用恢复钥匙）: ') || '';
+    if (!cur) { console.error('已取消。'); process.exit(2); }
+  }
+  if (!np) {
+    np = await promptPassword('新口令: ') || '';
+    if (!np) { console.error('已取消。'); process.exit(2); }
+    const np2 = await promptPassword('再次输入确认: ') || '';
+    if (np2 !== np) { console.error('两次输入不一致。'); process.exit(2); }
+  }
+  const r = resetPasswordCore(root, { password: cur, recoveryKey: rk, newPassword: np });
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+
+function keyAuthorizeCore(root, owner, password) {
+  if (!isEncrypted(root)) return { error: true, text: '记忆库未启用加密。' };
+  const salt = loadSalt(root);
+  if (!salt) return { error: true, text: '密钥库损坏（缺 keys/salt）。' };
+  const umk = deriveUmk(password, salt);
+  let ok = null;
+  try { ok = unwrapOwnerKey(root, owner, umk); } catch (e) { ok = null; }
+  if (!ok) {
+    let rk = null;
+    try { rk = unwrapRecoveryEnc(root, umk); } catch (e) { rk = null; }
+    if (!rk) return { error: true, text: '口令错误。' };
+    ok = wrapOwnerKey(root, umk, rk, owner);
+  }
+  writeOwnerKeyCache(root, owner, ok);
+  return { error: false, text: '已授权 ' + owner + ' 读取其私密（写入授权缓存 keys/cache/' + owner + '.key）。' };
+}
+
+function keyRevokeCore(root, owner) {
+  if (!revokeOwnerKeyCache(root, owner)) return { error: false, text: owner + ' 无授权缓存（已是未授权状态）。' };
+  return { error: false, text: '已吊销 ' + owner + ' 的授权缓存（该智能体将无法解密其私密）。' };
+}
+
+function cmdKeyList() {
+  const root = userRoot();
+  if (!isEncrypted(root)) { console.log('记忆库未启用加密。'); return; }
+  const owners = collectOwners(root);
+  const authorized = owners.filter(function (o) { return fs.existsSync(encCachePath(root, o)); });
+  console.log('owner: ' + (owners.length ? owners.join(', ') : '（无）'));
+  console.log('已授权缓存: ' + (authorized.length ? authorized.join(', ') : '（无）'));
+}
+
+async function cmdKeyAuthorize(id, opts) {
+  const root = userRoot();
+  if (!isEncrypted(root)) { console.error('记忆库未启用加密。'); process.exit(2); }
+  if (!id) { console.error('请指定 <id>：yotta-memory key authorize <id>'); process.exit(2); }
+  let password = opts.password || process.env.YOTTA_MEMORY_PASS || '';
+  if (!password) {
+    password = await promptPassword('主口令: ') || '';
+    if (!password) { console.error('已取消。'); process.exit(2); }
+  }
+  const r = keyAuthorizeCore(root, id, password);
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+
+function cmdKeyRevoke(id) {
+  const root = userRoot();
+  if (!id) { console.error('请指定 <id>：yotta-memory key revoke <id>'); process.exit(2); }
+  const r = keyRevokeCore(root, id);
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+
+function viewServerCore(root, port, host) {
+  let session = { umk: null, ownerKeys: {} };
+  const server = http.createServer(function (req, res) {
+    let pathname = '/';
+    try { pathname = new URL(req.url, 'http://' + (req.headers.host || 'localhost')).pathname; } catch (e) {}
+    function json(code, obj) {
+      res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(obj));
+    }
+    function readBody(cb) {
+      let body = '';
+      req.on('data', function (c) { body += c; });
+      req.on('end', function () {
+        let d = {};
+        try { d = JSON.parse(body || '{}'); } catch (e) {}
+        cb(d);
+      });
+    }
+    if (req.method === 'GET' && pathname === '/') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(VIEW_HTML);
+      return;
+    }
+    if (req.method === 'POST' && pathname === '/api/status') {
+      return json(200, { encrypted: isEncrypted(root), unlocked: !!session.umk, version: VERSION });
+    }
+    if (req.method === 'POST' && pathname === '/api/unlock') {
+      return readBody(function (d) {
+        const password = String(d.password || '');
+        const salt = loadSalt(root);
+        if (!salt) return json(400, { error: '记忆库未启用加密。' });
+        const umk = deriveUmk(password, salt);
+        const ownerKeys = {};
+        const owners = keyOwners(root);
+        let verified = false;
+        for (const o of owners) {
+          try { ownerKeys[o] = unwrapOwnerKey(root, o, umk); verified = true; } catch (e) {}
+        }
+        if (!verified) return json(401, { error: '口令错误。' });
+        session = { umk: umk, ownerKeys: ownerKeys };
+        json(200, { ok: true, owners: Object.keys(ownerKeys) });
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/owners') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      const agents = loadAgents(root).agents || {};
+      const owners = keyOwners(root);
+      const all = Array.from(new Set(owners.concat(Object.keys(agents))));
+      return json(200, { owners: all.map(function (o) { return { owner: o, registered: !!agents[o], authorized: !!session.ownerKeys[o] && fs.existsSync(encCachePath(root, o)) }; }) });
+    }
+    if (req.method === 'POST' && pathname === '/api/entries') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return readBody(function (d) {
+        const q = String(d.query || '').toLowerCase();
+        const entries = [];
+        for (const e of (loadIndex(root) || [])) entries.push(e);
+        for (const o of collectOwners(root)) {
+          const key = session.ownerKeys[o];
+          if (!key) continue;
+          try { for (const e of loadOwnerIndex(root, o, key)) entries.push(e); } catch (err) {}
+        }
+        const out = q ? entries.filter(function (e) { return ((e.subject || '') + ' ' + (e.statement || '') + ' ' + e.tags.join(' ')).toLowerCase().indexOf(q) !== -1; }) : entries;
+        out.sort(function (a, b) { return String(b.updated || b.created || '').localeCompare(String(a.updated || a.created || '')); });
+        json(200, { count: out.length, entries: out });
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/export') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      const memories = [];
+      for (const e of (loadIndex(root) || [])) memories.push({ file: e.file, meta: e.meta });
+      for (const o of collectOwners(root)) {
+        const key = session.ownerKeys[o];
+        if (!key) continue;
+        try { for (const e of loadOwnerIndex(root, o, key)) memories.push({ file: e.file, meta: e.meta }); } catch (err) {}
+      }
+      return json(200, { format: 'yottamemory', version: 2, exported: today(), memories: memories });
+    }
+    if (req.method === 'POST' && pathname === '/api/authorize') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return readBody(function (d) {
+        const owner = String(d.owner || '');
+        if (!owner) return json(400, { error: '缺少 owner。' });
+        let ok = session.ownerKeys[owner];
+        let rk = null;
+        try { rk = unwrapRecoveryEnc(root, session.umk); } catch (e) { rk = null; }
+        if (!ok) {
+          if (!rk) return json(400, { error: '密钥库缺少恢复钥匙（recovery.key.enc），无法为新 owner 建钥。' });
+          ok = wrapOwnerKey(root, session.umk, rk, owner);
+          session.ownerKeys[owner] = ok;
+        }
+        writeOwnerKeyCache(root, owner, ok);
+        json(200, { ok: true });
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/revoke') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return readBody(function (d) {
+        revokeOwnerKeyCache(root, String(d.owner || ''));
+        json(200, { ok: true });
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/reset-password') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return readBody(function (d) {
+        const r = resetPasswordCore(root, { password: String(d.currentPassword || ''), recoveryKey: String(d.recoveryKey || ''), newPassword: String(d.newPassword || '') });
+        if (r.error) return json(400, { error: r.text });
+        const salt = loadSalt(root);
+        if (salt) session = { umk: deriveUmk(String(d.newPassword || ''), salt), ownerKeys: {} };
+        json(200, { ok: true, text: r.text });
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/recovery-key') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      const rk = unwrapRecoveryEnc(root, session.umk);
+      if (!rk) return json(400, { error: '未找到恢复钥匙。' });
+      return json(200, { recoveryKey: rk.toString('base64') });
+    }
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('not found');
+  });
+  server.listen(port, host, function () {
+    console.log('yotta-memory 用户查看平台已启动（v' + VERSION + '）');
+    console.log('URL: http://' + host + ':' + port + '（默认仅本机 127.0.0.1；远程需 --host 显式开启）');
+    console.log('记忆库: ' + root);
+    console.log('输入主口令解锁后可浏览 / 搜索 / 导出全部 AI 的记忆（含私密）。');
+    console.log('按 Ctrl+C 停止');
+  });
+  return server;
+}
+
+function cmdView(opts) {
+  const root = userRoot();
+  ensureInit(root);
+  if (!isEncrypted(root)) {
+    console.error('记忆库未启用加密（无 keys/）。yotta-memory view 是加密库的用户查看平台；请先 init --encrypt 或 migrate。');
+    process.exit(2);
+  }
+  const host = opts.host || '127.0.0.1';
+  const port = opts.port || 8788;
+  viewServerCore(root, port, host);
+}
+
+const VIEW_HTML = "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>元忆 · 用户查看平台</title><style>\nbody{font-family:system-ui,-apple-system,\"Microsoft YaHei\",sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1f2328;background:#fafafa}\nh1{font-size:22px} .card{background:#fff;border:1px solid #e2e2e2;border-radius:10px;padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}\nbutton{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;margin:2px;font-size:14px}\nbutton.danger{background:#dc2626} button.ghost{background:#e5e7eb;color:#1f2328}\ninput,select{padding:8px;border:1px solid #c9c9c9;border-radius:6px;margin:2px;font-size:14px;box-sizing:border-box}\ntable{border-collapse:collapse;width:100%;font-size:13px} td,th{border:1px solid #ececec;padding:6px 8px;text-align:left;vertical-align:top}\n.owner{display:inline-flex;align-items:center;gap:6px;border:1px solid #ddd;border-radius:8px;padding:5px 10px;margin:4px 6px 4px 0;background:#f6f8fa}\n.entry{border-bottom:1px solid #eee;padding:8px 0} .meta{color:#8a8a8a;font-size:12px}\n.err{color:#dc2626;margin-top:8px} .ok{color:#16a34a;margin-top:8px}\n#app{display:none} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:12px}\n</style></head><body>\n<h1>元忆 · 用户查看平台 <span id=\"ver\" style=\"font-size:14px;color:#888\"></span></h1>\n<div id=\"lock\" class=\"card\">\n  <p><b>输入主口令解锁</b>（口令只在本地内存派生，不落盘、不发送远端）。忘口令可在 CLI 用恢复钥匙重设：<code>yotta-memory reset-password --recovery-key &lt;钥匙&gt;</code></p>\n  <input type=\"password\" id=\"pw\" placeholder=\"主口令\" style=\"width:260px\">\n  <button onclick=\"unlock()\">解锁</button>\n  <div class=\"err\" id=\"lockerr\"></div>\n</div>\n<div id=\"app\">\n  <div class=\"card\">\n    <b>AI 列表</b>（✅=已授权可读自己私密，🔒=未授权）\n    <div id=\"owners\" style=\"margin-top:8px\"></div>\n  </div>\n  <div class=\"card\">\n    <b>记忆</b>\n    <input id=\"q\" placeholder=\"搜索关键词\" style=\"width:220px\" onkeydown=\"if(event.key==='Enter')load()\">\n    <button onclick=\"load()\">搜索</button>\n    <button class=\"ghost\" onclick=\"doExport()\">导出 JSON</button>\n    <button class=\"ghost\" onclick=\"showRk()\">显示恢复钥匙</button>\n    <span id=\"rkout\" style=\"font-size:12px;color:#888;margin-left:8px\"></span>\n    <div id=\"entries\" style=\"margin-top:10px\"></div>\n  </div>\n  <div class=\"card\">\n    <b>重设口令</b><br>\n    <input type=\"password\" id=\"cur\" placeholder=\"当前口令\">\n    <input type=\"password\" id=\"np1\" placeholder=\"新口令\">\n    <input type=\"password\" id=\"np2\" placeholder=\"确认新口令\">\n    <button onclick=\"resetPw()\">重设</button>\n    <span id=\"pwout\"></span>\n  </div>\n</div>\n<script>\nfunction esc(s){return String(s==null?'':s).replace(/[&<>\"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}\nasync function api(p,b){try{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return await r.json();}catch(e){return{error:String(e)};}}\nasync function boot(){const s=await api('/api/status');document.getElementById('ver').textContent='v'+(s.version||'');if(s.unlocked){showApp();}}\nfunction showApp(){document.getElementById('lock').style.display='none';document.getElementById('app').style.display='block';loadOwners();load();}\nasync function unlock(){const d=await api('/api/unlock',{password:document.getElementById('pw').value});if(d.error){document.getElementById('lockerr').textContent=d.error;return;}showApp();}\nasync function loadOwners(){const d=await api('/api/owners');const box=document.getElementById('owners');box.innerHTML='';if(!d.owners||!d.owners.length){box.innerHTML='（无 owner）';return;}\n  for(const o of d.owners){const c=document.createElement('span');c.className='owner';c.innerHTML=esc(o.owner)+(o.authorized?' ✅':' 🔒')+' <button class=\"ghost\" data-a=\"'+esc(o.owner)+'\">授权</button><button class=\"danger\" data-r=\"'+esc(o.owner)+'\">吊销</button>';box.appendChild(c);}\n  box.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){api('/api/authorize',{owner:b.getAttribute('data-a')}).then(function(){loadOwners();});};});\n  box.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){api('/api/revoke',{owner:b.getAttribute('data-r')}).then(function(){loadOwners();});};});\n}\nasync function load(){const d=await api('/api/entries',{query:document.getElementById('q').value});const box=document.getElementById('entries');box.innerHTML='共 '+d.count+' 条';\n  if(!d.entries)return;for(const e of d.entries){const div=document.createElement('div');div.className='entry';div.innerHTML='<b>['+esc(e.type)+'] '+esc(e.subject)+'</b><div>'+esc(e.statement)+'</div><div class=\"meta\">'+esc(e.file)+' · owner='+esc(e.owner||'-')+' · '+esc(e.updated||e.created||'')+'</div>';box.appendChild(div);}}\nasync function doExport(){const d=await api('/api/export');if(d.error){alert(d.error);return;}const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='yottamemory-view-export.json';a.click();}\nasync function showRk(){const d=await api('/api/recovery-key');document.getElementById('rkout').textContent=d.recoveryKey?('恢复钥匙: '+d.recoveryKey):(d.error||'');}\nasync function resetPw(){const np1=document.getElementById('np1').value,np2=document.getElementById('np2').value;if(np1!==np2){document.getElementById('pwout').innerHTML='<span class=\"err\">两次新口令不一致</span>';return;}\n  const d=await api('/api/reset-password',{currentPassword:document.getElementById('cur').value,newPassword:np1});document.getElementById('pwout').innerHTML=d.error?('<span class=\"err\">'+esc(d.error)+'</span>'):('<span class=\"ok\">'+esc(d.text||'ok')+'</span>');}\nboot();\n</script></body></html>";
+
+// ---- 命令包装（CLI 入口）----
+async function cmdInit(opts) {
+  const root = opts.dir ? path.resolve(String(opts.dir)) : (opts.project ? projectRoot() : userRoot());
+  const fresh = !fs.existsSync(path.join(root, PUBLIC_DIR)) && !fs.existsSync(path.join(root, PRIVATE_DIR)) && !fs.existsSync(path.join(root, INDEX_FILE));
+  const wantEncrypt = opts.encrypt || (!opts.noEncrypt && fresh);
+  let o = Object.assign({}, opts);
+  if (wantEncrypt && !o.password && !process.env.YOTTA_MEMORY_PASS) {
+    const pw = await promptPassword('主口令（启用加密，勿忘；忘口令可用恢复钥匙重设）: ');
+    if (!pw) { console.error('已取消。'); process.exit(2); }
+    const pw2 = await promptPassword('再次输入确认: ');
+    if (pw2 !== pw) { console.error('两次输入不一致。'); process.exit(2); }
+    o.password = pw;
+  }
+  const r = initCore(o);
+  console.log(r.text);
+  if (r.error) process.exit(2);
 }
 function cmdRemember(type, subject, statement, opts) {
   const o = Object.assign({}, opts);
@@ -648,17 +1317,23 @@ function cmdReindex() {
 }
 function collectAll(root) {
   const out = [];
+  const skipped = {};
   for (const fp of collectEntryFiles(root)) {
-    const e = readEntry(fp, root);
-    out.push({ file: e.file, meta: e.meta });
+    const owner = ownerFromPrivatePath(root, fp);
+    if (isEncFile(fp) && !getOwnerKeyFor(root, owner)) { skipped[owner] = true; continue; }
+    try {
+      const e = readEntry(fp, root);
+      out.push({ file: e.file, meta: e.meta });
+    } catch (err) { if (owner) skipped[owner] = true; }
   }
-  return out;
+  return { memories: out, skipped: Object.keys(skipped) };
 }
 function exportCore(root, outPath) {
-  const data = { format: 'yottamemory', version: 1, exported: today(), memories: collectAll(root) };
+  const res = collectAll(root);
+  const data = { format: 'yottamemory', version: 2, exported: today(), memories: res.memories, skippedOwners: res.skipped };
   const target = outPath || path.join(root, 'yottamemory-export-' + today() + '.json');
   fs.writeFileSync(target, JSON.stringify(data, null, 2), 'utf8');
-  return { error: false, text: '已导出 ' + data.memories.length + ' 条记忆 -> ' + target };
+  return { error: false, text: '已导出 ' + data.memories.length + ' 条记忆 -> ' + target + (res.skipped.length ? '（跳过无授权私密 owner: ' + res.skipped.join(', ') + '）' : '') };
 }
 function importCore(root, src) {
   if (!src) return { error: true, text: '请提供 JSON 文件路径' };
@@ -673,16 +1348,21 @@ function importCore(root, src) {
   catch (e) { return { error: true, text: 'JSON 解析失败: ' + (e && e.message ? e.message : String(e)) }; }
   if (!data.memories || !Array.isArray(data.memories)) return { error: true, text: 'JSON 格式不正确（缺少 memories 数组）' };
   ensureInit(root);
-  let m = 0;
+  const encrypted = isEncrypted(root);
+  let m = 0, skippedPriv = 0;
   for (const item of data.memories) {
     const meta = item.meta || {};
     const t = (meta.type || 'FACT').toUpperCase();
     if (!TYPE_DIRS[t]) continue;
-    const dir = path.join(root, typeSubdir(t, meta.owner || ''));
+    const owner = meta.owner || '';
+    const scope = meta.scope || defaultScope(t);
+    if (encrypted && scope === 'private' && !getOwnerKeyFor(root, owner)) { skippedPriv++; continue; }
+    const dir = path.join(root, typeSubdir(t, owner));
     fs.mkdirSync(dir, { recursive: true });
     let seq = nextSeq(dir);
-    let file = path.join(dir, today() + '-' + seq + '.md');
-    while (fs.existsSync(file)) { seq = String(parseInt(seq, 10) + 1).padStart(4, '0'); file = path.join(dir, today() + '-' + seq + '.md'); }
+    const suffix = (encrypted && scope === 'private') ? ENC_SUFFIX : '';
+    let file = path.join(dir, today() + '-' + seq + '.md' + suffix);
+    while (fs.existsSync(file)) { seq = String(parseInt(seq, 10) + 1).padStart(4, '0'); file = path.join(dir, today() + '-' + seq + '.md' + suffix); }
     const rec = {
       type: t,
       subject: meta.subject || '',
@@ -694,16 +1374,16 @@ function importCore(root, src) {
       immutable: meta.immutable === true || meta.immutable === 'true',
       source: meta.source || '',
       weight: (parseFloat(meta.weight) > 0 ? parseFloat(meta.weight) : 1.0),
-      scope: meta.scope || defaultScope(t),
-      owner: meta.owner || '',
+      scope: scope,
+      owner: owner,
       access_count: parseInt(meta.access_count || '0', 10) || 0,
       last_accessed: meta.last_accessed || '',
     };
-    fs.writeFileSync(file, frontmatterToText(rec, rec.statement), 'utf8');
+    writeMemoryText(root, file, frontmatterToText(rec, rec.statement), owner);
     upsertIndexEntry(root, readEntry(file, root));
     m++;
   }
-  return { error: false, text: '已导入 ' + m + ' 条记忆 -> ' + root };
+  return { error: false, text: '已导入 ' + m + ' 条记忆 -> ' + root + (skippedPriv ? '（跳过 ' + skippedPriv + ' 条无授权私密）' : '') };
 }
 function cmdExport(outPath) {
   const r = exportCore(userRoot(), outPath || 'yottamemory-export-' + today() + '.json');
@@ -777,9 +1457,12 @@ function findSelfProfile(root, agentId) {
   const dir = selfPrefsDir(root, agentId);
   if (!fs.existsSync(dir)) return '';
   for (const f of fs.readdirSync(dir)) {
+    if (!/\.md(\.enc)?$/.test(f)) continue;
     const fp = path.join(dir, f);
     if (!fs.statSync(fp).isFile()) continue;
-    const meta = parseFrontmatter(fs.readFileSync(fp, 'utf8')).meta;
+    let text;
+    try { text = readMemoryText(root, fp, agentId); } catch (err) { continue; }
+    const meta = parseFrontmatter(text).meta;
     if (meta.subject === SELF_PROFILE_SUBJECT && (meta.owner || '') === agentId) return f;
   }
   return '';
@@ -809,11 +1492,11 @@ function writeSelfProfile(root, agentId, extra) {
   extra = extra || {};
   const dir = selfPrefsDir(root, agentId);
   fs.mkdirSync(dir, { recursive: true });
+  const encrypted = isEncrypted(root);
   const existing = findSelfProfile(root, agentId);
   if (existing) {
-    // 已有自我档案：合并 kv 字段更新（不重复建文件）
     const fp = path.join(dir, existing);
-    const parsed = parseFrontmatter(fs.readFileSync(fp, 'utf8'));
+    const parsed = parseFrontmatter(readMemoryText(root, fp, agentId));
     const kv = parseKvBody(parsed.body);
     kv.agent_id = agentId;
     kv.host = os.hostname();
@@ -828,12 +1511,12 @@ function writeSelfProfile(root, agentId, extra) {
     const meta = Object.assign({}, parsed.meta);
     meta.updated = today();
     meta.statement = body;
-    fs.writeFileSync(fp, frontmatterToText(meta, body), 'utf8');
+    writeMemoryText(root, fp, frontmatterToText(meta, body), agentId);
     upsertIndexEntry(root, readEntry(fp, root));
     return fp;
   }
   const seq = nextSeq(dir);
-  const file = path.join(dir, today() + '-' + seq + '.md');
+  const file = path.join(dir, today() + '-' + seq + '.md' + (encrypted ? ENC_SUFFIX : ''));
   const body = selfProfileBody(agentId, root, extra);
   const rec = {
     type: 'PREF', subject: SELF_PROFILE_SUBJECT, statement: body,
@@ -841,7 +1524,7 @@ function writeSelfProfile(root, agentId, extra) {
     tags: ['自我档案'], immutable: false,
     scope: 'private', owner: agentId, access_count: 0, last_accessed: '',
   };
-  fs.writeFileSync(file, frontmatterToText(rec, body), 'utf8');
+  writeMemoryText(root, file, frontmatterToText(rec, body), agentId);
   upsertIndexEntry(root, readEntry(file, root));
   return file;
 }
@@ -897,7 +1580,7 @@ function cmdWhoami() {
   console.log('登记状态: ' + reg);
   console.log('自我档案: ' + (profile ? profile : '未写入（请执行 yotta-memory iam ' + id + '）'));
   if (profile) {
-    const kv = parseKvBody(parseFrontmatter(fs.readFileSync(path.join(selfPrefsDir(root, id), profile), 'utf8')).body);
+    const kv = selfProfileKv(root, id);
     if (kv.agent_name) console.log('显示名: ' + kv.agent_name);
     if (kv.user_name) console.log('用户: ' + kv.user_name);
     if (kv.relationship) console.log('关系: ' + kv.relationship);
@@ -913,9 +1596,11 @@ function profileGroups(root, owner) {
     const dir = path.join(root, PRIVATE_DIR, owner, t);
     if (!fs.existsSync(dir)) continue;
     for (const f of fs.readdirSync(dir)) {
+      if (!/\.md(\.enc)?$/.test(f)) continue;
       const fp = path.join(dir, f);
       if (!fs.statSync(fp).isFile()) continue;
-      const e = readEntry(fp, root);
+      let e;
+      try { e = readEntry(fp, root); } catch (err) { continue; }
       const key = e.type + '\u0000' + (e.subject || '') + '\u0000' + e.tags.join(',');
       if (!map[key]) {
         map[key] = { type: e.type, subject: e.subject || '', tags: e.tags || [], items: [] };
@@ -940,6 +1625,9 @@ function profileCore(opts) {
   }
   const ownerDir = path.join(root, PRIVATE_DIR, owner);
   if (!fs.existsSync(ownerDir)) return { error: false, text: '该智能体（' + owner + '）暂无画像：private/' + owner + '/ 不存在或为空。' };
+  if (isEncrypted(root) && !getOwnerKeyFor(root, owner)) {
+    return { error: true, exitCode: 3, text: '私密区已加密：当前无 ' + owner + ' 的授权密钥，请在用户平台授权（yotta-memory view → 授权本智能体）后生成画像。' };
+  }
   const groups = profileGroups(root, owner);
   if (!groups.length) return { error: false, text: '该智能体（' + owner + '）暂无画像：private/' + owner + '/ 下无 PREF / BOUND / COMMIT 条目。' };
   const lines = [];
@@ -959,8 +1647,7 @@ function profileCore(opts) {
     lines.push('');
   }
   const text = lines.join('\n');
-  const outFile = path.join(ownerDir, PROFILE_FILE);
-  fs.writeFileSync(outFile, text + '\n', 'utf8');
+  const outFile = writeProfileText(root, owner, text + '\n');
   return { error: false, text: text + '\n\n[已写入] ' + outFile };
 }
 function cmdProfile(opts) {
@@ -974,7 +1661,9 @@ function cmdProfile(opts) {
 function selfProfileKv(root, id) {
   const profile = findSelfProfile(root, id);
   if (!profile) return {};
-  return parseKvBody(parseFrontmatter(fs.readFileSync(path.join(selfPrefsDir(root, id), profile), 'utf8')).body);
+  let text;
+  try { text = readMemoryText(root, path.join(selfPrefsDir(root, id), profile), id); } catch (e) { return {}; }
+  return parseKvBody(parseFrontmatter(text).body);
 }
 function contextCore(opts) {
   opts = opts || {};
@@ -987,6 +1676,7 @@ function contextCore(opts) {
   const unsafe = !!opts.unsafe;
   const budget = opts.budget ? parseInt(opts.budget, 10) : 0;
   const lines = [];
+  const FENCE = String.fromCharCode(96, 96, 96);
   function usedChars() { return lines.reduce(function (s, x) { return s + String(x).length + 1; }, 0); }
   lines.push('# 开工上下文包（yotta-memory context）');
   lines.push('');
@@ -1013,18 +1703,22 @@ function contextCore(opts) {
   lines.push('## 2. 用户画像摘要');
   lines.push('');
   if (owner) {
-    const pf = path.join(root, PRIVATE_DIR, owner, PROFILE_FILE);
-    if (fs.existsSync(pf)) {
-      lines.push('```markdown');
-      lines.push(fs.readFileSync(pf, 'utf8').trim());
-      lines.push('```');
+    let pf = profilePathFor(root, owner);
+    let pfText = null;
+    if (fs.existsSync(pf)) { try { pfText = readProfileText(root, owner); } catch (e) { pfText = null; } }
+    if (pfText !== null && pfText !== undefined) {
+      lines.push(FENCE + 'markdown');
+      lines.push(pfText.trim());
+      lines.push(FENCE);
     } else {
       const pr = profileCore({ owner: owner, unsafe: unsafe, selfAgent: selfAgent });
+      pf = profilePathFor(root, owner);
       if (!pr.error && pr.text.indexOf('[已写入]') !== -1 && fs.existsSync(pf)) {
         lines.push('（画像不存在，已自动生成一次，见下）');
-        lines.push('```markdown');
-        lines.push(fs.readFileSync(pf, 'utf8').trim());
-        lines.push('```');
+        lines.push(FENCE + 'markdown');
+        let t2 = null; try { t2 = readProfileText(root, owner); } catch (e) {}
+        lines.push((t2 === null || t2 === undefined) ? '' : t2.trim());
+        lines.push(FENCE);
       } else {
         lines.push('（该身份暂无画像；可运行 yotta-memory profile 生成）');
       }
@@ -1076,6 +1770,21 @@ function contextCore(opts) {
   }
   if (!commits.length) lines.push('（无）');
   for (const e of commits) lines.push('- ' + (e.subject || '承诺') + ': ' + e.statement);
+  lines.push('');
+  lines.push('## 6. 收工纪律');
+  lines.push('');
+  const allEntries = [];
+  for (const r of roots) for (const e of ensureIndex(r)) allEntries.push(e);
+  const myCommits = allEntries.filter(function (e) { return e.type === 'COMMIT' && classifyRead(e, owner, '', unsafe, selfAgent) !== 'denied'; });
+  if (!myCommits.length) {
+    lines.push('- 最近承诺: 无（收工请补 COMMIT / 交接锚点）');
+  } else {
+    const latest = myCommits.map(function (e) { return e.updated || e.created || ''; }).sort().pop();
+    const d = daysBetween(latest, today());
+    lines.push('- 最近承诺: ' + latest + (d > 7 ? '（超期 ' + d + ' 天，请补 COMMIT）' : ''));
+  }
+  const oldCount = allEntries.filter(function (e) { return e.created && daysBetween(e.created, today()) > 180 && classifyRead(e, owner, '', unsafe, selfAgent) !== 'denied'; }).length;
+  if (oldCount > 0) lines.push('- 归档提醒: ' + oldCount + ' 条超 180 天，建议 archive');
   return { error: false, exitCode: 0, text: lines.join('\n') };
 }
 function cmdContext(opts) {
@@ -1260,7 +1969,7 @@ function cmdServe(opts) {
   });
 }
 
-// ---- stdio 本地零进程模式（照灵魂盘：客户端按需拉起 CLI）----
+// ---- stdio 本地零进程模式（客户端按需拉起 CLI）----
 function cmdServeStdio() {
   const root = userRoot();
   ensureInit(root);
@@ -1719,7 +2428,11 @@ function usage() {
     'yotta-memory v' + VERSION + ' — 元忆：有权限边界的文件式智能体记忆',
     '',
     '用法:',
-    '  yotta-memory init [--project] [--dir <目录>]  初始化记忆库（默认用户级；--dir 显式指定位置）',
+  'yotta-memory init [--project] [--dir <目录>] [--encrypt|--no-encrypt]  初始化记忆库（新建默认加密：需主口令 + 恢复钥匙；--no-encrypt 降级明文）',
+  'yotta-memory migrate    把明文私密区迁移为密文（需主口令；迁移后打印恢复钥匙）',
+  'yotta-memory view [--port 8788] [--host 127.0.0.1]  启动用户查看平台（口令解锁浏览/搜索/导出全部 AI 记忆 + 授权/吊销 AI）',
+  'yotta-memory reset-password [--password <当前> | --recovery-key <钥匙>] [--new-password <新>]  重设主口令（忘口令用恢复钥匙）',
+  'yotta-memory key list | authorize <id> | revoke <id>  管理 AI 的私密读取授权缓存（authorize 需主口令）',
     '  yotta-memory config set memory_home <目录>  持久记住记忆库位置',
     '  yotta-memory config get                   查看当前配置与生效位置',
     '  yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]   写入记忆（--source 记录来源；--weight 重要性权重默认 1.0 去重取 max；--verify 写后回读校验；--no-hint 关闭类型启发式提示）',
@@ -1747,12 +2460,12 @@ function usage() {
     '',
   ].join('\n'));
 }
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   if (!args.length) { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key']);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--version' || a === '-v') { console.log(VERSION); return; }
@@ -1766,6 +2479,8 @@ function main() {
     else if (a === '--force') opts.force = true;
     else if (a === '--verify') opts.verify = true;
     else if (a === '--no-hint') opts.noHint = true;
+    else if (a === '--encrypt') opts.encrypt = true;
+    else if (a === '--no-encrypt') opts.noEncrypt = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;
@@ -1785,6 +2500,9 @@ function main() {
       else if (a === '--source') opts.source = v;
       else if (a === '--weight') opts.weight = parseFloat(v);
       else if (a === '--budget') opts.budget = parseInt(v, 10) || 0;
+      else if (a === '--password') opts.password = v;
+      else if (a === '--new-password') opts.newPassword = v;
+      else if (a === '--recovery-key') opts.recoveryKey = v;
     } else if (a.startsWith('--')) {
       console.error('未知选项: ' + a);
       process.exit(2);
@@ -1795,7 +2513,7 @@ function main() {
   const first = positional[0];
   const rest = positional.slice(1);
   switch (first) {
-    case 'init': cmdInit(opts); break;
+    case 'init': await cmdInit(opts); break;
     case 'whoami': cmdWhoami(); break;
     case 'iam': cmdIam(rest[0], opts); break;
     case 'config': {
@@ -1822,6 +2540,17 @@ function main() {
       else { console.error('token 子命令: new --agent <id> / list / revoke --agent <id>'); process.exit(2); }
       break;
     }
+    case 'migrate': await cmdMigrate(opts); break;
+    case 'view': cmdView(opts); break;
+    case 'reset-password': await cmdResetPassword(opts); break;
+    case 'key': {
+      const sub = rest[0];
+      if (sub === 'list') cmdKeyList();
+      else if (sub === 'authorize') await cmdKeyAuthorize(rest[1], opts);
+      else if (sub === 'revoke') cmdKeyRevoke(rest[1]);
+      else { console.error('key 子命令: list / authorize <id> / revoke <id>'); process.exit(2); }
+      break;
+    }
     case 'serve': cmdServe(opts); break;
     case 'lan': {
       const sub = rest[0];
@@ -1839,7 +2568,7 @@ function main() {
   }
 }
 
-if (require.main === module) main();
+if (require.main === module) { main().catch(function (e) { console.error('错误: ' + (e && e.message ? e.message : String(e))); process.exit(2); }); }
 module.exports = {
   VERSION: VERSION,
   userRoot: userRoot,
@@ -1903,5 +2632,39 @@ module.exports = {
   cmdLanLinuxEnable: cmdLanLinuxEnable,
   cmdLanLinuxDisable: cmdLanLinuxDisable,
   cmdLanLinuxStatus: cmdLanLinuxStatus,
+  isEncrypted: isEncrypted,
+  collectOwners: collectOwners,
+  hasPlaintextPrivate: hasPlaintextPrivate,
+  initEncryptionCore: initEncryptionCore,
+  deriveUmk: deriveUmk,
+  loadSalt: loadSalt,
+  wrapOwnerKey: wrapOwnerKey,
+  unwrapOwnerKey: unwrapOwnerKey,
+  unwrapOwnerKeyRecovery: unwrapOwnerKeyRecovery,
+  unwrapRecoveryEnc: unwrapRecoveryEnc,
+  writeOwnerKeyCache: writeOwnerKeyCache,
+  revokeOwnerKeyCache: revokeOwnerKeyCache,
+  loadOwnerKeyCache: loadOwnerKeyCache,
+  getOwnerKeyFor: getOwnerKeyFor,
+  encryptMemoryText: encryptMemoryText,
+  decryptMemoryText: decryptMemoryText,
+  readMemoryText: readMemoryText,
+  writeMemoryText: writeMemoryText,
+  loadOwnerIndex: loadOwnerIndex,
+  saveOwnerIndex: saveOwnerIndex,
+  ensureIndex: ensureIndex,
+  loadIndex: loadIndex,
+  ownerFromPrivatePath: ownerFromPrivatePath,
+  isEncFile: isEncFile,
+  profilePathFor: profilePathFor,
+  readProfileText: readProfileText,
+  writeProfileText: writeProfileText,
+  migrateCore: migrateCore,
+  resetPasswordCore: resetPasswordCore,
+  keyAuthorizeCore: keyAuthorizeCore,
+  keyRevokeCore: keyRevokeCore,
+  promptPassword: promptPassword,
+  initCore: initCore,
+  viewServerCore: viewServerCore,
 
 };

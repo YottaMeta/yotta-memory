@@ -1,4 +1,4 @@
-# yotta-memory 协议规范 v0.6.5
+# yotta-memory 协议规范 v0.7.0
 
 > 本文件定义 yotta-memory 记忆标准：存储位置、目录结构、文件格式、类型体系与 CLI 命令参考。
 > 目标：任何支持 Agent Skills 开放标准的智能体，装完即可读写同一份记忆。
@@ -25,7 +25,8 @@
 │       ├── commits/        # COMMIT 承诺（该 owner 私密）
 │       └── profile.md      # 用户画像（profile 命令生成，零推断，可再生成）
 ├── .archive/               # 归档区（archive 命令移入）
-├── index.json              # 反向索引 + TF 打分（见下方说明）
+├── index.json              # 公共 FACT 索引 + TF 打分（加密库只含公共条目）
+├── keys/                   # 加密库密钥库（v0.7）：salt / <owner>.key.enc(UMK 包裹) / <owner>.key.recovery(恢复钥匙包裹) / recovery.key.enc / cache/<id>.key(授权缓存 600)
 ├── agents.json             # 智能体身份登记表（iam 写入，唯一性强制）
 └── README.md               # 记忆库说明
 ```
@@ -43,7 +44,7 @@
 
 ## 3. 文件格式
 
-每个记忆一条独立 `.md` 文件，文件名 `<YYYY-MM-DD>-<NNNN>.md`（NNNN 为当日序号）：
+每个记忆一条独立 `.md` 文件，文件名 `<YYYY-MM-DD>-<NNNN>.md`（NNNN 为当日序号）；**加密库（v0.7）私密文件为 `<YYYY-MM-DD>-<NNNN>.md.enc`（头 `YTMENC1`）**，公开 FACT 仍为明文 `.md`：
 
 ```markdown
 ---
@@ -78,6 +79,37 @@ immutable: false
 | `weight` | 否 | 重要性权重（默认 1.0，>1 提权 / <1 降权），去重时取 max |
 | `access_count` | 否 | 命中次数，recall 命中展示集时 +1 |
 | `last_accessed` | 否 | 最近访问日期 `YYYY-MM-DD` |
+
+## 3.5 加密格式（v0.7，私密区机制层机密保护）
+
+> 公共 FACT 明文；私密区（prefs/bounds/commits + profile）文件级加密。用户是数据所有者，天然可解全部；不承诺对抗同一 OS 用户下的恶意进程。
+
+### 密钥体系（信封加密，零依赖，Node 内置 crypto）
+- **UMK（用户主密钥）**：主口令 PBKDF2-SHA256（600000 次迭代 + 随机 16B 盐，盐存 `keys/salt`）派生，永不落盘明文。
+- **Owner Key**：每 owner 随机 32B；被 UMK 包裹存 `keys/<owner>.key.enc`（头 `YTMKEY1`，AAD=`owner:<id>`），被恢复钥匙包裹存 `keys/<owner>.key.recovery`。
+- **恢复钥匙（RK）**：随机 32B；被 UMK 包裹存 `keys/recovery.key.enc`（AAD=`recovery`），初始化/迁移时向用户打印一次（base64）。忘口令时用户提供 RK → 解开 `*.key.recovery` → 重设口令。
+- **授权缓存**：平台授权后把 owner key 明文写 `keys/cache/<id>.key`（文件权限 0600，仅属主可读写）；AI 侧只持有自己这把缓存 key，UMK 永不接触 AI。`key revoke` = 删除缓存文件。
+
+### 密文记忆文件（`.md.enc`，头 `YTMENC1`）
+```
+magic "YTMENC1" (7B)
+| wkNonce(12B) | wkTag(16B) | wrappedFileKey(32B)   # AES-256-GCM(OwnerKey, FileKey), AAD="filekey"
+| dataNonce(12B) | dataTag(16B) | ciphertext           # AES-256-GCM(FileKey, plaintext UTF-8), AAD="file"
+```
+- FileKey 每文件随机 32B，便于单文件重加密/轮换。
+
+### 加密索引（`private/<owner>/index.enc`，头 `YTMIDX1`）
+```
+magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, updated, entries[]})
+```
+- 用该 owner 的 Owner Key 加密（AAD=`index:<owner>`）；AI 解自己索引一次 → 内存全文 TF 检索 → 只解命中文件。公共 `index.json` 只含 FACT 条目。
+
+### 命令扩展
+- `init [--encrypt|--no-encrypt]`：新建默认加密（需主口令，打印恢复钥匙）；`--no-encrypt` 明文降级。
+- `migrate`：明文私密区 → 密文（需主口令；打印恢复钥匙；当前智能体自动授权缓存）。
+- `view [--port 8788] [--host 127.0.0.1]`：用户查看平台（本机 Web；口令解锁 → 浏览/搜索/导出全部；授权/吊销 AI；重设口令；显示恢复钥匙）。
+- `reset-password [--password <当前> | --recovery-key <钥匙>] [--new-password <新>]`：重设主口令并重新包裹全部 owner 密钥。
+- `key list | authorize <id> | revoke <id>`：授权缓存管理（authorize 需主口令）。
 
 ## 4. 类型体系
 
@@ -147,7 +179,7 @@ immutable: false
 - `remember ... --verify`：写后自动回读校验（recall 命中刚写入条目），输出「已写回读 OK」。
 - `remember ... --no-hint`：关闭类型启发式提示。默认开启：statement 含主观/关系词（用户 / 偏好 / 喜欢 / 关系 / 称呼 等）且 type=FACT 时 stdout 提示「疑似用户偏好 / 关系，建议 PREF」，仅提示不拦截。
 - `remember ... --source <来源>`：记录来源（如 `对话` / `推断` / `交接`）。
-- `remember ... --weight <0..>`：重要性权重（默认 1.0，>1 提权 / <1 降权）；去重更新时 `weight` 取 max（多次印证自动提权，与灵魂盘 record.py 一致）。
+- `remember ... --weight <0..>`：重要性权重（默认 1.0，>1 提权 / <1 降权）；去重更新时 `weight` 取 max（多次印证自动提权）。
 - `iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]`：自我档案 PREF 扩展 `agent_name / user_name / relationship`；不带新参数行为与 0.4.2 一致。
 ### 去重与更新
 
@@ -157,5 +189,4 @@ immutable: false
 ## 6. 与其他系统互操作
 
 - **git**：整个记忆库可纳入版本控制，回滚 / 审计 / 团队同步。
-- **灵魂盘（Soul Framework）**：类型体系同源（FACT/PREF/BOUND/COMMIT）；`export` 出的 JSON 可作迁移中间格式。
 - **Agent Skills 标准**：本技能 SKILL.md 符合 agentskills.io 开放标准，支持 npx skills 安装。

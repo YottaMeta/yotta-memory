@@ -7,6 +7,7 @@
 1. 这是什么
 2. 安装
 3. 本机单机使用
+3.5 私密区加密（v0.7，推荐）
 4. 便携记忆盘 · 记忆引擎主机篇（Linux / Windows）
 5. 智能体接入篇（本机 / 局域网其它主机）
 6. CLI 命令速查
@@ -38,7 +39,7 @@
 |---|---|---|
 | npm 全局（推荐） | `npm i -g @yottameta/yotta-memory` | 长期使用 |
 | npx 临时 | `npx -y @yottameta/yotta-memory` | 临时试用 |
-| install.sh | `bash <(curl -s https://raw.githubusercontent.com/YottaMeta/yotta-memory/main/install.sh)` | 离线 / 无 npm |
+| install.sh | git clone 仓库后 `bash install.sh -g`（或手动下载 install.sh 执行）| 离线 / 国内 / 无 npm |
 
 安装后验证：`yotta-memory --version` 能输出版本号即成功。
 
@@ -104,6 +105,32 @@ statement: 本周完成发布
 
 手动改过文件后运行 `yotta-memory reindex` 重建索引，`recall` 才能按索引检索到。整个记忆目录可以用 git 做版本管理与回滚。
 
+
+## 3.5 私密区加密（v0.7，推荐）
+
+私密区（PREF / BOUND / COMMIT）默认落盘为**密文**（AES-256-GCM 信封加密），任何没有对应密钥的 AI 即使读到文件也解不开；公共 FACT 保持明文共享。用户通过**用户查看平台**持主口令解锁查看全部记忆。
+
+**启用与迁移**
+
+- **新库**：`yotta-memory init`（新建默认加密）→ 输入主口令两次 → **抄下打印的恢复钥匙**（44 位 base64，离线保存；忘口令时用它重设）。不要加密用 `--no-encrypt`。
+- **老明文库升级**：`yotta-memory migrate` → 输入主口令 → 私密文件逐个加密、明文删除 → 抄下恢复钥匙。
+
+**用户查看平台（看所有 AI 的记忆）**
+
+`yotta-memory view` → 浏览器打开 http://127.0.0.1:8788 → 输入主口令解锁 → 浏览 / 搜索 / 导出全部记忆（含各 AI 私密）；也可在此**授权 / 吊销**某 AI 读取其私密、**重设口令**、**查看恢复钥匙**。口令只在本地内存派生，不落盘、不发远端；默认仅本机，远程需 `--host` 显式开启。
+
+**AI 接入加密库**
+
+1. 该 AI 声明身份（`iam` / MCP 配置 `YOTTA_AGENT_ID`）。
+2. 用户在平台对其点一次「授权」→ 平台把该 AI 的 owner key 写入授权缓存（`keys/cache/<id>.key`，600 权限）。
+3. 之后该 AI 正常 `remember / recall / profile / context`，读写自动加解密；未授权时写私密会提示「需在用户平台授权」，公共 FACT 不受影响。
+
+**口令管理**
+
+- 重设口令：`yotta-memory reset-password`（输入当前口令），或忘口令时 `--recovery-key <恢复钥匙>`。
+- 吊销某 AI：`yotta-memory key revoke <id>`（立即失效）。
+- 注意：**口令即主密钥**，忘口令且丢失恢复钥匙 = 密文私密不可恢复（公共 FACT 仍在）。
+
 ## 4. 便携记忆盘 · 记忆引擎主机篇
 
 场景：记忆放在一台主机上（Linux / Windows 均可），本机直接 CLI 读写；局域网内其它主机上的 AI 智能体经 MCP 远程接入。引擎主机只需装 CLI，不需要装任何 AI 智能体。
@@ -139,7 +166,7 @@ yotta-memory lan status              # 查看状态
 yotta-memory lan disable             # 取消
 ```
 
-> 说明：`lan enable` 默认「登录后自启」；如需系统级（整机、开机即启）服务，可手动创建 `/etc/systemd/system/yotta-memory.service`（ExecStart 指向 `which yotta-memory` 实际路径）并 `sudo systemctl enable --now yotta-memory`；桌面环境也可在 `~/.config/autostart/` 放置 `yotta-memory.desktop` 实现图形登录自启。
+**说明**：`lan enable` 默认「登录后自启」；如需系统级（整机、开机即启）服务，可手动创建 systemd 单元 `/etc/systemd/system/yotta-memory.service`（ExecStart 指向 `which yotta-memory` 实际路径），再以管理员执行 systemd 的 enable --now 启用；桌面环境也可在 `~/.config/autostart/` 放置 `yotta-memory.desktop` 实现图形登录自启。
 
 **第 4 步：为局域网其它主机的智能体生成访问 token**
 
@@ -262,7 +289,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 3. 端口对吗？默认 8787，两端要一致。
 4. 防火墙放行了吗？Linux：`sudo ufw status`，未放行则 `sudo ufw allow 8787/tcp`；Windows：允许首次监听的入站请求。
 5. token 有效吗？记忆盘主机执行 `yotta-memory token list` 看该智能体是否登记；无效就 `token new --agent <id>` 重新生成。
-6. 网络通吗？任意一台主机执行 `curl http://<引擎IP>:8787/mcp`：
+6. 网络通吗？任意一台主机用浏览器或命令行访问 `http://<引擎IP>:8787/mcp`：
    - 返回 401：服务在运行，是鉴权问题（token / 请求头不对）。
    - 连接被拒 / 超时：服务没启动，或防火墙拦截。
 

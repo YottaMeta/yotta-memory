@@ -1,14 +1,14 @@
 ---
 name: yotta-memory
 description: "元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、记忆守则、profile、context、越用越懂"
-version: 0.6.5
+version: 0.7.0
 license: MIT
 ---
 
 # yotta-memory（元忆）— 有权限边界的文件式智能体记忆
 
 > 一句话：元忆 —— 有权限边界的文件式智能体记忆（不注入、可 diff、能回滚；FACT 共享、PREF / BOUND / COMMIT 私密隔离）。
-> 版本：0.6.5 | 最后更新：2026-08-26
+> 版本：0.7.0 | 最后更新：2026-08-27
 
 ## 这是什么
 
@@ -35,7 +35,7 @@ license: MIT
 
 ## 记忆守则（Memory Doctrine，v0.6.0）
 
-> 出厂规则层：把灵魂盘「越用越懂」机制固化进记忆引擎——只注入**规则与机制**，不注入任何人格数据（出厂零数据）。来源：灵魂盘 core/rules（psychology / user-analysis / active-memory / boundaries / host-isolation）。
+> 出厂规则层：把「越用越懂」机制固化进记忆引擎——只注入**规则与机制**，不注入任何人格数据（出厂零数据）。
 
 ### 1. 类型红线（写前必选）
 
@@ -105,12 +105,22 @@ license: MIT
 
 ### 开工第一步：确认记忆位置 + 智能体身份（每次会话先做，必做）
 
+**第 0 步：CLI 就绪检查（未装 → 🔒 征得同意后自动安装）**
+
+1. 运行 `yotta-memory --version`（或 `command -v yotta-memory` / `where yotta-memory`）确认 CLI 已装。
+   - 已装 → 进入 A。
+   - 未装 → 🔒 **征得同意后**自动安装（三选一，AI 判断；装后回读 `--version` 出版本即就绪）：
+     - 临时使用：`npx -y @yottameta/yotta-memory`
+     - 长期使用：`npm i -g @yottameta/yotta-memory`
+     - 离线 / 国内 / 无 npm：git clone 仓库（或手动下载 install.sh）后执行 `bash install.sh -g`
+
 **A. 确认记忆库位置**（AI 不会自动知道记忆库在哪，先检测，避免「recall 读空库 / 错库」）：
 
 1. 运行 `yotta-memory config get`。
    - 输出 `memory_home: <目录>`（已显式设置）→ 直接用该位置。
    - 输出 `memory_home: (未设置，默认 ~/.yottamemory)` → 🔒 征得同意后引导设置：问用户用默认还是指定目录（项目级 `<repo>/.yottamemory`、记忆盘等），确认后 AI 执行 `yotta-memory config set memory_home <目录>`，回读 `config get` 验证。
 2. **已有记忆**：目标目录已存在 `facts/` 等子目录或 `index.json` → 直接 recall；全新目录 → 按「便携记忆盘模式 §0.3」初始化。
+3. **私密区已加密（存在 `keys/`）**：先 `yotta-memory key list` 确认本智能体是否有授权缓存；没有 → 提醒用户 `yotta-memory view` → 在平台「授权本智能体」后再读写私密（公共 FACT 不受影响）。
 
 **B. 确认本智能体唯一身份（强制，写私密记忆前必做）**：
 
@@ -144,7 +154,11 @@ license: MIT
 
 | 命令 | 作用 |
 |---|---|
-| `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库（默认用户级；--dir 显式指定位置）|
+| `yotta-memory init [--project] [--dir <目录>] [--encrypt|--no-encrypt]` | 初始化（**新建默认加密**：设主口令 + 抄下恢复钥匙；`--no-encrypt` 降级明文；老明文库用 `migrate`）|
+| `yotta-memory migrate` | 明文私密区 → 密文迁移（需主口令；迁移后打印恢复钥匙；当前智能体自动获得授权缓存）|
+| `yotta-memory view [--port 8788] [--host 127.0.0.1]` | 用户查看平台（本机 Web：口令解锁浏览 / 搜索 / 导出全部 AI 记忆 + 授权 / 吊销 AI + 重设口令 + 显示恢复钥匙）|
+| `yotta-memory reset-password [--password <当前> | --recovery-key <钥匙>] [--new-password <新>]` | 重设主口令（忘口令用恢复钥匙）|
+| `yotta-memory key list / authorize <id> / revoke <id>` | 管理 AI 私密读取授权缓存（authorize 需主口令；revoke 立即吊销该 AI 解密能力）|
 | `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入（同 subject+statement 自动更新；--owner 标注归属；--source 记录来源；--weight 重要性权重默认 1.0、去重取 max；--verify 写后回读校验；--no-hint 关闭类型启发式提示）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索（索引+TF 打分，读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 只作身份声明/展示，不授予跨读——读他人私密同样要授权；项目级优先）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
@@ -168,15 +182,40 @@ license: MIT
 <root>/
 ├── facts/                    # FACT 事实（公共可共享）
 ├── private/<owner>/<type>/   # PREF / BOUND / COMMIT，按智能体隔离
-├── private/<owner>/profile.md # 用户画像（profile 命令生成，可再生成，零推断）
+├── private/<owner>/profile.md # 用户画像（明文库；加密库为 profile.md.enc）
+├── private/<owner>/index.enc # 加密库：每 owner 加密索引（YTMIDX1，Owner Key 加密）
 ├── .archive/                 # 归档区
-├── index.json                # 检索索引（tokens = 分词词频，非访问令牌）
+├── index.json                # 公共 FACT 检索索引（加密库只含公共条目）
+├── keys/                     # 加密库密钥库：salt / <owner>.key.enc(UMK 包裹) / <owner>.key.recovery(恢复钥匙包裹) / recovery.key.enc / cache/<id>.key(授权缓存 600)
 └── agents.json               # 智能体身份登记表（唯一性）
 ```
 
 记忆文件 `<YYYY-MM-DD>-<NNNN>.md`，frontmatter 含 `type / subject / statement / confidence / created / updated / tags / immutable / scope / owner / source / weight / access_count / last_accessed`（`source` 记录来源、`weight` 重要性权重默认 1.0）；正文为记忆内容。旧版根下平铺的 `prefs/` `bounds/` `commits/` 会在 `reindex`（或首次 recall 建索引）时按 frontmatter `owner` 自动迁移到 `private/<owner>/<type>/`。
 
 自我档案（本智能体身份，强制落盘）：PREF，`subject=自我接入档案`，`owner=<本智能体ID>`，statement 为 `; ` 分隔的 key:value——`agent_id / host / memory_home / mcp_mode（stdio|http）/ engine_url（仅远端）/ token（仅远端；本机不存 token）`，可含 `agent_name / user_name / relationship`（`iam --name/--user/--relationship` 写入）。
+
+
+## 私密区加密（v0.7，机制层机密保护）
+
+> 定位：把私密区从「纪律层隔离」升级为「机制层机密保护」——没有对应 owner 密钥，即使读到密文文件也解不开。公共 FACT 保持明文共享。边界声明：用户是数据所有者，天然可解全部；不承诺对抗同一 OS 用户下的恶意进程（本机模型）。
+
+### 密钥体系（信封加密，零依赖）
+- **UMK（用户主密钥）**：主口令经 PBKDF2-SHA256（60 万次迭代 + 随机盐）派生，永不落盘明文。
+- **Owner Key（每 AI 32B 随机）**：加密该 owner 的私密；被 UMK 包裹存 `keys/<owner>.key.enc`，另用恢复钥匙包裹存 `keys/<owner>.key.recovery`。
+- **File Key（每文件随机）**：AES-256-GCM 加密文件内容，被 Owner Key 包裹随文件头存储（便于单文件重加密 / 轮换）。
+- **恢复钥匙（Recovery Key）**：初始化 / 迁移时打印一次（44 位 base64），用户离线保存；忘口令用它重设（`reset-password --recovery-key`）。**泄露 = 等同口令泄露**。
+
+### 文件与索引
+- 私密文件落盘为 `<date>-<seq>.md.enc`（头 `YTMENC1`），公开 `facts/*.md` 保持明文。
+- 私密检索走**每 owner 加密索引** `private/<owner>/index.enc`（头 `YTMIDX1`，Owner Key 加密）——AI 用自己的 key 解自己索引一次，内存全文检索，只解命中文件，**不是逐个文件解密**；公共 `index.json` 只含 FACT 条目。
+- `--no-encrypt` 库回到明文纪律层模型（老行为，向后兼容）。
+
+### 流程
+1. **建加密库**：`yotta-memory init --encrypt`（新建默认加密）→ 设主口令 → 抄下恢复钥匙离线保存。
+2. **老库迁移**：`yotta-memory migrate`（需主口令）→ 明文私密逐文件加密后删除明文 → 打印恢复钥匙 → 当前智能体自动获得授权缓存，其余 AI 需平台授权。
+3. **AI 读写自己的私密**：AI 声明身份后需**平台授权一次**——`yotta-memory view` → 输口令 → 点「授权 <该AI>」→ 平台把 owner key 写入 `keys/cache/<id>.key`（600 权限）。之后该 AI 正常 `remember / recall / profile / context`（私有读写自动加解密）；未授权时写私密报「需在用户平台授权」，公共 FACT 不受影响。
+4. **用户查看全部 AI 记忆**：`yotta-memory view` → 输口令 → 浏览 / 搜索 / 导出全部（含各 AI 私密明文，仅用户可见）。口令只在本地内存派生，不落盘、不发远端；默认仅 127.0.0.1，远程需 `--host` 显式开启。
+5. **口令管理**：`yotta-memory reset-password`（当前口令或恢复钥匙）；`key revoke <id>` 立即吊销某 AI 的授权缓存（该 AI 随即失去解密能力）。
 
 ## 便携记忆盘模式（局域网多机共享）
 
@@ -185,15 +224,9 @@ license: MIT
 ### 4.0 前置：CLI 自装 + 记忆位置准备 + 持久记住
 
 **步骤 0.1 检查 CLI 是否已装**
-```bash
-yotta-memory --version    # 或 command -v yotta-memory / where yotta-memory
-```
-已装 → 跳过。未装 → 🔒 **征得同意后**自行安装（三选一，AI 判断）：
-| 方式 | 命令 | 适用 |
-|---|---|---|
-| npx 临时 | `npx -y @yottameta/yotta-memory` | 任何有 Node 的机器 |
-| npm 全局 | `npm i -g @yottameta/yotta-memory` | 长期使用 |
-| install.sh | `bash <(curl -s https://raw.githubusercontent.com/YottaMeta/yotta-memory/main/install.sh)` | 离线 / 国内 / 无 npm |
+
+未装 → 🔒 **征得同意后**自动安装（npx 临时 / npm 全局 / install.sh 三选一，命令与判断见「开工第一步 第 0 步」）。
+
 装后验证：`yotta-memory --version` 出版本即就绪。
 
 **步骤 0.2 确定记忆存储位置**
@@ -218,7 +251,7 @@ yotta-memory --version    # 或 command -v yotta-memory / where yotta-memory
 
 **步骤 0.5 启动记忆引擎（仅引擎主机，供远程接入）**
 - 本机若作引擎：🔒 **征得同意后**启动服务——临时运行 `yotta-memory serve`（默认 `0.0.0.0:8787`，Bearer token + X-Agent-Id 鉴权；`--no-auth` 仅限可信内网），或注册开机自启 `yotta-memory lan enable`（Windows：优先计划任务，默认登录自启；非管理员自动降级用户级 Startup 静默自启，免管理员）。
-- 本地零进程模式：本机 AI 也可用 `serve --stdio` 由 MCP 客户端按需拉起 CLI（无常驻进程，照灵魂盘）。
+- 本地零进程模式：本机 AI 也可用 `serve --stdio` 由 MCP 客户端按需拉起 CLI（无常驻进程）。
 - 远程客户端接入前，先确认引擎主机 serve 已运行（`lan status` 可查）。
 
 ### 4.1 触发
