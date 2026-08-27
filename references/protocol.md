@@ -1,4 +1,4 @@
-# yotta-memory 协议规范 v0.8.0
+# yotta-memory 协议规范 v0.8.1
 
 > 本文件定义 yotta-memory 记忆标准：存储位置、目录结构、文件格式、类型体系与 CLI 命令参考。
 > 目标：任何支持 Agent Skills 开放标准的智能体，装完即可读写同一份记忆。
@@ -32,7 +32,7 @@
 └── README.md               # 记忆库说明
 ```
 
-> **`index.json` 说明**：条目内的 `tokens` 字段是中文分词的「词频表」（v0.8.0 起含字段加权与拼音 token），供 recall 的 TF 打分 / 语义检索使用，**不是**访问令牌。真正的访问令牌由 `token` 命令生成，存放在 `<root>/.server/tokens.json`，仅在局域网 `serve` 模式下用于请求鉴权。v0.8.0 起索引 version=3，旧索引首次 recall 自动重建。
+> **`index.json` 说明**：条目内的 `tokens` 字段是中文分词的「词频表」（v0.8.0 起含字段加权与拼音 token），供 recall 的 TF 打分 / 语义检索使用，**不是**访问令牌。真正的访问令牌由 `token` 命令生成，存放在 `<root>/.server/tokens.json`，仅在局域网 `serve` 模式下用于请求鉴权。v0.8.1 起索引 version=4（公共索引超过 5000 条按年份分片 `index-<year>.json`），旧索引首次 recall 自动重建。
 
 > **目录结构（v0.5.0）**：私密记忆按 `owner` 物理分目录存放于 `private/<owner>/<type>/`。旧版根下平铺的 `prefs/` `bounds/` `commits/` 会在 `reindex`（或首次 recall 建索引）时按 frontmatter `owner` 自动迁移到 `private/<owner>/<type>/`。**AI 读写红线**：记忆读写一律走 `yotta-memory` CLI / MCP 工具；禁止用 shell（`Get-ChildItem` / `Get-Content` / `cat` / `ls` / `type` 等）直接读改记忆库目录下的文件——否则会绕过 `scope/owner` 权限边界，读到其它智能体的私密内容。
 

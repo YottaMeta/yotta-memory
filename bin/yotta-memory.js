@@ -22,7 +22,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.8.0';
+const VERSION = '0.8.1';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -581,16 +581,45 @@ function writeProfileText(root, owner, text) {
 
 // ---- 索引（index.json）----
 function indexPath(root) { return path.join(root, INDEX_FILE); }
-const INDEX_VERSION = 3;
+const INDEX_VERSION = 4;
+// v0.8.1 超大库索引分片：公共 index.json 超过阈值按年份分片（index-<year>.json），避免单文件膨胀。
+const INDEX_SHARD_THRESHOLD = 5000;
+// 安全校验：分片文件名必须匹配 index-YYYY.json，防 manifest 篡改导致路径穿越。
+const SHARD_RE = /^index-\d{4}\.json$/;
+function isSafeShardName(name) { return typeof name === 'string' && SHARD_RE.test(name); }
+function indexShardName(year) { return 'index-' + year + '.json'; }
+function loadIndexManifest(root) {
+  const p = indexPath(root);
+  if (!fs.existsSync(p)) return null;
+  try {
+    const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (d && Array.isArray(d.shards)) return d;
+  } catch (e) { /* ignore */ }
+  return null;
+}
 function loadIndex(root) {
   const p = indexPath(root);
   if (!fs.existsSync(p)) return null;
   try {
     const d = JSON.parse(fs.readFileSync(p, 'utf8'));
-    if (d && Array.isArray(d.entries)) {
-      // v0.8.0 语义索引（字段加权 + 拼音 token）version=3；旧版索引返回 null 触发重建
+    if (!d) return null;
+    if (Array.isArray(d.entries)) {
+      // v0.8.0 语义索引（字段加权 + 拼音 token）version=3；v0.8.1 分片 version=4；旧版索引返回 null 触发重建
       if (d.version && d.version >= INDEX_VERSION) return d.entries;
       return null;
+    }
+    if (Array.isArray(d.shards)) {
+      // v0.8.1 分片 manifest：串联各分片条目
+      if (d.version && d.version < INDEX_VERSION) return null;
+      const out = [];
+      for (const sh of d.shards) {
+        if (!isSafeShardName(sh)) continue;
+        const sp = path.join(root, sh);
+        if (!fs.existsSync(sp)) continue;
+        const sd = JSON.parse(fs.readFileSync(sp, 'utf8'));
+        if (sd && Array.isArray(sd.entries)) out.push.apply(out, sd.entries);
+      }
+      return out;
     }
   } catch (e) { /* ignore */ }
   return null;
@@ -598,7 +627,29 @@ function loadIndex(root) {
 function getIndex(root) { return loadIndex(root) || []; }
 function saveIndex(root, entries) {
   const clean = entries.map(function (e) { const c = Object.assign({}, e); delete c.meta; return c; });
-  fs.writeFileSync(indexPath(root), JSON.stringify({ version: INDEX_VERSION, updated: today(), entries: clean }, null, 2), 'utf8');
+  const old = loadIndexManifest(root);
+  if (clean.length > INDEX_SHARD_THRESHOLD) {
+    const byYear = {};
+    for (const e of clean) {
+      const y = String(e.created || '').slice(0, 4) || String(today()).slice(0, 4);
+      (byYear[y] = byYear[y] || []).push(e);
+    }
+    const newShards = [];
+    for (const y of Object.keys(byYear).sort()) {
+      const name = indexShardName(y);
+      fs.writeFileSync(path.join(root, name), JSON.stringify({ version: INDEX_VERSION, year: (parseInt(y, 10) || 0), entries: byYear[y] }, null, 2), 'utf8');
+      newShards.push(name);
+    }
+    fs.writeFileSync(indexPath(root), JSON.stringify({ version: INDEX_VERSION, updated: today(), shards: newShards, count: clean.length }, null, 2), 'utf8');
+    if (old && Array.isArray(old.shards)) {
+      for (const sh of old.shards) if (newShards.indexOf(sh) === -1 && isSafeShardName(sh)) { try { fs.unlinkSync(path.join(root, sh)); } catch (e) {} }
+    }
+  } else {
+    if (old && Array.isArray(old.shards)) {
+      for (const sh of old.shards) { try { fs.unlinkSync(path.join(root, sh)); } catch (e) {} }
+    }
+    fs.writeFileSync(indexPath(root), JSON.stringify({ version: INDEX_VERSION, updated: today(), entries: clean }, null, 2), 'utf8');
+  }
 }
 function collectEntryFiles(root) {
   const dirs = [];
@@ -805,9 +856,25 @@ function bumpReadMeta(root, relFiles) {
 }
 function touchIndex(root, relFiles) {
   const set = new Set(relFiles);
+  const now = today();
+  const manifest = loadIndexManifest(root);
+  if (manifest && Array.isArray(manifest.shards)) {
+    for (const sh of manifest.shards) {
+      if (!isSafeShardName(sh)) continue;
+      const sp = path.join(root, sh);
+      if (!fs.existsSync(sp)) continue;
+      let sd = null; try { sd = JSON.parse(fs.readFileSync(sp, 'utf8')); } catch (e) { continue; }
+      if (!sd || !Array.isArray(sd.entries)) continue;
+      let dirty = false;
+      for (const e of sd.entries) {
+        if (set.has(e.file)) { e.access_count = (parseInt(e.access_count, 10) || 0) + 1; e.last_accessed = now; dirty = true; }
+      }
+      if (dirty) fs.writeFileSync(sp, JSON.stringify(sd, null, 2), 'utf8');
+    }
+    return;
+  }
   const idx = getIndex(root);
   let dirty = false;
-  const now = today();
   for (const e of idx) {
     if (set.has(e.file)) { e.access_count = (parseInt(e.access_count, 10) || 0) + 1; e.last_accessed = now; dirty = true; }
   }
@@ -985,6 +1052,42 @@ function rememberCore(type, subject, statement, opts) {
   }
   return { error: false, text: text };
 }
+// v0.8.1: recall 候选预过滤——查询侧一次构建候选 token 集（精确/同义/拼音/拉丁 py），
+// 逐条用 token 交集 + 子串 + 模糊长度门槛做粗筛，命中候选才进语义打分，避免 N 大时逐条全量语义/模糊/编辑距离。
+// 该闸门是 semanticMatch 命中集的超集，绝不漏掉同义词/拼音/模糊命中，仅做性能粗筛不改语义。
+function recallPrefilter(q) {
+  const qtoks = tokenize(q);
+  const qset = new Set(qtoks);
+  const qpy = pinyinTokens(q);
+  const ext = new Set();
+  for (const tt of qtoks) { const s = synonymSet(tt); for (const w of s) ext.add(w); }
+  const qkeys = new Set();
+  for (const tt of qtoks) qkeys.add(tt);
+  for (const w of ext) qkeys.add(w);
+  for (const t of qpy) qkeys.add(t);
+  const longQtoks = qtoks.filter(function (t) { return t.length >= 4; });
+  for (const tt of qtoks) {
+    if (/^[a-z]+$/.test(tt)) {
+      qkeys.add('py:' + tt); qkeys.add('pyi:' + tt);
+      if (tt.length >= 3) { for (let i = 0; i < tt.length - 1; i++) qkeys.add('pyi:' + tt.slice(i, i + 2)); }
+    }
+  }
+  return function (e) {
+    const toks = e.tokens || {};
+    const keys = Object.keys(toks);
+    for (const k of keys) {
+      if (qkeys.has(k)) return true;
+      if (longQtoks.length && k.length >= 4 && k.indexOf(':') === -1) {
+        for (const t of longQtoks) {
+          if (Math.abs(k.length - t.length) <= 2) return true;
+        }
+      }
+    }
+    const hay = ((e.subject || '') + ' ' + (e.statement || '') + ' ' + (e.tags || []).join(' ')).toLowerCase();
+    if (hay.indexOf(q) !== -1) return true;
+    return false;
+  };
+}
 function recallCore(query, opts) {
   opts = opts || {};
   const roots = memoryRoots();
@@ -1000,6 +1103,7 @@ function recallCore(query, opts) {
   const explicitCross = !!opts.all || impersonation || (!!ownerFilter && ownerFilter.toLowerCase() !== 'user' && ownerFilter !== agent);
   const wantExplain = !!opts.explain;
   const useSemantic = opts.semantic !== false;
+  const prefilter = (q && useSemantic) ? recallPrefilter(q) : null;
   const hits = [];
   let deniedCount = 0;
   for (const root of roots) {
@@ -1012,6 +1116,7 @@ function recallCore(query, opts) {
       let detail = null;
       if (q) {
         if (useSemantic) {
+          if (prefilter && !prefilter(e)) continue; // v0.8.1 候选预过滤：粗筛后再语义打分
           const m = semanticMatch(e, q, wantExplain);
           score = m.score;
           if (wantExplain && m.detail && m.detail.length) detail = m.detail;
@@ -1766,6 +1871,26 @@ function cmdKeyRevoke(id) {
   if (r.error) process.exit(2);
 }
 
+// v0.8.1: 查看平台分页——服务端只返回当前页（offset/limit），避免记忆多了一次全量加载/渲染/传输
+function viewEntriesCore(root, session, query, offset, limit) {
+  limit = Math.max(1, parseInt(limit, 10) || 50);
+  offset = Math.max(0, parseInt(offset, 10) || 0);
+  const q = String(query || '').toLowerCase();
+  const entries = [];
+  for (const e of (loadIndex(root) || [])) entries.push(e);
+  for (const o of collectOwners(root)) {
+    const key = session.ownerKeys[o];
+    if (!key) continue;
+    try { for (const e of loadOwnerIndex(root, o, key)) entries.push(e); } catch (err) {}
+  }
+  const all = q ? entries.filter(function (e) {
+    return ((e.subject || '') + ' ' + (e.statement || '') + ' ' + (e.tags || []).join(' ')).toLowerCase().indexOf(q) !== -1;
+  }) : entries;
+  all.sort(function (a, b) { return String(b.updated || b.created || '').localeCompare(String(a.updated || a.created || '')); });
+  const count = all.length;
+  const page = all.slice(offset, offset + limit);
+  return { count: count, offset: offset, limit: limit, hasMore: offset + limit < count, entries: page };
+}
 function viewServerCore(root, port, host) {
   let session = { umk: null, ownerKeys: {} };
   const server = http.createServer(function (req, res) {
@@ -1818,19 +1943,7 @@ function viewServerCore(root, port, host) {
     }
     if (req.method === 'POST' && pathname === '/api/entries') {
       if (!session.umk) return json(401, { error: '请先解锁。' });
-      return readBody(function (d) {
-        const q = String(d.query || '').toLowerCase();
-        const entries = [];
-        for (const e of (loadIndex(root) || [])) entries.push(e);
-        for (const o of collectOwners(root)) {
-          const key = session.ownerKeys[o];
-          if (!key) continue;
-          try { for (const e of loadOwnerIndex(root, o, key)) entries.push(e); } catch (err) {}
-        }
-        const out = q ? entries.filter(function (e) { return ((e.subject || '') + ' ' + (e.statement || '') + ' ' + e.tags.join(' ')).toLowerCase().indexOf(q) !== -1; }) : entries;
-        out.sort(function (a, b) { return String(b.updated || b.created || '').localeCompare(String(a.updated || a.created || '')); });
-        json(200, { count: out.length, entries: out });
-      });
+      return readBody(function (d) { json(200, viewEntriesCore(root, session, d.query, d.offset, d.limit)); });
     }
     if (req.method === 'POST' && pathname === '/api/export') {
       if (!session.umk) return json(401, { error: '请先解锁。' });
@@ -1908,7 +2021,7 @@ function cmdView(opts) {
   viewServerCore(root, port, host);
 }
 
-const VIEW_HTML = "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>元忆 · 用户查看平台</title><style>\nbody{font-family:system-ui,-apple-system,\"Microsoft YaHei\",sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1f2328;background:#fafafa}\nh1{font-size:22px} .card{background:#fff;border:1px solid #e2e2e2;border-radius:10px;padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}\nbutton{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;margin:2px;font-size:14px}\nbutton.danger{background:#dc2626} button.ghost{background:#e5e7eb;color:#1f2328}\ninput,select{padding:8px;border:1px solid #c9c9c9;border-radius:6px;margin:2px;font-size:14px;box-sizing:border-box}\ntable{border-collapse:collapse;width:100%;font-size:13px} td,th{border:1px solid #ececec;padding:6px 8px;text-align:left;vertical-align:top}\n.owner{display:inline-flex;align-items:center;gap:6px;border:1px solid #ddd;border-radius:8px;padding:5px 10px;margin:4px 6px 4px 0;background:#f6f8fa}\n.entry{border-bottom:1px solid #eee;padding:8px 0} .meta{color:#8a8a8a;font-size:12px}\n.err{color:#dc2626;margin-top:8px} .ok{color:#16a34a;margin-top:8px}\n#app{display:none} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:12px}\n</style></head><body>\n<h1>元忆 · 用户查看平台 <span id=\"ver\" style=\"font-size:14px;color:#888\"></span></h1>\n<div id=\"lock\" class=\"card\">\n  <p><b>输入主口令解锁</b>（口令只在本地内存派生，不落盘、不发送远端）。忘口令可在 CLI 用恢复钥匙重设：<code>yotta-memory reset-password --recovery-key &lt;钥匙&gt;</code></p>\n  <input type=\"password\" id=\"pw\" placeholder=\"主口令\" style=\"width:260px\">\n  <button onclick=\"unlock()\">解锁</button>\n  <div class=\"err\" id=\"lockerr\"></div>\n</div>\n<div id=\"app\">\n  <div class=\"card\">\n    <b>AI 列表</b>（✅=已授权可读自己私密，🔒=未授权）\n    <div id=\"owners\" style=\"margin-top:8px\"></div>\n  </div>\n  <div class=\"card\">\n    <b>记忆</b>\n    <input id=\"q\" placeholder=\"搜索关键词\" style=\"width:220px\" onkeydown=\"if(event.key==='Enter')load()\">\n    <button onclick=\"load()\">搜索</button>\n    <button class=\"ghost\" onclick=\"doExport()\">导出 JSON</button>\n    <button class=\"ghost\" onclick=\"showRk()\">显示恢复钥匙</button>\n    <span id=\"rkout\" style=\"font-size:12px;color:#888;margin-left:8px\"></span>\n    <div id=\"entries\" style=\"margin-top:10px\"></div>\n  </div>\n  <div class=\"card\">\n    <b>重设口令</b><br>\n    <input type=\"password\" id=\"cur\" placeholder=\"当前口令\">\n    <input type=\"password\" id=\"np1\" placeholder=\"新口令\">\n    <input type=\"password\" id=\"np2\" placeholder=\"确认新口令\">\n    <button onclick=\"resetPw()\">重设</button>\n    <span id=\"pwout\"></span>\n  </div>\n</div>\n<script>\nfunction esc(s){return String(s==null?'':s).replace(/[&<>\"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}\nasync function api(p,b){try{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return await r.json();}catch(e){return{error:String(e)};}}\nasync function boot(){const s=await api('/api/status');document.getElementById('ver').textContent='v'+(s.version||'');if(s.unlocked){showApp();}}\nfunction showApp(){document.getElementById('lock').style.display='none';document.getElementById('app').style.display='block';loadOwners();load();}\nasync function unlock(){const d=await api('/api/unlock',{password:document.getElementById('pw').value});if(d.error){document.getElementById('lockerr').textContent=d.error;return;}showApp();}\nasync function loadOwners(){const d=await api('/api/owners');const box=document.getElementById('owners');box.innerHTML='';if(!d.owners||!d.owners.length){box.innerHTML='（无 owner）';return;}\n  for(const o of d.owners){const c=document.createElement('span');c.className='owner';c.innerHTML=esc(o.owner)+(o.authorized?' ✅':' 🔒')+' <button class=\"ghost\" data-a=\"'+esc(o.owner)+'\">授权</button><button class=\"danger\" data-r=\"'+esc(o.owner)+'\">吊销</button>';box.appendChild(c);}\n  box.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){api('/api/authorize',{owner:b.getAttribute('data-a')}).then(function(){loadOwners();});};});\n  box.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){api('/api/revoke',{owner:b.getAttribute('data-r')}).then(function(){loadOwners();});};});\n}\nasync function load(){const d=await api('/api/entries',{query:document.getElementById('q').value});const box=document.getElementById('entries');box.innerHTML='共 '+d.count+' 条';\n  if(!d.entries)return;for(const e of d.entries){const div=document.createElement('div');div.className='entry';div.innerHTML='<b>['+esc(e.type)+'] '+esc(e.subject)+'</b><div>'+esc(e.statement)+'</div><div class=\"meta\">'+esc(e.file)+' · owner='+esc(e.owner||'-')+' · '+esc(e.updated||e.created||'')+'</div>';box.appendChild(div);}}\nasync function doExport(){const d=await api('/api/export');if(d.error){alert(d.error);return;}const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='yottamemory-view-export.json';a.click();}\nasync function showRk(){const d=await api('/api/recovery-key');document.getElementById('rkout').textContent=d.recoveryKey?('恢复钥匙: '+d.recoveryKey):(d.error||'');}\nasync function resetPw(){const np1=document.getElementById('np1').value,np2=document.getElementById('np2').value;if(np1!==np2){document.getElementById('pwout').innerHTML='<span class=\"err\">两次新口令不一致</span>';return;}\n  const d=await api('/api/reset-password',{currentPassword:document.getElementById('cur').value,newPassword:np1});document.getElementById('pwout').innerHTML=d.error?('<span class=\"err\">'+esc(d.error)+'</span>'):('<span class=\"ok\">'+esc(d.text||'ok')+'</span>');}\nboot();\n</script></body></html>";
+const VIEW_HTML = "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>元忆 · 用户查看平台</title><style>\nbody{font-family:system-ui,-apple-system,\"Microsoft YaHei\",sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1f2328;background:#fafafa}\nh1{font-size:22px} .card{background:#fff;border:1px solid #e2e2e2;border-radius:10px;padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}\nbutton{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;margin:2px;font-size:14px}\nbutton.danger{background:#dc2626} button.ghost{background:#e5e7eb;color:#1f2328}\ninput,select{padding:8px;border:1px solid #c9c9c9;border-radius:6px;margin:2px;font-size:14px;box-sizing:border-box}\ntable{border-collapse:collapse;width:100%;font-size:13px} td,th{border:1px solid #ececec;padding:6px 8px;text-align:left;vertical-align:top}\n.owner{display:inline-flex;align-items:center;gap:6px;border:1px solid #ddd;border-radius:8px;padding:5px 10px;margin:4px 6px 4px 0;background:#f6f8fa}\n.entry{border-bottom:1px solid #eee;padding:8px 0} .meta{color:#8a8a8a;font-size:12px}\n.err{color:#dc2626;margin-top:8px} .ok{color:#16a34a;margin-top:8px}\n#app{display:none} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:12px}\n</style></head><body>\n<h1>元忆 · 用户查看平台 <span id=\"ver\" style=\"font-size:14px;color:#888\"></span></h1>\n<div id=\"lock\" class=\"card\">\n  <p><b>输入主口令解锁</b>（口令只在本地内存派生，不落盘、不发送远端）。忘口令可在 CLI 用恢复钥匙重设：<code>yotta-memory reset-password --recovery-key &lt;钥匙&gt;</code></p>\n  <input type=\"password\" id=\"pw\" placeholder=\"主口令\" style=\"width:260px\">\n  <button onclick=\"unlock()\">解锁</button>\n  <div class=\"err\" id=\"lockerr\"></div>\n</div>\n<div id=\"app\">\n  <div class=\"card\">\n    <b>AI 列表</b>（✅=已授权可读自己私密，🔒=未授权）\n    <div id=\"owners\" style=\"margin-top:8px\"></div>\n  </div>\n  <div class=\"card\">\n    <b>记忆</b>\n    <input id=\"q\" placeholder=\"搜索关键词\" style=\"width:220px\" onkeydown=\"if(event.key==='Enter'){off=0;load()}\">\n    <button onclick=\"off=0;load()\">搜索</button>\n    <button class=\"ghost\" onclick=\"doExport()\">导出 JSON</button>\n    <button class=\"ghost\" onclick=\"showRk()\">显示恢复钥匙</button>\n    <span id=\"rkout\" style=\"font-size:12px;color:#888;margin-left:8px\"></span>\n    <div id=\"meta\" style=\"margin-top:10px;font-size:12px;color:#666\"></div>\n    <div id=\"entries\" style=\"margin-top:6px\"></div>\n    <div id=\"pager\" style=\"margin-top:10px\">\n      <button class=\"ghost\" id=\"prevb\" onclick=\"prevPage()\">上一页</button>\n      <span id=\"pageinfo\" style=\"font-size:12px;color:#888;margin:0 8px\"></span>\n      <button class=\"ghost\" id=\"nextb\" onclick=\"nextPage()\">下一页</button>\n    </div>\n  </div>\n  <div class=\"card\">\n    <b>重设口令</b><br>\n    <input type=\"password\" id=\"cur\" placeholder=\"当前口令\">\n    <input type=\"password\" id=\"np1\" placeholder=\"新口令\">\n    <input type=\"password\" id=\"np2\" placeholder=\"确认新口令\">\n    <button onclick=\"resetPw()\">重设</button>\n    <span id=\"pwout\"></span>\n  </div>\n</div>\n<script>\nfunction esc(s){return String(s==null?'':s).replace(/[&<>\"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}\nasync function api(p,b){try{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return await r.json();}catch(e){return{error:String(e)};}}\nasync function boot(){const s=await api('/api/status');document.getElementById('ver').textContent='v'+(s.version||'');if(s.unlocked){showApp();}}\nfunction showApp(){document.getElementById('lock').style.display='none';document.getElementById('app').style.display='block';loadOwners();load();}\nasync function unlock(){const d=await api('/api/unlock',{password:document.getElementById('pw').value});if(d.error){document.getElementById('lockerr').textContent=d.error;return;}showApp();}\nasync function loadOwners(){const d=await api('/api/owners');const box=document.getElementById('owners');box.innerHTML='';if(!d.owners||!d.owners.length){box.innerHTML='（无 owner）';return;}\n  for(const o of d.owners){const c=document.createElement('span');c.className='owner';c.innerHTML=esc(o.owner)+(o.authorized?' ✅':' 🔒')+' <button class=\"ghost\" data-a=\"'+esc(o.owner)+'\">授权</button><button class=\"danger\" data-r=\"'+esc(o.owner)+'\">吊销</button>';box.appendChild(c);}\n  box.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){api('/api/authorize',{owner:b.getAttribute('data-a')}).then(function(){loadOwners();});};});\n  box.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){api('/api/revoke',{owner:b.getAttribute('data-r')}).then(function(){loadOwners();});};});\n}\nlet off=0,PS=50;\nasync function load(){const d=await api('/api/entries',{query:document.getElementById('q').value,offset:off,limit:PS});const meta=document.getElementById('meta');const pg=document.getElementById('pageinfo');if(meta)meta.textContent='共 '+d.count+' 条';const lim=d.limit||PS;const totalPg=Math.max(1,Math.ceil(d.count/lim));const curPg=Math.floor((d.offset||0)/lim)+1;if(pg)pg.textContent='第 '+curPg+' / '+totalPg+' 页';const box=document.getElementById('entries');box.innerHTML='';if(d.entries)for(const e of d.entries){const div=document.createElement('div');div.className='entry';div.innerHTML='<b>['+esc(e.type)+'] '+esc(e.subject)+'</b><div>'+esc(e.statement)+'</div><div class=\"meta\">'+esc(e.file)+' · owner='+esc(e.owner||'-')+' · '+esc(e.updated||e.created||'')+'</div>';box.appendChild(div);}const pb=document.getElementById('prevb'),nb=document.getElementById('nextb');if(pb)pb.disabled=(d.offset||0)<=0;if(nb)nb.disabled=!d.hasMore;}\nfunction prevPage(){if(off>=PS){off-=PS;load();}}\nfunction nextPage(){off+=PS;load();}\nasync function doExport(){const d=await api('/api/export');if(d.error){alert(d.error);return;}const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='yottamemory-view-export.json';a.click();}\nasync function showRk(){const d=await api('/api/recovery-key');document.getElementById('rkout').textContent=d.recoveryKey?('恢复钥匙: '+d.recoveryKey):(d.error||'');}\nasync function resetPw(){const np1=document.getElementById('np1').value,np2=document.getElementById('np2').value;if(np1!==np2){document.getElementById('pwout').innerHTML='<span class=\"err\">两次新口令不一致</span>';return;}\n  const d=await api('/api/reset-password',{currentPassword:document.getElementById('cur').value,newPassword:np1});document.getElementById('pwout').innerHTML=d.error?('<span class=\"err\">'+esc(d.error)+'</span>'):('<span class=\"ok\">'+esc(d.text||'ok')+'</span>');}\nboot();\n</script></body></html>";
 
 // ---- 命令包装（CLI 入口）----
 async function cmdInit(opts) {
@@ -3116,41 +3229,52 @@ function cmdLanStatus() {
 }
 // ---- usage / main ----
 function usage() {
-  console.log([
-    'yotta-memory v' + VERSION + ' — 元忆：有权限边界的文件式智能体记忆',
-    '',
-    '用法:',
-  'yotta-memory init [--project] [--dir <目录>] [--encrypt|--no-encrypt]  初始化记忆库（新建默认加密：需主口令 + 恢复钥匙；--no-encrypt 降级明文）',
-  'yotta-memory migrate    把明文私密区迁移为密文（需主口令；迁移后打印恢复钥匙）',
-  'yotta-memory view [--port 8788] [--host 127.0.0.1]  启动用户查看平台（口令解锁浏览/搜索/导出全部 AI 记忆 + 授权/吊销 AI）',
-  'yotta-memory reset-password [--password <当前> | --recovery-key <钥匙>] [--new-password <新>]  重设主口令（忘口令用恢复钥匙）',
-  'yotta-memory key list | authorize <id> | revoke <id>  管理 AI 的私密读取授权缓存（authorize 需主口令）',
-    '  yotta-memory config set memory_home <目录>  持久记住记忆库位置',
-    '  yotta-memory config get                   查看当前配置与生效位置',
-    '  yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]   写入记忆（--source 记录来源；--weight 重要性权重默认 1.0 去重取 max；--verify 写后回读校验；--no-hint 关闭类型启发式提示）',
-    '  yotta-memory profile [--owner <id>]    生成用户画像（聚合 private/<owner>/ 原文，零推断，写 profile.md）',
-    '  yotta-memory context [--limit N] [--owner <id>] [--budget N]  生成开工上下文包（身份+铁律+画像+近期记忆+边界+承诺；--budget 近期记忆字符预算，0=不限）',
-    '  yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]  检索（索引+TF，读取分区；--agent 仅表示“以该身份检索/模拟”，跨智能体私密读取需 --unsafe / 授权）',
-    '  yotta-memory forget <文件或文件名>         删除一条记忆',
-    '  yotta-memory archive [--days 180] [--threshold 0.4]  归档（盖棺分+年龄）',
-    '  yotta-memory reindex                       重建索引',
-    '  yotta-memory export [--out 文件.json]      导出全部记忆',
-    '  yotta-memory import <文件.json>            导入记忆',
-    '  yotta-memory whoami                       查看当前智能体身份与登记状态（读 YOTTA_AGENT_ID / X-Agent-Id，不猜不默认）',
-    '  yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]  登记本智能体唯一身份并自动落自我档案（agents.json；ID 必须唯一）',
-    '  yotta-memory token new --agent <id> [--force]  生成/重置某智能体访问 token（同 ID 已被其它来源占用需 --force 覆盖）',
-    '  yotta-memory token list                   列出已登记智能体',
-    '  yotta-memory token revoke --agent <id>    吊销某智能体 token',
-    '  yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]  启动 MCP 记忆引擎（streamable HTTP；--stdio 本地零进程模式）',
-    '  yotta-memory lan enable [--onstart] | disable | status  开机自启管理（Windows：计划任务，默认 ONLOGON，非管理员自动降级用户级 Startup 静默自启；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）',
-    '  yotta-memory --version                    版本',
-    '',
-    '类型: FACT(公共共享) / PREF(偏好) / BOUND(边界) / COMMIT(承诺)',
-    '环境变量: YOTTA_MEMORY_HOME 临时覆盖用户级位置; YOTTA_AGENT_ID/AGENT_ID 当前 agent 标识（本机声明身份用；私密记忆必须有 owner）',
-    '隔离: 公共 FACT 在 facts/；私密 PREF/BOUND/COMMIT 物理分目录 private/<agent_id>/<type>/，禁止 shell 直读写记忆库，一律走本命令',
-    '远端接入: MCP url http://<主机IP>:8787/mcp；请求头 Authorization: Bearer <token> + X-Agent-Id: <id>',
-    '',
-  ].join('\n'));
+  const banner = 'yotta-memory v' + VERSION + ' — 元忆：有权限边界的文件式智能体记忆';
+  const sections = [
+    ['核心记忆', [
+      ['init', '初始化记忆库（新建默认加密：需主口令 + 恢复钥匙；--no-encrypt 降级明文）'],
+      ['remember', '写入记忆（--source 来源；--weight 权重；--verify 写后回读校验；--no-hint 关启发）'],
+      ['recall', '检索记忆（--type/--limit/--agent/--owner/--all/--unsafe）'],
+      ['forget', '删除一条记忆'],
+      ['archive', '归档（--days/--threshold 盖棺分+年龄）'],
+      ['reindex', '重建索引'],
+      ['export', '导出全部记忆（--out 文件.json）'],
+      ['import', '导入记忆（<文件.json>）']
+    ]],
+    ['身份与画像', [
+      ['iam', '登记本智能体唯一身份（--name/--user/--relationship；agents.json）'],
+      ['whoami', '查看当前智能体身份与登记状态'],
+      ['profile', '生成用户画像（聚合 private/<owner>/ 原文，零推断）'],
+      ['context', '生成开工上下文包（--limit/--owner/--budget）'],
+      ['token', '生成/列出/吊销访问 token（new --agent / list / revoke --agent）']
+    ]],
+    ['加密与安全', [
+      ['migrate', '把明文私密区迁移为密文（需主口令；迁移后打印恢复钥匙）'],
+      ['view', '启动用户查看平台（--port/--host；口令解锁浏览/授权/吊销 AI）'],
+      ['reset-password', '重设主口令（忘口令用恢复钥匙）'],
+      ['key', '管理 AI 私密读取授权缓存（list / authorize <id> / revoke <id>）'],
+      ['config', '查看/记住记忆库位置（get / set memory_home <目录>）']
+    ]],
+    ['平台与服务', [
+      ['serve', '启动 MCP 记忆引擎（streamable HTTP；--stdio 本地零进程）'],
+      ['lan', '开机自启管理（enable/disable/status；Windows 计划任务 / Linux systemd/crontab）'],
+      ['--version', '版本']
+    ]]
+  ];
+  let col = 0;
+  for (const s of sections) for (const r of s[1]) if (r[0].length > col) col = r[0].length;
+  col += 2;
+  const lines = [banner, '', '用法:', '  yotta-memory <命令> [选项]', ''];
+  for (const s of sections) {
+    lines.push(s[0] + ':');
+    for (const r of s[1]) lines.push('  ' + r[0].padEnd(col) + r[1]);
+    lines.push('');
+  }
+  lines.push('类型: FACT(公共共享) / PREF(偏好) / BOUND(边界) / COMMIT(承诺)');
+  lines.push('环境变量: YOTTA_MEMORY_HOME 临时覆盖用户级位置; YOTTA_AGENT_ID/AGENT_ID 当前 agent 标识（本机声明身份用；私密记忆必须有 owner）');
+  lines.push('隔离: 公共 FACT 在 facts/；私密 PREF/BOUND/COMMIT 物理分目录 private/<agent_id>/<type>/，禁止 shell 直读写记忆库，一律走本命令');
+  lines.push('远端接入: MCP url http://<主机IP>:8787/mcp；请求头 Authorization: Bearer <token> + X-Agent-Id: <id>');
+  console.log(lines.join('\n'));
 }
 async function main() {
   const args = process.argv.slice(2);
@@ -3367,8 +3491,20 @@ module.exports = {
   writeMemoryText: writeMemoryText,
   loadOwnerIndex: loadOwnerIndex,
   saveOwnerIndex: saveOwnerIndex,
+  viewEntriesCore: viewEntriesCore,
   ensureIndex: ensureIndex,
+  recallPrefilter: recallPrefilter,
+  tokenize: tokenize,
+  buildTokens: buildTokens,
+  synonymSet: synonymSet,
+
   loadIndex: loadIndex,
+  saveIndex: saveIndex,
+  getIndex: getIndex,
+  touchIndex: touchIndex,
+  loadIndexManifest: loadIndexManifest,
+  indexShardName: indexShardName,
+  isSafeShardName: isSafeShardName,
   ownerFromPrivatePath: ownerFromPrivatePath,
   isEncFile: isEncFile,
   profilePathFor: profilePathFor,
@@ -3383,3 +3519,4 @@ module.exports = {
   viewServerCore: viewServerCore,
 
 };
+
