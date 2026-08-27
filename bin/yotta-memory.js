@@ -11,6 +11,7 @@
 // v0.6.4 新增：lan 命令扩展 Linux——systemd 用户单元（systemctl --user enable/start，登录自启；--onstart 附加 loginctl enable-linger 开机即启）/ systemd 不可用时自动降级用户 crontab @reboot；lanPlatform 测试钩子（YOTTA_LAN_PLATFORM）
 // v0.6.5 修复：recall/context 对同一文件显示 2 条——projectRoot 与 userRoot 指向同一目录（如 cwd=home 或其父）时同一索引被遍历两次；新增 memoryRoots() 唯一化根，hasGrant/recallCore/forgetCore/cmdReindex/contextCore 统一走 memoryRoots()
 // v0.7.0 新增：私密区机制级加密（AES-256-GCM 信封加密 + PBKDF2 主密钥 + 恢复钥匙）/ 每 owner 加密索引 / 用户查看平台 yotta-memory view / migrate 迁移 / reset-password / key 授权 / context 收工纪律 / init 新建默认加密（--no-encrypt 降级）
+// v0.8.0 新增：自我学习/自我进化/自我提升——语义检索（同义词/拼音/字段加权/模糊 + 可选 embedding 插件协议预留）/ feedback 显式反馈闭环（weight/confidence/feedback_net 演化）/ maintain 规则层自组织（统一效用分 utility + 归档/遗忘/去重，默认 dry-run）/ distill 心理日志蒸馏（启发式统计/主题画像/知识地图 + 可选 --model）
 // v0.6.2 修复：remember --verify 写后回读改为直查索引 + 权限判定 + 召回匹配性（不再依赖 recall top-N 排序，消除泛化 subject 下偶发误报「回读未命中」）
 'use strict';
 
@@ -21,7 +22,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.7.0';
+const VERSION = '0.8.0';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -30,7 +31,7 @@ const PRIVATE_LEAF = ['prefs', 'bounds', 'commits'];
 const ARCHIVE_DIR = '.archive';
 const INDEX_FILE = 'index.json';
 const PRIVATE_TYPES = ['PREF', 'BOUND', 'COMMIT'];
-const FIELD_ORDER = ['type', 'subject', 'statement', 'confidence', 'created', 'updated', 'tags', 'immutable', 'scope', 'owner', 'source', 'weight', 'access_count', 'last_accessed'];
+const FIELD_ORDER = ['type', 'subject', 'statement', 'confidence', 'created', 'updated', 'tags', 'immutable', 'scope', 'owner', 'source', 'weight', 'access_count', 'last_accessed', 'feedback_net'];
 const CONFIG_FILE = 'config.json';
 const SERVER_SUBDIR = '.server';
 const TOKENS_FILE = 'tokens.json';
@@ -142,10 +143,196 @@ function tokenize(s) {
   return toks;
 }
 function buildTokens(subject, statement, tags) {
-  const toks = tokenize(subject + ' ' + statement + ' ' + tags.join(' '));
   const m = {};
-  for (const t of toks) m[t] = (m[t] || 0) + 1;
+  const add = function (tok, w) { if (tok) m[tok] = (m[tok] || 0) + w; };
+  const subj = String(subject || '');
+  const stmt = String(statement || '');
+  const tagArr = Array.isArray(tags) ? tags : parseTags(tags);
+  // v0.8.0 字段加权：subject × 3 / tags × 2 / statement × 1
+  for (const t of tokenize(subj)) add(t, 3);
+  for (const t of tokenize(stmt)) add(t, 1);
+  for (const t of tokenize(tagArr.join(' '))) add(t, 2);
+  // v0.8.0 拼音 token（py: 全拼 / pyi: 首字母），命中按 0.4 权重（去重防长文本重复字虚高）
+  for (const t of new Set(pinyinTokens(subj + ' ' + stmt + ' ' + tagArr.join(' ')))) add(t, 0.4);
   return m;
+}
+// ---- v0.8.0 自我学习：拼音表 + 同义词表 + 语义匹配（零依赖内置数据）----
+function loadPinyinTable() {
+  try {
+    const p = path.join(__dirname, '..', 'references', 'pinyin-common.json');
+    return JSON.parse(fs.readFileSync(p, 'utf8')) || {};
+  } catch (e) { return {}; }
+}
+const PINYIN_TABLE = loadPinyinTable();
+// 同义词组：同组内互相视为同义（查询侧扩展，命中按 0.5 权重）
+const SYNONYM_GROUPS = [
+  ['记', '记住', '记忆', '记录', '铭记'],
+  ['忘', '忘记', '遗忘', '忘掉'],
+  ['读', '读取', '检索', '查询', '搜索'],
+  ['写', '写入', '记录', '保存', '存储'],
+  ['偏好', '喜好', '喜欢', '偏爱'],
+  ['承诺', '保证', '约定'],
+  ['收工', '结束', '完成', '完毕'],
+  ['归档', '封存', '存档'],
+  ['删除', '移除', '去掉'],
+  ['更新', '修改', '刷新'],
+  ['边界', '红线', '禁区', '界限'],
+  ['画像', '档案', 'profile'],
+  ['命令', '指令', 'cli'],
+  ['记忆', 'memory', '记忆库']
+];
+function synonymSet(token) {
+  const out = new Set();
+  for (const g of SYNONYM_GROUPS) {
+    if (g.indexOf(token) !== -1) { for (const w of g) out.add(w); }
+  }
+  return out;
+}
+function pinyinOf(ch) {
+  const arr = PINYIN_TABLE[ch];
+  if (!arr || !arr.length) return null;
+  return arr[0];
+}
+// 中文字符串 -> 拼音 token：全拼 bigram 'py:yueyong' + 首字母 bigram 'pyi:yy'
+function pinyinTokens(s) {
+  const out = [];
+  const han = String(s || '').match(/[\u4e00-\u9fa5]+/g);
+  if (!han) return out;
+  const all = han.join('');
+  if (all.length === 1) {
+    const p = pinyinOf(all);
+    if (p) { out.push('py:' + p); out.push('pyi:' + p[0]); }
+    return out;
+  }
+  let initials = '';
+  for (let i = 0; i < all.length; i++) { const p = pinyinOf(all[i]); if (p) initials += p[0]; }
+  for (let i = 0; i < all.length - 1; i++) {
+    const p1 = pinyinOf(all[i]), p2 = pinyinOf(all[i + 1]);
+    if (p1 && p2) out.push('py:' + p1 + p2);
+  }
+  for (let i = 0; i < initials.length - 1; i++) out.push('pyi:' + initials.slice(i, i + 2));
+  return out;
+}
+function editDistance(a, b) {
+  a = String(a); b = String(b);
+  if (a === b) return 0;
+  const la = a.length, lb = b.length;
+  if (!la) return lb; if (!lb) return la;
+  if (Math.abs(la - lb) > 2) return 3;
+  let prev = [];
+  for (let j = 0; j <= lb; j++) prev[j] = j;
+  for (let i = 1; i <= la; i++) {
+    const cur = [i];
+    for (let j = 1; j <= lb; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = cur;
+  }
+  return prev[lb];
+}
+// 语义匹配：精确(1.0×，字段加权已入 tokens) / 同义(0.5×) / 拼音(0.4×) / 子串兜底 / 模糊(0.3×)
+function semanticMatch(entry, query, wantDetail) {
+  const q = String(query || '').toLowerCase();
+  const qtoks = tokenize(q);
+  const qpy = pinyinTokens(q);
+  const toks = entry.tokens || {};
+  const hay = ((entry.subject || '') + ' ' + (entry.statement || '') + ' ' + (entry.tags || []).join(' ')).toLowerCase();
+  let score = 0;
+  const detail = [];
+  const qset = new Set(qtoks);
+  for (const tt of qtoks) {
+    if (toks[tt]) { score += toks[tt]; if (wantDetail) detail.push('精确:' + tt + '(+' + round3(toks[tt]) + ')'); }
+  }
+  const ext = new Set();
+  for (const tt of qtoks) { const s = synonymSet(tt); for (const w of s) ext.add(w); }
+  for (const w of ext) {
+    if (toks[w] && !qset.has(w)) { score += 0.5 * toks[w]; if (wantDetail) detail.push('同义:' + w + '(+' + round3(0.5 * toks[w]) + ')'); }
+  }
+  for (const t of qpy) {
+    if (toks[t]) { score += 0.4 * toks[t]; if (wantDetail) detail.push('拼音:' + t + '(+' + round3(0.4 * toks[t]) + ')'); }
+  }
+  // 查询为拼音（拉丁 token）时，匹配条目侧 py:/pyi: token（去前缀）
+  for (const tt of qtoks) {
+    if (/^[a-z]+$/.test(tt)) {
+      if (toks['py:' + tt]) { score += 0.4 * toks['py:' + tt]; if (wantDetail) detail.push('拼音:' + tt + '(+' + round3(0.4 * toks['py:' + tt]) + ')'); }
+      if (toks['pyi:' + tt]) { score += 0.4 * toks['pyi:' + tt]; if (wantDetail) detail.push('拼音首字母:' + tt + '(+' + round3(0.4 * toks['pyi:' + tt]) + ')'); }
+      // 首字母串（如 yyyd）拆 bigram 匹配 pyi: token
+      if (tt.length >= 3) {
+        for (let i = 0; i < tt.length - 1; i++) {
+          const bg = tt.slice(i, i + 2);
+          if (toks['pyi:' + bg]) { score += 0.4 * toks['pyi:' + bg]; if (wantDetail) detail.push('拼音首字母:' + bg + '(+' + round3(0.4 * toks['pyi:' + bg]) + ')'); }
+        }
+      }
+    }
+  }
+  if (score === 0 && hay.indexOf(q) !== -1) { score = 1; if (wantDetail) detail.push('子串命中'); }
+  if (score === 0) {
+    const longQtoks = qtoks.filter(function (t) { return t.length >= 4; });
+    const keys = Object.keys(toks).filter(function (k) { return k.length >= 4 && k.indexOf(':') === -1; });
+    outer:
+    for (const t of longQtoks) {
+      for (const k of keys) {
+        if (Math.abs(k.length - t.length) <= 2 && editDistance(k, t) <= 2) {
+          score += 0.3 * toks[k];
+          if (wantDetail) detail.push('模糊:' + t + '~' + k + '(+' + round3(0.3 * toks[k]) + ')');
+          break outer;
+        }
+      }
+    }
+  }
+  return { score: score, detail: detail };
+}
+function round3(n) { return Math.round(n * 1000) / 1000; }
+// ---- v0.8.0 自我进化：统一效用分（盖棺分）----
+function feedbackNetOf(meta) { return parseInt(meta.feedback_net || '0', 10) || 0; }
+function utilityScore(meta) {
+  const conf = Math.min(Math.max(parseFloat(meta.confidence || 1.0) || 1.0, 0), 1);
+  const acc = parseInt(meta.access_count || '0', 10) || 0;
+  const fb = feedbackNetOf(meta);
+  const usageScore = 0.5 * (Math.min(acc, 20) / 20) + 0.5 * (fb / (1 + Math.abs(fb)));
+  const last = meta.last_accessed || meta.created || '';
+  let recencyScore = 0;
+  if (last) {
+    const d = daysBetween(last, today());
+    recencyScore = Math.max(0, 1 - d / 365);
+  }
+  const typeScore = ({ BOUND: 1.0, COMMIT: 0.9, PREF: 0.8, FACT: 0.6 })[String(meta.type || 'FACT').toUpperCase()] || 0.6;
+  let structureScore = 0;
+  if (meta.source) structureScore += 0.2;
+  const tags = parseTags(meta.tags);
+  if (tags.length) structureScore += 0.3;
+  if (meta.subject) structureScore += 0.2;
+  if (meta.confidence !== undefined && meta.confidence !== null && meta.confidence !== '') structureScore += 0.1;
+  structureScore = Math.min(structureScore, 1.0);
+  const w = parseFloat(meta.weight || '1.0');
+  const weight = (w > 0 ? w : 1.0);
+  return ((0.30 * conf) + (0.25 * usageScore) + (0.20 * recencyScore) + (0.15 * typeScore) + (0.10 * structureScore)) * weight;
+}
+// utility 分项明细（explain / 审计用）
+function utilityBreakdown(meta) {
+  const conf = Math.min(Math.max(parseFloat(meta.confidence || 1.0) || 1.0, 0), 1);
+  const acc = parseInt(meta.access_count || '0', 10) || 0;
+  const fb = feedbackNetOf(meta);
+  const usageScore = 0.5 * (Math.min(acc, 20) / 20) + 0.5 * (fb / (1 + Math.abs(fb)));
+  const last = meta.last_accessed || meta.created || '';
+  let recencyScore = 0;
+  if (last) { const d = daysBetween(last, today()); recencyScore = Math.max(0, 1 - d / 365); }
+  const typeScore = ({ BOUND: 1.0, COMMIT: 0.9, PREF: 0.8, FACT: 0.6 })[String(meta.type || 'FACT').toUpperCase()] || 0.6;
+  let structureScore = 0;
+  if (meta.source) structureScore += 0.2;
+  const tags = parseTags(meta.tags);
+  if (tags.length) structureScore += 0.3;
+  if (meta.subject) structureScore += 0.2;
+  if (meta.confidence !== undefined && meta.confidence !== null && meta.confidence !== '') structureScore += 0.1;
+  structureScore = Math.min(structureScore, 1.0);
+  const w = parseFloat(meta.weight || '1.0');
+  const weight = (w > 0 ? w : 1.0);
+  return {
+    confidence: round3(0.30 * conf), usage: round3(0.25 * usageScore), recency: round3(0.20 * recencyScore),
+    type: round3(0.15 * typeScore), structure: round3(0.10 * structureScore), weight: round3(weight),
+    total: round3(((0.30 * conf) + (0.25 * usageScore) + (0.20 * recencyScore) + (0.15 * typeScore) + (0.10 * structureScore)) * weight)
+  };
 }
 function frontmatterToText(meta, body) {
   const lines = ['---'];
@@ -394,19 +581,24 @@ function writeProfileText(root, owner, text) {
 
 // ---- 索引（index.json）----
 function indexPath(root) { return path.join(root, INDEX_FILE); }
+const INDEX_VERSION = 3;
 function loadIndex(root) {
   const p = indexPath(root);
   if (!fs.existsSync(p)) return null;
   try {
     const d = JSON.parse(fs.readFileSync(p, 'utf8'));
-    if (d && Array.isArray(d.entries)) return d.entries;
+    if (d && Array.isArray(d.entries)) {
+      // v0.8.0 语义索引（字段加权 + 拼音 token）version=3；旧版索引返回 null 触发重建
+      if (d.version && d.version >= INDEX_VERSION) return d.entries;
+      return null;
+    }
   } catch (e) { /* ignore */ }
   return null;
 }
 function getIndex(root) { return loadIndex(root) || []; }
 function saveIndex(root, entries) {
   const clean = entries.map(function (e) { const c = Object.assign({}, e); delete c.meta; return c; });
-  fs.writeFileSync(indexPath(root), JSON.stringify({ version: 2, updated: today(), entries: clean }, null, 2), 'utf8');
+  fs.writeFileSync(indexPath(root), JSON.stringify({ version: INDEX_VERSION, updated: today(), entries: clean }, null, 2), 'utf8');
 }
 function collectEntryFiles(root) {
   const dirs = [];
@@ -541,7 +733,7 @@ function removeIndexEntries(root, files) {
     if (next.length !== idx.length) saveIndex(root, next);
   }
   for (const o of Object.keys(byOwner)) {
-    const key = getKeyOwnerByOwner(root, o);
+    const key = getOwnerKeyFor(root, o);
     if (!key) continue;
     const idx = loadOwnerIndex(root, o, key);
     const oset = new Set(byOwner[o]);
@@ -583,6 +775,7 @@ function readEntry(fp, root) {
     immutable: meta.immutable === 'true',
     source: meta.source || '',
     weight: (parseFloat(meta.weight) > 0 ? parseFloat(meta.weight) : 1.0),
+    feedback_net: feedbackNetOf(meta),
     tokens: buildTokens(subject, statement, tags),
     meta: meta,
   };
@@ -793,6 +986,7 @@ function rememberCore(type, subject, statement, opts) {
   return { error: false, text: text };
 }
 function recallCore(query, opts) {
+  opts = opts || {};
   const roots = memoryRoots();
   if (!roots.length) return { error: false, exitCode: 0, text: '记忆库不存在，请先运行: yotta-memory init' };
   const limit = opts.limit || 50;
@@ -804,6 +998,8 @@ function recallCore(query, opts) {
   const allSafe = !!opts.unsafe;
   const impersonation = !!(opts.agent && selfAgent && opts.agent !== selfAgent);
   const explicitCross = !!opts.all || impersonation || (!!ownerFilter && ownerFilter.toLowerCase() !== 'user' && ownerFilter !== agent);
+  const wantExplain = !!opts.explain;
+  const useSemantic = opts.semantic !== false;
   const hits = [];
   let deniedCount = 0;
   for (const root of roots) {
@@ -813,27 +1009,60 @@ function recallCore(query, opts) {
       const r = classifyRead(e, agent, ownerFilter, allSafe, selfAgent);
       if (r === 'denied') { deniedCount++; continue; }
       let score = 0;
+      let detail = null;
       if (q) {
-        const qtoks = tokenize(q);
-        for (const tt of qtoks) { if (e.tokens && e.tokens[tt]) score += e.tokens[tt]; }
-        if (score === 0) {
-          const hay = ((e.subject || '') + ' ' + (e.statement || '') + ' ' + e.tags.join(' ')).toLowerCase();
-          if (hay.indexOf(q) !== -1) score = 1;
+        if (useSemantic) {
+          const m = semanticMatch(e, q, wantExplain);
+          score = m.score;
+          if (wantExplain && m.detail && m.detail.length) detail = m.detail;
+        } else {
+          const qtoks = tokenize(q);
+          for (const tt of qtoks) { if (e.tokens && e.tokens[tt]) score += e.tokens[tt]; }
+          if (score === 0) {
+            const hay = ((e.subject || '') + ' ' + (e.statement || '') + ' ' + e.tags.join(' ')).toLowerCase();
+            if (hay.indexOf(q) !== -1) score = 1;
+          }
         }
         if (score === 0) continue;
       } else {
         score = 1;
       }
-      hits.push({ entry: e, score: score, root: root });
+      hits.push({ entry: e, score: score, root: root, detail: detail });
     }
   }
-  hits.sort(function (a, b) {
-    if (b.score !== a.score) return b.score - a.score;
-    const pa = a.root === projectRoot() ? 0 : 1;
-    const pb = b.root === projectRoot() ? 0 : 1;
-    if (pa !== pb) return pa - pb;
-    return String(b.entry.created).localeCompare(String(a.entry.created));
-  });
+  // v0.8.0 融合排序：0.65 × 语义分归一 + 0.35 × 效用分归一
+  if (hits.length > 1) {
+    let minSem = Infinity, maxSem = -Infinity, minUtil = Infinity, maxUtil = -Infinity;
+    for (const h of hits) {
+      if (h.score < minSem) minSem = h.score;
+      if (h.score > maxSem) maxSem = h.score;
+      const u = utilityScore(h.entry);
+      if (u < minUtil) minUtil = u;
+      if (u > maxUtil) maxUtil = u;
+    }
+    const spanSem = maxSem - minSem;
+    const spanUtil = maxUtil - minUtil;
+    for (const h of hits) {
+      h.semNorm = spanSem > 0 ? (h.score - minSem) / spanSem : 1;
+      h.utilNorm = spanUtil > 0 ? (utilityScore(h.entry) - minUtil) / spanUtil : 1;
+      h.finalScore = 0.65 * h.semNorm + 0.35 * h.utilNorm;
+    }
+    hits.sort(function (a, b) {
+      if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
+      if (b.score !== a.score) return b.score - a.score;
+      const pa = a.root === projectRoot() ? 0 : 1;
+      const pb = b.root === projectRoot() ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      return String(b.entry.created).localeCompare(String(a.entry.created));
+    });
+  } else {
+    hits.sort(function (a, b) {
+      const pa = a.root === projectRoot() ? 0 : 1;
+      const pb = b.root === projectRoot() ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      return String(b.entry.created).localeCompare(String(a.entry.created));
+    });
+  }
   const shown = hits.slice(0, limit);
   if (!shown.length) {
     if (deniedCount > 0 && explicitCross) {
@@ -852,6 +1081,11 @@ function recallCore(query, opts) {
   for (const h of shown) {
     lines.push('[' + h.entry.type + '] ' + h.entry.subject + ': ' + h.entry.statement);
     lines.push('  ' + path.join(h.root, h.entry.file));
+    if (wantExplain) {
+      if (h.detail && h.detail.length) lines.push('    命中: ' + h.detail.join('、'));
+      const ub = utilityBreakdown(h.entry);
+      lines.push('    效用分: ' + round3(ub.total) + '（conf ' + ub.confidence + ' + 使用 ' + ub.usage + ' + 时效 ' + ub.recency + ' + 类型 ' + ub.type + ' + 结构 ' + ub.structure + '）×weight ' + ub.weight);
+    }
   }
   if (deniedCount > 0 && explicitCross) {
     lines.push('\n[警告] 本次检索共拒绝 ' + deniedCount + ' 条越界访问（其它智能体私密记忆，未授权不展示）。如需读取请加 --unsafe 或 --owner user。');
@@ -895,8 +1129,10 @@ function forgetCore(fileRef, opts) {
   return { error: false, text: '已删除: ' + target };
 }
 function archiveCore(opts) {
-  const days = opts.days || 180;
-  const threshold = (opts.threshold !== undefined && opts.threshold !== null) ? opts.threshold : 0.4;
+  opts = opts || {};
+  const cfg = loadConfig();
+  const days = opts.days || parseInt(cfg.maintain_archived_age || '180', 10) || 180;
+  const threshold = (opts.threshold !== undefined && opts.threshold !== null) ? opts.threshold : (parseFloat(cfg.maintain_archived_utility || 0.35));
   const root = userRoot();
   if (!fs.existsSync(root)) return { error: false, text: '记忆库不存在。' };
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
@@ -911,7 +1147,8 @@ function archiveCore(opts) {
     const createdTs = new Date(meta.created).getTime();
     if (isNaN(createdTs)) continue;
     const t = (meta.type || 'FACT').toUpperCase();
-    if (vitality(meta) < threshold && createdTs < cutoff) {
+    // v0.8.0 统一效用分（盖棺分）替代 vitality
+    if (utilityScore(meta) < threshold && createdTs < cutoff) {
       const destDir = path.join(root, ARCHIVE_DIR, TYPE_DIRS[t]);
       fs.mkdirSync(destDir, { recursive: true });
       fs.renameSync(fp, path.join(destDir, path.basename(fp)));
@@ -922,6 +1159,410 @@ function archiveCore(opts) {
   }
   if (movedFiles.length) removeIndexEntries(root, movedFiles);
   return { error: false, text: '已归档 ' + moved + ' 条旧记忆到 ' + path.join(root, ARCHIVE_DIR) };
+}
+
+// ---- v0.8.0 自我学习/自我进化/自我提升：feedback / explain / maintain / distill ----
+function auditPath(root, kind) {
+  return path.join(root, ARCHIVE_DIR, kind + '-' + today() + '.jsonl');
+}
+function appendAudit(root, kind, rec) {
+  try {
+    fs.mkdirSync(path.join(root, ARCHIVE_DIR), { recursive: true });
+    fs.appendFileSync(auditPath(root, kind), JSON.stringify(rec) + '\n', 'utf8');
+  } catch (e) { /* 审计失败不阻断主流程 */ }
+}
+function resolveMemoryTarget(ref) {
+  const roots = memoryRoots();
+  const targetRef = String(ref || '').replace(/\\/g, '/');
+  for (const root of roots) {
+    const found = resolveMemoryFile(root, targetRef);
+    if (found) return { fp: found.fp, root: root, rel: found.rel };
+  }
+  return null;
+}
+function checkOwnerWritable(targetRoot, targetRel, selfAgent, unsafe) {
+  const seg = String(targetRel).split('/');
+  if (seg[0] === PRIVATE_DIR) {
+    const owner = seg[1] || '';
+    if (!unsafe && (owner && (selfAgent ? owner !== selfAgent : true))) {
+      return '拒绝: 不能操作其它智能体 ' + owner + ' 的私密记忆（当前身份 ' + (selfAgent || '未声明') + '）。请用 YOTTA_AGENT_ID 声明自己的身份，或加 --unsafe（用户显式授权）。';
+    }
+  }
+  return null;
+}
+// 显式使用反馈：useful/useless → weight/confidence/feedback_net 演化（自我学习闭环）
+function feedbackCore(ref, opts) {
+  opts = opts || {};
+  const selfAgent = opts.selfAgent || currentAgent();
+  const target = resolveMemoryTarget(ref);
+  if (!target) return { error: true, text: '未找到记忆文件: ' + ref };
+  const deny = checkOwnerWritable(target.root, target.rel, selfAgent, opts.unsafe);
+  if (deny) return { error: true, text: deny };
+  const owner = ownerFromPrivatePath(target.root, target.fp);
+  let meta;
+  try { meta = parseFrontmatter(readMemoryText(target.root, target.fp, owner)).meta; } catch (e) { return { error: true, text: '读取失败: ' + e.message }; }
+  if (opts.undo) {
+    return feedbackUndoCore(target, owner, meta, selfAgent, opts);
+  }
+  const useful = !!opts.useful;
+  const useless = !!opts.useless;
+  if (!useful && !useless) return { error: true, text: '请指定 --useful（有用）或 --useless（没用）。' };
+  const cfg = loadConfig();
+  const stepW = parseFloat(cfg.feedback_weight_step || 0.2);
+  const stepC = parseFloat(cfg.feedback_confidence_step || 0.05);
+  const w = parseFloat(meta.weight || '1.0'); const weight = (w > 0 ? w : 1.0);
+  const conf = parseFloat(meta.confidence || '1.0'); const confidence = (conf > 0 ? conf : 1.0);
+  const fb = feedbackNetOf(meta);
+  let nw = weight, nc = confidence, nfb = fb;
+  if (useful) { nw = Math.min(weight * (1 + stepW), 3.0); nc = Math.min(confidence + stepC, 1.0); nfb = fb + 1; }
+  if (useless) { nw = Math.max(weight * (1 - stepW), 0.2); nc = Math.max(confidence - stepC, 0.3); nfb = fb - 1; }
+  const before = { weight: round3(weight), confidence: round3(confidence), feedback_net: fb };
+  const after = { weight: round3(nw), confidence: round3(nc), feedback_net: nfb };
+  const patch = { weight: after.weight, confidence: after.confidence, feedback_net: after.feedback_net, updated: today() };
+  rewriteFrontmatter(target.fp, patch, target.root, owner);
+  upsertIndexEntry(target.root, readEntry(target.fp, target.root));
+  appendAudit(target.root, 'feedback', { ts: new Date().toISOString(), file: target.rel, action: useful ? 'useful' : 'useless', before: before, after: after, reason: opts.reason || '' });
+  const lines = [(useful ? '已反馈 [有用]' : '已反馈 [没用]') + ': ' + target.rel];
+  lines.push('  weight ' + before.weight + ' -> ' + after.weight + ' / confidence ' + before.confidence + ' -> ' + after.confidence + ' / feedback_net ' + before.feedback_net + ' -> ' + after.feedback_net);
+  if (opts.reason) lines.push('  原因: ' + opts.reason);
+  lines.push('  提示: yotta-memory explain ' + target.rel + ' 查看效用分项；feedback --undo 回滚最近一次');
+  return { error: false, text: lines.join('\n') };
+}
+function feedbackUndoCore(target, owner, meta, selfAgent, opts) {
+  const cfg = loadConfig();
+  const lines = [];
+  let restored = false;
+  try {
+    const log = auditPath(target.root, 'feedback');
+    if (!fs.existsSync(log)) return { error: true, text: '无可回滚的反馈记录（' + log + ' 不存在）。' };
+    const recs = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map(function (l) { try { return JSON.parse(l); } catch (e) { return null; } }).filter(Boolean);
+    const mine = recs.filter(function (r) { return r.file === target.rel && (r.action === 'useful' || r.action === 'useless'); });
+    if (!mine.length) return { error: true, text: '该文件无反馈记录可回滚。' };
+    const last = mine[mine.length - 1];
+    const patch = { weight: last.before.weight, confidence: last.before.confidence, feedback_net: last.before.feedback_net, updated: today() };
+    rewriteFrontmatter(target.fp, patch, target.root, owner);
+    upsertIndexEntry(target.root, readEntry(target.fp, target.root));
+    appendAudit(target.root, 'feedback', { ts: new Date().toISOString(), file: target.rel, action: 'undo', before: last.after, after: last.before, reason: opts.reason || '' });
+    lines.push('已回滚最近一次反馈: ' + target.rel);
+    lines.push('  ' + last.action + ' -> 恢复 weight ' + last.after.weight + ' -> ' + last.before.weight + ' / feedback_net ' + last.after.feedback_net + ' -> ' + last.before.feedback_net);
+    restored = true;
+  } catch (e) { return { error: true, text: '回滚失败: ' + e.message }; }
+  return { error: false, text: lines.join('\n') };
+}
+// 解释单条记忆效用分项（为什么靠前/归档/遗忘）
+function explainCore(ref, opts) {
+  opts = opts || {};
+  const selfAgent = opts.selfAgent || currentAgent();
+  const target = resolveMemoryTarget(ref);
+  if (!target) return { error: true, text: '未找到记忆文件: ' + ref };
+  const owner = ownerFromPrivatePath(target.root, target.fp);
+  let entry;
+  try { entry = readEntry(target.fp, target.root); } catch (e) { return { error: true, text: '读取失败: ' + e.message }; }
+  const deny = checkOwnerWritable(target.root, target.rel, selfAgent, opts.unsafe);
+  const readable = !deny;
+  const ub = utilityBreakdown(entry);
+  const ageDays = entry.created ? daysBetween(entry.created, today()) : 0;
+  const cfg = loadConfig();
+  const archU = parseFloat(cfg.maintain_archived_utility || 0.35);
+  const archAge = parseInt(cfg.maintain_archived_age || '180', 10) || 180;
+  const forgetU = parseFloat(cfg.maintain_forget_utility || 0.12);
+  const forgetAge = parseInt(cfg.maintain_forget_age || '365', 10) || 365;
+  const lines = ['[' + entry.type + '] ' + entry.subject + ': ' + entry.statement];
+  lines.push('  文件: ' + target.rel + (readable ? '' : '（其它智能体私密，仅元数据）'));
+  lines.push('  效用分: ' + ub.total + ' = confidence ' + ub.confidence + ' + 使用 ' + ub.usage + ' + 时效 ' + ub.recency + ' + 类型 ' + ub.type + ' + 结构 ' + ub.structure + '）×weight ' + ub.weight);
+  lines.push('  年龄: ' + ageDays + ' 天 / access_count ' + (entry.access_count || 0) + ' / feedback_net ' + entry.feedback_net + ' / immutable ' + (entry.immutable ? '是' : '否'));
+  const importScore = round3(importanceScore(entry));
+  lines.push('  importance(旧): ' + importScore + ' / vitality(旧): ' + round3(vitality(entry)));
+  if (entry.immutable) lines.push('  状态: immutable 豁免自动归档/遗忘');
+  else if (ub.total < forgetU && ageDays > forgetAge && entry.type !== 'BOUND') lines.push('  状态: 遗忘候选（utility < ' + forgetU + ' 且年龄 > ' + forgetAge + ' 天；--purge 才真删）');
+  else if (ub.total < archU && ageDays > archAge) lines.push('  状态: 归档候选（utility < ' + archU + ' 且年龄 > ' + archAge + ' 天）');
+  else lines.push('  状态: 保留（未达归档/遗忘阈值）');
+  return { error: false, text: lines.join('\n') };
+}
+function jaccardTokens(a, b) {
+  const sa = new Set(Object.keys(a.tokens || {}).filter(function (k) { return k.indexOf(':') === -1; }));
+  const sb = new Set(Object.keys(b.tokens || {}).filter(function (k) { return k.indexOf(':') === -1; }));
+  if (!sa.size || !sb.size) return 0;
+  let inter = 0;
+  for (const k of sa) { if (sb.has(k)) inter++; }
+  const union = sa.size + sb.size - inter;
+  return union ? inter / union : 0;
+}
+function subjectsSimilar(a, b) {
+  const sa = String(a.subject || '').toLowerCase();
+  const sb = String(b.subject || '').toLowerCase();
+  if (!sa || !sb) return false;
+  if (sa === sb) return true;
+  return editDistance(sa, sb) <= 3;
+}
+// 记忆自组织：规则层自动归档/遗忘/去重（默认 dry-run，--apply 才执行，--purge 才真删）
+function maintainCore(opts) {
+  opts = opts || {};
+  const apply = !!opts.apply;
+  const purge = !!opts.purge;
+  const root = userRoot();
+  if (!fs.existsSync(root)) return { error: false, text: '记忆库不存在。' };
+  const cfg = loadConfig();
+  const archU = parseFloat(opts.threshold !== undefined && opts.threshold !== null ? opts.threshold : (cfg.maintain_archived_utility || 0.35));
+  const archAge = parseInt(opts.age || cfg.maintain_archived_age || '180', 10) || 180;
+  const forgetU = parseFloat(cfg.maintain_forget_utility || 0.12);
+  const forgetAge = parseInt(cfg.maintain_forget_age || '365', 10) || 365;
+  const mode = apply ? (purge ? '执行（含遗忘真删 --purge）' : '执行') : '预览（dry-run，未改动；加 --apply 执行，--purge 才真删）';
+  const lines = ['## yotta-memory maintain（记忆自组织）'];
+  lines.push('- 模式: ' + mode);
+  lines.push('- 归档阈值: utility < ' + archU + ' 且年龄 > ' + archAge + ' 天；遗忘阈值: utility < ' + forgetU + ' 且年龄 > ' + forgetAge + ' 天');
+  lines.push('');
+  const toArchive = [], toForget = [], skipped = [];
+  for (const fp of collectEntryFiles(root)) {
+    const owner = ownerFromPrivatePath(root, fp);
+    let meta;
+    try { meta = parseFrontmatter(readMemoryText(root, fp, owner)).meta; } catch (e) { continue; }
+    if (meta.immutable === 'true') { skipped.push({ fp: fp, reason: 'immutable 豁免' }); continue; }
+    if (!meta.created) { skipped.push({ fp: fp, reason: '无 created' }); continue; }
+    const type = (meta.type || 'FACT').toUpperCase();
+    const ageDays = daysBetween(meta.created, today());
+    const u = utilityScore(meta);
+    const rec = { fp: fp, rel: relOf(root, fp), type: type, ageDays: ageDays, utility: u, meta: meta, owner: owner };
+    if (u < forgetU && ageDays > forgetAge) {
+      if (type === 'BOUND') { skipped.push({ fp: fp, reason: 'BOUND 豁免遗忘' }); }
+      else { toForget.push(rec); continue; }
+    }
+    if (u < archU && ageDays > archAge) toArchive.push(rec);
+  }
+  let archived = 0, forgotten = 0;
+  if (toArchive.length) {
+    lines.push('### 归档候选（' + toArchive.length + ' 条）');
+    for (const rec of toArchive) {
+      lines.push('- [' + rec.type + '] ' + rec.rel + '（utility ' + round3(rec.utility) + '，' + rec.ageDays + ' 天）— ' + (rec.meta.subject || '') + ': ' + String(rec.meta.statement || '').slice(0, 40) + (rec.type === 'COMMIT' ? '  ⚠️ COMMIT 收工纪律锚点，请确认' : ''));
+      if (apply) {
+        const destDir = path.join(root, ARCHIVE_DIR, TYPE_DIRS[rec.type]);
+        fs.mkdirSync(destDir, { recursive: true });
+        fs.renameSync(rec.fp, path.join(destDir, path.basename(rec.fp)));
+        appendAudit(root, 'audit', { ts: new Date().toISOString(), file: rec.rel, action: 'archive', reason: 'utility<' + round3(rec.utility) + ',age>' + rec.ageDays, utility: round3(rec.utility) });
+        archived++;
+      }
+    }
+    lines.push('');
+  }
+  if (toForget.length) {
+    lines.push('### 遗忘候选（' + toForget.length + ' 条，默认不真删；--purge 才删除）');
+    for (const rec of toForget) {
+      lines.push('- [' + rec.type + '] ' + rec.rel + '（utility ' + round3(rec.utility) + '，' + rec.ageDays + ' 天）');
+      if (apply && purge) {
+        const destDir = path.join(root, ARCHIVE_DIR, TYPE_DIRS[rec.type]);
+        fs.mkdirSync(destDir, { recursive: true });
+        const dest = path.join(destDir, path.basename(rec.fp));
+        fs.renameSync(rec.fp, dest);
+        appendAudit(root, 'audit', { ts: new Date().toISOString(), file: rec.rel, action: 'forget', reason: 'utility<' + round3(rec.utility) + ',age>' + rec.ageDays + ',purge', utility: round3(rec.utility) });
+        // 真删前二次确认标记：purge 已显式授权，删除 .archive 内副本前的最终动作 = 记录审计后删除
+        try { fs.unlinkSync(dest); } catch (e) { /* 保留副本 */ }
+        forgotten++;
+      } else if (apply) {
+        lines.push('    （--purge 未开启，跳过真删）');
+      }
+    }
+    lines.push('');
+  }
+  if (apply) {
+    if (archived || forgotten) {
+      const allMoved = toArchive.concat(toForget).filter(function (r) { return true; });
+      removeIndexEntries(root, allMoved.map(function (r) { return r.rel; }));
+    }
+    lines.push('- 已执行: 归档 ' + archived + ' 条，遗忘 ' + forgotten + ' 条。审计: ' + auditPath(root, 'audit'));
+  } else {
+    lines.push('- 未执行任何变更（dry-run）。加 --apply 执行归档，--purge 才真删遗忘候选。');
+  }
+  if (skipped.length) {
+    lines.push('');
+    lines.push('### 跳过（' + skipped.length + ' 条）');
+    const grouped = {};
+    for (const s of skipped) { grouped[s.reason] = (grouped[s.reason] || 0) + 1; }
+    for (const k of Object.keys(grouped)) lines.push('- ' + k + ': ' + grouped[k] + ' 条');
+  }
+  // 去重
+  if (opts.dedup) {
+    lines.push('');
+    lines.push('### 去重候选（--dedup）');
+    const entries = ensureIndex(root);
+    const groups = [];
+    const used = new Set();
+    for (let i = 0; i < entries.length; i++) {
+      if (used.has(i)) continue;
+      const g = [entries[i]];
+      used.add(i);
+      for (let j = i + 1; j < entries.length; j++) {
+        if (used.has(j)) continue;
+        if (subjectsSimilar(entries[i], entries[j]) && jaccardTokens(entries[i], entries[j]) >= 0.7) {
+          g.push(entries[j]); used.add(j);
+        }
+      }
+      if (g.length > 1) groups.push(g);
+    }
+    if (!groups.length) lines.push('（无重复候选）');
+    for (const g of groups) {
+      lines.push('- 组: ' + g.map(function (e) { return e.file; }).join(' | '));
+      lines.push('  ' + g.map(function (e) { return e.subject + ': ' + e.statement; }).join(' / '));
+    }
+    lines.push('  合并: yotta-memory maintain --merge <fileA> <fileB>');
+  }
+  return { error: false, text: lines.join('\n') };
+}
+// 手动合并两条相似记忆：保留高 confidence，低 confidence 移入 .archive
+function mergeCore(refA, refB, opts) {
+  opts = opts || {};
+  const selfAgent = opts.selfAgent || currentAgent();
+  const ta = resolveMemoryTarget(refA);
+  const tb = resolveMemoryTarget(refB);
+  if (!ta || !tb) return { error: true, text: '未找到记忆文件: ' + refA + ' / ' + refB };
+  for (const t of [ta, tb]) {
+    const deny = checkOwnerWritable(t.root, t.rel, selfAgent, opts.unsafe);
+    if (deny) return { error: true, text: deny };
+  }
+  if (ta.root !== tb.root) return { error: true, text: '暂不支持跨记忆库合并（' + ta.root + ' vs ' + tb.root + '）。' };
+  const root = ta.root;
+  const ea = readEntry(ta.fp, root);
+  const eb = readEntry(tb.fp, root);
+  const keep = ea.confidence >= eb.confidence ? ea : eb;
+  const drop = ea.confidence >= eb.confidence ? eb : ea;
+  const keepFp = ea.confidence >= eb.confidence ? ta.fp : tb.fp;
+  const dropFp = ea.confidence >= eb.confidence ? tb.fp : ta.fp;
+  const owner = ownerFromPrivatePath(root, keepFp);
+  const tags = Array.from(new Set((keep.tags || []).concat(drop.tags || [])));
+  const patch = { updated: today(), tags: JSON.stringify(tags), access_count: (keep.access_count || 0) + (drop.access_count || 0), feedback_net: (keep.feedback_net || 0) + (drop.feedback_net || 0) };
+  rewriteFrontmatter(keepFp, patch, root, owner);
+  upsertIndexEntry(root, readEntry(keepFp, root));
+  const destDir = path.join(root, ARCHIVE_DIR, TYPE_DIRS[drop.type]);
+  fs.mkdirSync(destDir, { recursive: true });
+  const dest = path.join(destDir, path.basename(dropFp));
+  fs.renameSync(dropFp, dest);
+  removeIndexEntry(root, drop.file);
+  appendAudit(root, 'audit', { ts: new Date().toISOString(), file: drop.file, action: 'merge', reason: '并入 ' + keep.file, utility: round3(utilityScore(keep)) });
+  return { error: false, text: '已合并: ' + drop.file + ' -> ' + keep.file + '\n  保留: [' + keep.type + '] ' + keep.subject + ': ' + keep.statement + '\n  归档低 confidence: ' + drop.file };
+}
+// 心理日志蒸馏：统计摘要 / 主题画像 / 知识地图（启发式默认，可选 --model）
+function distillCore(opts) {
+  opts = opts || {};
+  const root = userRoot();
+  if (!fs.existsSync(root)) return { error: false, text: '记忆库不存在。' };
+  const selfAgent = opts.selfAgent || currentAgent();
+  const owner = opts.owner || selfAgent;
+  const entries = [];
+  for (const r of memoryRoots()) {
+    for (const e of ensureIndex(r)) {
+      if (classifyRead(e, owner, '', !!opts.unsafe, selfAgent) === 'denied') continue;
+      entries.push(e);
+    }
+  }
+  const lines = [];
+  lines.push('# 元忆记忆蒸馏报告（v0.8.0）');
+  lines.push('');
+  lines.push('> 生成: yotta-memory distill | 启发式蒸馏（零依赖）；--model <cmd> 可选外部模型增强');
+  lines.push('> 时间: ' + new Date().toISOString() + ' / 可读条目: ' + entries.length + ' 条');
+  lines.push('');
+  // 1) 统计摘要
+  lines.push('## 一、统计摘要');
+  lines.push('');
+  if (!entries.length) lines.push('（无记忆）');
+  const byType = {};
+  for (const e of entries) byType[e.type] = (byType[e.type] || 0) + 1;
+  lines.push('- 类型分布: ' + Object.keys(byType).map(function (k) { return k + ' ' + byType[k]; }).join(' / '));
+  let young = 0, mid = 0, old = 0, veryOld = 0;
+  for (const e of entries) {
+    if (!e.created) continue;
+    const d = daysBetween(e.created, today());
+    if (d < 30) young++; else if (d < 90) mid++; else if (d < 180) old++; else veryOld++;
+  }
+  lines.push('- 年龄分布: <30天 ' + young + ' / 30-90 ' + mid + ' / 90-180 ' + old + ' / >180天 ' + veryOld);
+  const hot = entries.slice().sort(function (a, b) { return (b.access_count || 0) - (a.access_count || 0); }).slice(0, 5);
+  lines.push('- 热度 Top5（access_count）:');
+  for (const h of hot) lines.push('  - [' + h.type + '] ' + h.subject + '（' + (h.access_count || 0) + ' 次）');
+  let fbSum = 0, usefulN = 0, uselessN = 0;
+  for (const e of entries) { const n = e.feedback_net || 0; fbSum += n; if (n > 0) usefulN++; else if (n < 0) uselessN++; }
+  lines.push('- 反馈统计: feedback_net 总和 ' + fbSum + '（正 ' + usefulN + ' 条 / 负 ' + uselessN + ' 条）');
+  lines.push('');
+  // 2) 主题画像（按 subject 聚类合并）
+  lines.push('## 二、主题画像（按 subject 聚类，启发式合并）');
+  lines.push('');
+  const groups = {};
+  for (const e of entries) {
+    const key = String(e.subject || '（无主题）');
+    (groups[key] = groups[key] || []).push(e);
+  }
+  const sortedKeys = Object.keys(groups).sort(function (a, b) { return groups[b].length - groups[a].length; });
+  for (const k of sortedKeys) {
+    const g = groups[k];
+    const best = g.slice().sort(function (a, b) { return (b.confidence || 0) - (a.confidence || 0); })[0];
+    const tags = Array.from(new Set([].concat.apply([], g.map(function (e) { return e.tags || []; }))));
+    lines.push('### ' + k + '（' + g.length + ' 条）');
+    lines.push('- 代表: ' + best.statement);
+    if (tags.length) lines.push('- 标签: ' + tags.join(', '));
+    lines.push('- 引用: ' + g.map(function (e) { return e.file; }).join(' / '));
+    lines.push('');
+  }
+  // 3) 知识地图（type + tags 层级）
+  lines.push('## 三、知识地图（type → tags）');
+  lines.push('');
+  const map = {};
+  for (const e of entries) {
+    const t = e.type;
+    (map[t] = map[t] || {});
+    const tagKey = (e.tags && e.tags.length) ? e.tags.join(',') : '（无标签）';
+    (map[t][tagKey] = map[t][tagKey] || []).push(e);
+  }
+  for (const t of Object.keys(map).sort()) {
+    lines.push('### ' + t);
+    for (const tk of Object.keys(map[t]).sort()) {
+      lines.push('- ' + tk + ': ' + map[t][tk].map(function (e) { return e.subject; }).join(' / '));
+    }
+  }
+  let body = lines.join('\n') + '\n';
+  // 可选模型增强：--model <cmd>，stdin 传结构化摘要，stdout 取提炼文本
+  let modelOut = '';
+  if (opts.model) {
+    try {
+      const payload = JSON.stringify({ summary: lines.join('\n'), entries: entries.map(function (e) { return { type: e.type, subject: e.subject, statement: e.statement, tags: e.tags, confidence: e.confidence, access_count: e.access_count, feedback_net: e.feedback_net }; }).slice(0, 200) });
+      const r = child_process.spawnSync(String(opts.model), { input: payload, encoding: 'utf8', maxBuffer: 1024 * 1024, shell: process.platform === 'win32' });
+      if (r.stdout) modelOut = String(r.stdout).trim();
+      if (!modelOut) modelOut = '（模型无输出）';
+      body += '\n## 四、模型提炼（--model ' + opts.model + '）\n\n' + modelOut + '\n';
+    } catch (e) {
+      modelOut = '（模型调用失败: ' + e.message + '）';
+      body += '\n## 四、模型提炼\n\n' + modelOut + '\n';
+    }
+  }
+  // 落盘：--out 指定 / 私密 distills / 公共 facts/distills
+  let written = '';
+  try {
+    if (opts.out) {
+      const outPath = path.resolve(String(opts.out));
+      fs.mkdirSync(path.dirname(outPath), { recursive: true });
+      fs.writeFileSync(outPath, body, 'utf8');
+      written = outPath;
+    } else {
+      const slug = String((opts.subject || 'distill').replace(/[^\w\u4e00-\u9fa5-]+/g, '-').slice(0, 40));
+      const fname = today() + '-' + slug + '.md';
+      if (owner && entries.some(function (e) { return e.scope !== 'public' && e.owner === owner; })) {
+        const dir = path.join(root, PRIVATE_DIR, owner, 'distills');
+        fs.mkdirSync(dir, { recursive: true });
+        const fp = path.join(dir, fname);
+        const text = frontmatterToText({ type: 'COMMIT', subject: '蒸馏报告 ' + slug, statement: '记忆蒸馏报告（' + today() + '）', confidence: 1.0, created: today(), updated: today(), tags: ['distill'], immutable: false, scope: 'private', owner: owner, source: 'distill', weight: 1.0, access_count: 0, last_accessed: '', feedback_net: 0 }, body);
+        writeMemoryText(root, fp, text, owner);
+        upsertIndexEntry(root, readEntry(fp, root));
+        written = fp;
+      } else {
+        const dir = path.join(root, PUBLIC_DIR, 'distills');
+        fs.mkdirSync(dir, { recursive: true });
+        const fp = path.join(dir, fname);
+        const text = frontmatterToText({ type: 'FACT', subject: '蒸馏报告 ' + slug, statement: '记忆蒸馏报告（' + today() + '）', confidence: 1.0, created: today(), updated: today(), tags: ['distill'], immutable: false, scope: 'public', owner: '', source: 'distill', weight: 1.0, access_count: 0, last_accessed: '', feedback_net: 0 }, body);
+        fs.writeFileSync(fp, text, 'utf8');
+        upsertIndexEntry(root, readEntry(fp, root));
+        written = fp;
+      }
+    }
+  } catch (e) {
+    return { error: false, text: lines.join('\n') + '\n\n[落盘失败] ' + e.message };
+  }
+  return { error: false, text: body + '\n[已写入] ' + written };
 }
 
 function promptPassword(promptText) {
@@ -1297,6 +1938,36 @@ function cmdRecall(query, opts) {
   const r = recallCore(query, opts);
   console.log(r.text);
   if (r.exitCode) process.exit(r.exitCode);
+}
+function cmdFeedback(ref, opts) {
+  const r = feedbackCore(ref, opts);
+  console.log(r.text);
+  if (r.exitCode) process.exit(r.exitCode);
+  if (r.error) process.exit(2);
+}
+function cmdExplain(ref, opts) {
+  const r = explainCore(ref, opts);
+  console.log(r.text);
+  if (r.exitCode) process.exit(r.exitCode);
+  if (r.error) process.exit(2);
+}
+function cmdMaintain(opts) {
+  if (opts.merge) {
+    const parts = String(opts.merge).split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    if (parts.length < 2) { console.error('--merge 需要两个文件，逗号分隔'); process.exit(2); }
+    const r = mergeCore(parts[0], parts[1], opts);
+    console.log(r.text);
+    if (r.error) process.exit(2);
+    return;
+  }
+  const r = maintainCore(opts);
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+function cmdDistill(opts) {
+  const r = distillCore(opts);
+  console.log(r.text);
+  if (r.error) process.exit(2);
 }
 function cmdForget(fileRef) {
   const r = forgetCore(fileRef);
@@ -1733,7 +2404,8 @@ function contextCore(opts) {
   for (const r of roots) {
     for (const e of ensureIndex(r)) {
       if (classifyRead(e, owner, '', unsafe, selfAgent) === 'denied') continue;
-      recent.push({ e: e, s: importanceScore(e) });
+      // v0.8.0 排序融合：0.5×importance(旧) + 0.5×utility(新盖棺分)
+      recent.push({ e: e, s: 0.5 * importanceScore(e) + 0.5 * utilityScore(e) });
     }
   }
   recent.sort(function (a, b) { return b.s - a.s; });
@@ -1822,6 +2494,10 @@ function mcpTools() {
     { name: 'import', description: '从引擎主机上的 JSON 文件导入记忆。src 为文件路径（可绝对路径，或相对记忆库目录）', inputSchema: { type: 'object', properties: { src: { type: 'string' } }, required: ['src'] } },
     { name: 'agent_info', description: '查看当前智能体身份与登记状态（远端读经 token 校验的 X-Agent-Id；本机读 YOTTA_AGENT_ID）。开工先确认「我是谁」，禁止从记忆里抄别人的 ID', inputSchema: { type: 'object', properties: {} } },
     { name: 'profile', description: '生成当前智能体的用户画像（只读聚合 private/<owner>/ 下 PREF/BOUND/COMMIT 原文，零推断，写入 private/<owner>/profile.md）。owner 默认当前智能体', inputSchema: { type: 'object', properties: { owner: { type: 'string' } } } },
+    { name: 'feedback', description: '显式使用反馈（自我学习）：useful/useless 调整记忆 weight/confidence/feedback_net。file 为记忆文件路径或文件名', inputSchema: { type: 'object', properties: { file: { type: 'string' }, useful: { type: 'boolean' }, useless: { type: 'boolean' }, reason: { type: 'string' } }, required: ['file'] } },
+    { name: 'maintain', description: '记忆自组织（自我进化）：规则层归档/遗忘/去重预览。默认 dry-run；apply 才执行，purge 才真删', inputSchema: { type: 'object', properties: { apply: { type: 'boolean' }, purge: { type: 'boolean' }, dedup: { type: 'boolean' }, threshold: { type: 'number' }, age: { type: 'number' } } } },
+    { name: 'distill', description: '心理日志蒸馏（自我提升）：统计摘要/主题画像/知识地图。owner 默认当前智能体', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, subject: { type: 'string' }, model: { type: 'string' } } } },
+    { name: 'explain', description: '解释单条记忆效用分项（为什么靠前/归档/遗忘）。file 为记忆文件路径或文件名', inputSchema: { type: 'object', properties: { file: { type: 'string' } }, required: ['file'] } },
   ];
 }
 function callTool(name, args, ctx) {
@@ -1881,6 +2557,22 @@ function callTool(name, args, ctx) {
     if (name === 'profile') {
       const ownerArg = args.owner ? String(args.owner) : '';
       const r = profileCore({ owner: ownerArg || agent, selfAgent: agent });
+      return { text: r.text, error: r.error };
+    }
+    if (name === 'feedback') {
+      const r = feedbackCore(String(args.file || ''), { selfAgent: agent, useful: !!args.useful, useless: !!args.useless, reason: args.reason ? String(args.reason) : '' });
+      return { text: r.text, error: r.error };
+    }
+    if (name === 'maintain') {
+      const r = maintainCore({ selfAgent: agent, apply: !!args.apply, purge: !!args.purge, dedup: !!args.dedup, threshold: args.threshold, age: args.age });
+      return { text: r.text, error: r.error };
+    }
+    if (name === 'distill') {
+      const r = distillCore({ selfAgent: agent, owner: args.owner ? String(args.owner) : agent, subject: args.subject ? String(args.subject) : '', model: args.model ? String(args.model) : '' });
+      return { text: r.text, error: r.error };
+    }
+    if (name === 'explain') {
+      const r = explainCore(String(args.file || ''), { selfAgent: agent });
       return { text: r.text, error: r.error };
     }
     return { text: '未知工具: ' + name, error: true };
@@ -2465,7 +3157,7 @@ async function main() {
   if (!args.length) { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject']);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--version' || a === '-v') { console.log(VERSION); return; }
@@ -2481,6 +3173,15 @@ async function main() {
     else if (a === '--no-hint') opts.noHint = true;
     else if (a === '--encrypt') opts.encrypt = true;
     else if (a === '--no-encrypt') opts.noEncrypt = true;
+    else if (a === '--useful') opts.useful = true;
+    else if (a === '--useless') opts.useless = true;
+    else if (a === '--undo') opts.undo = true;
+    else if (a === '--dry-run') opts.dryRun = true;
+    else if (a === '--apply') opts.apply = true;
+    else if (a === '--purge') opts.purge = true;
+    else if (a === '--dedup') opts.dedup = true;
+    else if (a === '--explain') opts.explain = true;
+    else if (a === '--semantic') opts.semantic = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;
@@ -2525,6 +3226,11 @@ async function main() {
     }
     case 'remember': cmdRemember(rest[0], rest[1], rest[2], opts); break;
     case 'recall': cmdRecall(rest[0] || null, opts); break;
+    case 'search': cmdRecall(rest[0] || null, opts); break;
+    case 'feedback': cmdFeedback(rest[0], opts); break;
+    case 'explain': cmdExplain(rest[0], opts); break;
+    case 'maintain': cmdMaintain(opts); break;
+    case 'distill': cmdDistill(opts); break;
     case 'forget': cmdForget(rest[0]); break;
     case 'archive': cmdArchive(opts); break;
     case 'reindex': cmdReindex(); break;
@@ -2632,6 +3338,15 @@ module.exports = {
   cmdLanLinuxEnable: cmdLanLinuxEnable,
   cmdLanLinuxDisable: cmdLanLinuxDisable,
   cmdLanLinuxStatus: cmdLanLinuxStatus,
+  feedbackCore: feedbackCore,
+  explainCore: explainCore,
+  maintainCore: maintainCore,
+  mergeCore: mergeCore,
+  distillCore: distillCore,
+  utilityScore: utilityScore,
+  utilityBreakdown: utilityBreakdown,
+  semanticMatch: semanticMatch,
+  pinyinTokens: pinyinTokens,
   isEncrypted: isEncrypted,
   collectOwners: collectOwners,
   hasPlaintextPrivate: hasPlaintextPrivate,

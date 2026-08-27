@@ -8,6 +8,7 @@
 2. 安装
 3. 本机单机使用
 3.5 私密区加密（v0.7，推荐）
+3.6 自我学习 / 自我进化 / 自我提升（v0.8.0）
 4. 便携记忆盘 · 记忆引擎主机篇（Linux / Windows）
 5. 智能体接入篇（本机 / 局域网其它主机）
 6. CLI 命令速查
@@ -28,6 +29,7 @@
 - **交接与团队协作**：项目级 `.yottamemory` 随仓库走，交接即恢复。
 - **便携记忆盘**：记忆装在固定主机上，本机与局域网其它主机共享同一份记忆（见第 4 / 5 篇）。
 - **越用越懂（v0.6.0）**：AI 按「记忆守则」主动捕获信号，`profile` 聚合画像、`context` 开工注入——用得越久越懂你。
+- **自我学习 / 自我进化 / 自我提升（v0.8.0）**：`recall` 语义检索（同义词 / 拼音 / 字段加权 / 模糊）+ `feedback` 使用反馈闭环 + `maintain` 规则层自组织（自动归档 / 遗忘候选 / 去重）+ `distill` 心理日志蒸馏——记忆系统会自己整理、提炼、演化。
 
 ## 2. 安装（CLI + 技能）
 
@@ -130,6 +132,42 @@ statement: 本周完成发布
 - 重设口令：`yotta-memory reset-password`（输入当前口令），或忘口令时 `--recovery-key <恢复钥匙>`。
 - 吊销某 AI：`yotta-memory key revoke <id>`（立即失效）。
 - 注意：**口令即主密钥**，忘口令且丢失恢复钥匙 = 密文私密不可恢复（公共 FACT 仍在）。
+
+## 3.6 自我学习 / 自我进化 / 自我提升（v0.8.0）
+
+元忆 v0.8.0 让记忆系统「越用越懂」：语义检索、使用反馈闭环、规则层自组织、心理日志蒸馏，全部零依赖内置。
+
+**语义检索（recall）**
+
+- `recall <关键词>` 默认语义检索：同义词（内置词表）、拼音（全拼 / 首字母，内置 3755 常用字表）、字段加权（subject 优先）、模糊匹配（编辑距离 ≤ 2）、子串兜底。
+- 例：记过「越用越懂」，用 `recall yyyd`（首字母）或 `recall yueyong yuedong`（拼音）都能找回。
+- `recall --explain`：显示每条命中理由与效用分项。
+- 旧索引首次 recall 自动重建（version 3），无需手动 reindex。
+
+**使用反馈闭环（feedback）**
+
+- `feedback <文件> --useful`：这条记忆有用 → weight ×1.2（上限 3.0）、confidence +0.05、feedback_net +1。
+- `feedback <文件> --useless`：没用 → weight ×0.8（下限 0.2）、confidence −0.05、feedback_net −1。
+- `--reason <原因>` 记录原因；`--undo` 回滚最近一次。反馈记录在 `.archive/feedback-<日期>.jsonl`。
+- 反馈会改变记忆的效用分 → 高频「没用」的记忆会被自动归档 / 遗忘候选（自我学习）。
+
+**规则层自组织（maintain）**
+
+- `maintain`（默认 dry-run 预览）：列出归档候选（统一效用分 < 0.35 且超 180 天）与遗忘候选（< 0.12 且超 365 天），immutable / BOUND 豁免。
+- `maintain --apply`：执行归档（移入 `.archive/`，可恢复）。
+- `maintain --apply --purge`：真删遗忘候选（谨慎，先确认）。
+- `maintain --dedup`：列出重复候选；`maintain --merge A,B` 合并两条相似记忆。
+- 阈值可用 `config set maintain_archived_utility 0.3` 等调整；审计在 `.archive/audit-<日期>.jsonl`。
+
+**心理日志蒸馏（distill）**
+
+- `distill`：生成统计摘要（类型 / 年龄 / 热度 / 反馈）+ 主题画像（按 subject 聚类）+ 知识地图（type → tags）。
+- 可选 `--model <cmd>`：外部模型 stdin 收结构化摘要 → stdout 输出提炼文本（无模型走启发式）。
+- 产物：私密蒸馏入 `private/<owner>/distills/`（受 owner key 保护），公共入 `facts/distills/`；`--out <路径>` 可指定导出。
+
+**查看效用（explain）**
+
+- `explain <文件>`：显示单条记忆的效用分项（confidence / 使用 / 时效 / 类型 / 结构 × weight）与归档 / 遗忘状态判定，帮助理解为什么某条记忆靠前 / 被归档。
 
 ## 4. 便携记忆盘 · 记忆引擎主机篇
 
@@ -264,7 +302,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库 |
 | `yotta-memory remember <类型> <主题> <内容> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入记忆（--source 来源；--weight 重要性权重；--verify 写后回读；--no-hint 关闭类型提示）|
-| `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索记忆（读取分区过滤；`--agent <其它>` 仅作身份声明、不授予跨读；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`）|
+| `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain]` | 检索记忆（v0.8.0 默认语义检索：同义词 / 拼音 / 字段加权 / 模糊 + 效用分排序；`--explain` 显示命中理由；读取分区过滤；`--agent <其它>` 仅作身份声明、不授予跨读；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（零推断，写 `profile.md`）|
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N]` | 开工上下文包（身份+铁律+画像+近期记忆+边界+承诺；--budget 近期记忆字符预算）|
 | `yotta-memory forget <文件>` | 删除一条记忆 |
@@ -277,6 +315,10 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 访问 token（同 ID 已被其它来源占用需 `--force` 覆盖）|
 | `yotta-memory serve [--port 8787] [--stdio] [--no-auth]` | 启动记忆引擎（--no-auth 关闭鉴权，仅限可信内网）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务/用户级 Startup 静默自启；Linux：systemd 用户单元/用户 crontab @reboot）|
+| `yotta-memory feedback <文件|主题> --useful|--useless [--reason <原因>] [--undo]` | 使用反馈（v0.8.0：useful/useless 调 weight/confidence/feedback_net；--undo 回滚）|
+| `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--merge A,B]` | 记忆自组织（v0.8.0：归档 / 遗忘候选 / 去重；默认 dry-run，--apply 执行，--purge 才真删）|
+| `yotta-memory distill [--owner <id>] [--subject <主题>] [--model <cmd>] [--out <路径>]` | 心理日志蒸馏（v0.8.0：统计摘要 / 主题画像 / 知识地图）|
+| `yotta-memory explain <文件|主题>` | 查看单条记忆效用分项（v0.8.0）|
 
 类型：`FACT`（事实，共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺），后三类按智能体物理分目录隔离（`private/<owner>/<type>/`）。
 
