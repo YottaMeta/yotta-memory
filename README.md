@@ -7,8 +7,8 @@
 <p align="center">元忆 —— 有权限边界的文件式智能体记忆：让任何 AI 智能体活过会话，而不是只活在单次对话里。</p>
 <p align="center">开工 <code>recall</code> 恢复上下文、重要信息 <code>remember</code> 落盘、收工归档；记忆是落在用户自己目录里的 Markdown 文件——<b>可读、可改、可审计、可回滚</b>，零依赖、即装即用。</p>
 <p align="center">FACT 共享、PREF / BOUND / COMMIT 私密隔离——<b>谁该读、谁不该读，由机制而非 AI 自觉决定</b>；一份记忆可跨智能体共用，记忆库随盘走、局域网可共享。</p>
-<p align="center">v0.6.0 起「越用越懂」：<code>profile</code> 聚合用户画像（零推断）+ <code>context</code> 一键开工上下文包（身份 + 画像 + 近期记忆 + 边界 + 承诺 + 收工纪律），记忆从「存储」成长为「会成长的记忆系统」。</p>
-<p align="center"><b>v0.7.0 私密区机制级加密</b>：AES-256-GCM 信封加密 + 口令派生主密钥 + 恢复钥匙；<code>yotta-memory view</code> 用户查看平台（口令解锁看全部 AI 记忆）；<code>migrate</code> 明文→密文迁移；<code>--no-encrypt</code> 可降级。跨 AI 私密从「纪律层隔离」升级为「机制层不可解」。</p>
+<p align="center">「越用越懂」：<code>profile</code> 聚合用户画像（零推断）+ <code>context</code> 一键开工上下文包（身份 + 画像 + 近期记忆 + 边界 + 承诺 + 收工纪律），记忆从「存储」成长为「会成长的记忆系统」。</p>
+<p align="center"><b>私密区机制级加密</b>：AES-256-GCM 信封加密 + 口令派生主密钥 + 恢复钥匙；<code>yotta-memory view</code> 用户查看平台（口令解锁看全部 AI 记忆）；<code>migrate</code> 明文→密文迁移；<code>--no-encrypt</code> 可降级。跨 AI 私密从「纪律层隔离」升级为「机制层不可解」。</p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue" /></a>
