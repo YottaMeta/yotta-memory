@@ -1,7 +1,7 @@
 {
   "name": "@yottameta/yotta-memory",
-  "version": "0.8.2",
-  "description": "元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/回滚；FACT/PREF/BOUND/COMMIT 四分类（公共共享/私密隔离），用户级+项目级双级存储；v0.8 语义检索 + 使用反馈闭环 + 规则层自组织 + 心理日志蒸馏（自我学习/自我进化/自我提升）。",
+  "version": "0.8.3",
+  "description": "Yuanyi (元忆) — boundary-aware, file-based memory for AI agents. File-based, zero-dependency, diff/rollback-able; FACT/PREF/BOUND/COMMIT four types (public shared / private isolated), user-level + project-level storage; v0.8 semantic search + usage feedback loop + rule-layer self-organization + psychological-log distillation (self-learning/self-evolving/self-improving).",
   "license": "MIT",
   "keywords": [
     "agent-skills",
@@ -20,7 +20,10 @@
     "references",
     "scripts",
     "assets",
-    "bin"
+    "bin",
+    "README.zh-CN.md",
+    "NOTICE",
+    "CHANGELOG.md"
   ],
   "repository": {
     "type": "git",
