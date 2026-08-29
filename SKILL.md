@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
 description: "元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤"
-version: 0.8.3
+version: 0.8.4
 license: MIT
 ---
 
@@ -113,7 +113,7 @@ license: MIT
    - 未装 → 🔒 **征得同意后**自动安装（三选一，AI 判断；装后回读 `--version` 出版本即就绪）：
      - 临时使用：`npx -y @yottameta/yotta-memory`
      - 长期使用：`npm i -g @yottameta/yotta-memory`
-     - 离线 / 国内 / 无 npm：git clone 仓库（或手动下载 install.sh）后执行 `bash install.sh -g`
+     - 离线 / 国内 / 无 npm：git clone 仓库（或手动下载 install.sh）后执行 `bash install.sh --agent <name>`
 
 **A. 确认记忆库位置**（AI 不会自动知道记忆库在哪，先检测，避免「recall 读空库 / 错库」）：
 

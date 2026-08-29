@@ -23,7 +23,7 @@
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
 
-> 🆕 **v0.8.3**: bilingual README alignment — README.md becomes the English facade (GitHub / npm / ClawHub homepage) and README.zh-CN.md carries the full Chinese doc; no functional changes.
+> 🆕 **v0.8.4**: bilingual README alignment — README.md becomes the English facade (GitHub / npm / ClawHub homepage) and README.zh-CN.md carries the full Chinese doc; no functional changes.
 
 ## Core value
 
@@ -117,34 +117,40 @@ Each agent has a globally unique agent ID: it is the ownership key for private m
 
 ## Install
 
-Yuanyi ships as **CLI + skill** — the `yotta-memory` command reads/writes memory, and the skill teaches agents the workflow. Pick any method; skill files come from **npm**.
+Yotta Memory ships as a **CLI + skill** pair: the `yotta-memory` command reads/writes the memory store, and the skill teaches agents the workflow. Pick any of the four methods below; the order is the recommended priority. Skill files always come from **npm** (GitHub can be slow without a proxy; npm supports mirrors).
 
-### Method 1: npx skills (recommended, ecosystem-standard entry)
-```bash
-npx skills add YottaMeta/yotta-memory
-```
-> Auto-installs the skill files into detected agents (Claude Code / Codex / Cursor / OpenCode and 78+ more). This installs only the skill instructions (SKILL.md etc.); to use the `yotta-memory` read/write commands you also need the CLI: `npm install -g @yottameta/yotta-memory` (see method 2).
+### Method 1: npm one-liner (recommended)
 
-### Method 2: npm direct install (CLI + skill)
-```bash
-# domestic mirror (optional): npm config set registry https://registry.npmmirror.com
-npm install -g @yottameta/yotta-memory
-yotta-memory init            # initialize the memory store
-yotta-memory-install -g                  # install the skill into all recognized agents (user level)
-yotta-memory-install --agent codex       # install into one specific agent
+```text
+# Optional China mirror: npm config set registry https://registry.npmmirror.com
+npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <agent-name>      # install the skill to the agent's default user-level dir
+npx -y --package @yottameta/yotta-memory yotta-memory-install --dir <your-skills-dir>   # point to the skills dir itself (e.g. ~/.codex/skills)
 ```
 
-> After global install both `yotta-memory` (read/write) and `yotta-memory-install` (installer) are on PATH. Prefer not to install globally? Run the installer one-shot: `npx -y --package @yottameta/yotta-memory yotta-memory-install -g`.
+- `--agent <name>` installs to that agent's default user-level directory; `--list` shows each agent's default directory.
+- `--dir <path>` installs to the given directory; for agents not in the preset list, point `--dir` at their skills directory.
+- If the mirror has not synced the new package (404): add `--registry=https://registry.npmjs.org/` (a proxy may be needed in China), or wait for the mirror cache.
+- To read/write memories, also install the CLI: `npm install -g @yottameta/yotta-memory` (see the CLI usage section below).
 
-### Method 3: install.sh / manual copy
-After obtaining the skill folder (`npm pack` unpack or `git clone`), enter the folder:
-```bash
-bash install.sh -g                 # user level; bash install.sh --list shows all directories
-bash install.sh --agent codex      # specific agent
-bash install.sh --dir /path/to/skills
+### Method 2: git clone (developers / git available)
+
+```text
+git clone https://github.com/YottaMeta/yotta-memory.git <your-skills-dir>/yotta-memory
 ```
-You can also copy the whole `yotta-memory` folder into the target agent's skills directory (common locations via install.sh --list).
 
+### Method 3: GitHub Download ZIP (manual / no git)
+
+On the GitHub repository `YottaMeta/yotta-memory`, click **Code → Download ZIP**, unzip it and put the `yotta-memory` folder into the agent's skills directory.
+
+### Method 4: install.sh (multi-agent one-liner script)
+
+```text
+bash install.sh --agent <name>   # install to the agent's default user-level directory
+bash install.sh --dir <path>     # install to the given directory
+bash install.sh --list           # list agents -> default directories
+```
+
+> Method 1 uses the npm registry (npmmirror / npmjs) and does not depend on GitHub; Methods 2/3 use GitHub and may fail without a proxy in China.
 ## Upgrade
 
 Two upgrade paths match the two install paths:
@@ -154,7 +160,7 @@ Two upgrade paths match the two install paths:
 npm i -g @yottameta/yotta-memory
 ```
 
-**Upgrade the skill**: rerun the install command you used originally (`npx skills add YottaMeta/yotta-memory` or `yotta-memory-install -g`) to overwrite the old skill folder.
+**Upgrade the skill**: rerun your install command from the `## Install` section (e.g. `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>` or `bash install.sh --agent <name>`) to overwrite the old skill folder.
 
 > Upgrades only affect commands and skill files — **they never touch your stored memories** (memory is independent of the install, kept in its own directory).
 

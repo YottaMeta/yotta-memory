@@ -51,7 +51,7 @@
 | **双级存储** | 用户级 `~/.yottamemory/`（跨项目）+ 项目级 `.yottamemory/`（随项目共享 / 交接）|
 | **检索与生命周期** | 语义检索（v0.8.0：同义词 / 拼音 / 字段加权 / 模糊，零依赖）+ 效用分融合排序；统一效用分（盖棺分）规则层自动归档 / 遗忘候选 / 去重（`maintain`，默认 dry-run），记忆库越用越精简 |
 | **越用越懂（v0.6.0）** | `profile` 画像聚合（零推断）+ `context` 开工上下文包（身份 / 画像 / 近期记忆 / 边界 / 承诺）+ SKILL「记忆守则」规则层，记忆随使用成长 |
-| **生态分发** | GitHub + npm 双源同步发布；npx skills / npm / install.sh 三种方式，覆盖 17+ 类智能体目录 |
+| **生态分发** | GitHub + npm 双源同步发布；npx / git clone / Download ZIP / install.sh 四种安装方式，覆盖 17+ 类智能体目录 |
 | **便携记忆盘（随盘走）** | 记忆库即引擎：装在硬盘 / 主机上，插上即恢复全部记忆；引擎主机只需装 CLI 当存放点，无需装任何 AI 智能体 |
 | **局域网共享与自启** | 每智能体独立 token（Bearer + X-Agent-Id）鉴权、可吊销；`lan enable` 注册开机自启（Windows：优先计划任务，非管理员自动降级用户级 Startup 静默自启；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）；MCP 工具集与 CLI 一致（8 个工具），管理动作不远程暴露 |
 | **本地 / 局域网双模式** | 本地 `serve --stdio` 零进程、按需拉起（无常驻）；局域网 streamable HTTP 常驻——两种模式可并存、按需选用 |
@@ -154,34 +154,40 @@
 
 ## 安装
 
-三种方式任选其一，技能文件统一从 **npm** 获取（GitHub 无代理时较慢，npm 可配国内镜像加速）。
+元忆为「CLI + 技能」双体：`yotta-memory` 命令负责读写记忆库，技能负责教智能体工作流。以下四种方式任选，顺序即推荐优先级；技能文件一律从 **npm** 获取（GitHub 无代理较慢，npm 支持镜像）。
 
-### 方式一：npx skills（推荐，生态标准入口）
-```bash
-npx skills add YottaMeta/yotta-memory
-```
-> 自动把技能文件装到已检测到的智能体（Claude Code / Codex / Cursor / OpenCode 等 78+ 智能体）。此方式只装「技能指令」（SKILL.md 等）；要使用 `yotta-memory` 读写命令，需另装 CLI：`npm install -g @yottameta/yotta-memory`（见方式二）。
+### 方式一：npm 一行装（推荐）
 
-### 方式二：npm 直接安装（CLI + 技能）
-```bash
-# 国内加速（可选）：npm config set registry https://registry.npmmirror.com
-npm install -g @yottameta/yotta-memory
-yotta-memory init            # 初始化记忆库
-yotta-memory-install -g                  # 装进所有已识别智能体（用户级）
-yotta-memory-install --agent codex       # 只装进指定智能体
+```text
+# 可选国内加速：npm config set registry https://registry.npmmirror.com
+npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <智能体名称>      # 装到指定智能体默认用户级技能目录
+npx -y --package @yottameta/yotta-memory yotta-memory-install --dir <智能体的技能目录>  # 指到技能目录本身（如 ~/.codex/skills）
 ```
 
-> 全局安装后 `yotta-memory`（读写下）与 `yotta-memory-install`（安装器）两个命令均已加入 PATH。若不想全局安装，可一行运行安装器：`npx -y --package @yottameta/yotta-memory yotta-memory-install -g`。
+- `--agent <name>` 自动装到该智能体默认用户级目录；`--list` 可查看各智能体默认目录。
+- `--dir <路径>` 装到指定的技能目录；未收录的智能体用 `--dir` 指到它的技能目录。
+- npmmirror 未同步新包（404）：加 `--registry=https://registry.npmjs.org/`（国内需代理），或稍等镜像缓存。
+- 若要读写记忆，需安装 CLI：`npm install -g @yottameta/yotta-memory`（用法见「CLI 用法」）。
 
-### 方式三：install.sh / 手动复制
-获取技能文件夹后（`npm pack` 解包或 `git clone`），进入技能文件夹：
-```bash
-bash install.sh -g                 # 用户级；bash install.sh --list 查看全部目录
-bash install.sh --agent codex      # 指定智能体
-bash install.sh --dir /path/to/skills
+### 方式二：git clone（开发者 / 有 git 环境）
+
+```text
+git clone https://github.com/YottaMeta/yotta-memory.git <智能体的技能目录>/yotta-memory
 ```
-也可把整个 `yotta-memory` 文件夹复制到目标智能体的 skills 目录（常见位置见 install.sh --list）。
 
+### 方式三：GitHub 下载压缩包（手动 / 无 git 环境）
+
+在 GitHub 仓库 `YottaMeta/yotta-memory` 点 **Code → Download ZIP**，解压后把 `yotta-memory` 文件夹放进智能体技能目录。
+
+### 方式四：install.sh（多智能体一键脚本）
+
+```text
+bash install.sh --agent <name>   # 装到指定智能体默认用户级目录
+bash install.sh --dir <path>     # 装到指定目录
+bash install.sh --list           # 列出智能体 -> 默认目录
+```
+
+> 方式一走 npm 源（npmmirror / npmjs），不依赖 GitHub；方式二 / 三走 GitHub，国内无代理可能失败。
 ## 升级
 
 两种升级方式对应两种安装方式：
@@ -191,7 +197,7 @@ bash install.sh --dir /path/to/skills
 npm i -g @yottameta/yotta-memory
 ```
 
-**升级技能**：重新执行你当初的安装命令即可（`npx skills add YottaMeta/yotta-memory` 或 `yotta-memory-install -g`），覆盖旧版本技能文件夹。
+**升级技能**：重跑「安装」节中的命令（如 `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>` 或 `bash install.sh --agent <name>`），覆盖旧版技能文件夹。
 
 > 升级只影响命令与技能文件，**不会动你已存的记忆**（记忆是独立于安装的文件，保留在原目录）。
 

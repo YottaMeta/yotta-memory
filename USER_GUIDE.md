@@ -42,7 +42,7 @@
 |---|---|---|
 | npm 全局（推荐） | `npm i -g @yottameta/yotta-memory` | 长期使用 |
 | npx 临时 | `npx -y @yottameta/yotta-memory` | 临时试用 |
-| install.sh | git clone 仓库后 `bash install.sh -g`（或手动下载 install.sh 执行）| 离线 / 国内 / 无 npm |
+| install.sh | git clone 仓库后 `bash install.sh --agent <name>`（或手动下载 install.sh 执行）| 离线 / 国内 / 无 npm |
 
 安装后验证：`yotta-memory --version` 能输出版本号即成功。
 
@@ -50,8 +50,8 @@
 
 | 方式 | 命令 | 适用 |
 |---|---|---|
-| npx skills（生态标准入口） | `npx skills add YottaMeta/yotta-memory` | 自动检测已装智能体 |
-| 安装器（npm 全局时） | `yotta-memory-install -g` / `yotta-memory-install --agent codex` | 装进所有 / 指定智能体 |
+| npx 一行装（推荐） | `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>` | 装到指定智能体默认用户级目录 |
+| 安装器（npm 全局时） | `yotta-memory-install --agent <name>` | 装到指定智能体目录 |
 | 手动 | 把整个 `yotta-memory` 文件夹复制到智能体的 skills 目录 | 离线 |
 
 > CLI 与技能分工不同：CLI 让命令行能读写记忆；技能让 AI 知道「开工 recall 恢复上下文、重要信息 remember 落盘、收工归档」。只装 CLI 不装技能，AI 不会自动使用这套工作流。
