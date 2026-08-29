@@ -23,7 +23,7 @@
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
 
-> 🆕 **v0.8.4**: bilingual README alignment — README.md becomes the English facade (GitHub / npm / ClawHub homepage) and README.zh-CN.md carries the full Chinese doc; no functional changes.
+> 🆕 **v0.8.5**: security hardening — MCP `distill` no longer accepts `--model`; MCP `export` / `import` paths are restricted to the memory root; CLI `distill --model` no longer shells out (allowlist-based).
 
 ## Core value
 
@@ -93,7 +93,7 @@ Each agent has a globally unique agent ID: it is the ownership key for private m
 - `maintain`: unified utility score (final score = confidence + usage + recency + type + structure) × weight; low-utility + over-age auto-archive; extreme low value listed as forget candidates (not really deleted by default; `--purge` deletes); `--dedup` dedup candidates; `--merge A,B` manual merge. Dry-run preview by default, `--apply` to execute; immutable / BOUND exempt; audit writes `.archive/audit-<date>.jsonl`.
 - `archive`: moves low-value old memory into `.archive/` by "unified utility score + age" (immutable excluded) so the store never grows without bound.
 - `feedback`: explicit usage feedback loop — useful → weight ×1.2 (cap 3.0) + confidence +0.05 + feedback_net +1; useless → weight ×0.8 (floor 0.2) + confidence −0.05 + feedback_net −1; `--undo` rolls back; audit writes `.archive/feedback-<date>.jsonl`.
-- `distill`: psychological-log distillation — statistical summary (type / age / heat / feedback) + topic profile (clustered by subject) + knowledge map (type → tags); optional `--model <cmd>` external model stdin→stdout refinement; output to `private/<owner>/distills/` or `facts/distills/`.
+- `distill`: psychological-log distillation — statistical summary (type / age / heat / feedback) + topic profile (clustered by subject) + knowledge map (type → tags); optional `--model <cmd>` external model stdin→stdout refinement (local CLI only; MCP distill does not expose `--model`); output to `private/<owner>/distills/` or `facts/distills/`.
 - `explain`: view a single memory's utility components and archive / forget status decision.
 - `forget`: delete a single memory (by type-dir path or file name).
 - `reindex`: rebuild the index after manually editing `.md` files.
@@ -250,7 +250,7 @@ Register the connection in the agent's MCP config (`url` + two headers):
 }
 ```
 
-Once connected, MCP tools (remember / recall / search / forget / archive / reindex / export / import / agent_info) read/write memory and confirm identity; management actions (init / config / token / lan / serve) are not exposed via MCP, and token management is never exposed remotely. `X-Agent-Id` must match the token's registered agent; read-partition rules are the same as the CLI (FACT public-readable, PREF / BOUND / COMMIT private).
+Once connected, MCP tools (remember / recall / search / forget / archive / reindex / export / import / agent_info) read/write memory and confirm identity; management actions (init / config / token / lan / serve) are not exposed via MCP, and token management is never exposed remotely. MCP `export` / `import` paths are restricted inside the memory root, and MCP `distill` does not support `--model` (local CLI only). `X-Agent-Id` must match the token's registered agent; read-partition rules are the same as the CLI (FACT public-readable, PREF / BOUND / COMMIT private).
 
 ### Location persistence
 

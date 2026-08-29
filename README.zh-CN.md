@@ -23,6 +23,8 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
+> 🆕 **v0.8.5**：安全加固——MCP `distill` 不再接受 `--model`；MCP `export` / `import` 路径限记忆库内；CLI `distill --model` 不再走 shell（改为允许清单）。
+
 > 🆕 **v0.8.2**：发布元数据修复——三次源重发带 `--name 元忆 yotta-memory`，修复 ClawHub 展示名缺失中文（原为裸 `yotta-memory`）；无功能变更。
 
 > 🆕 **v0.8.1**：`view` 用户查看平台改为服务端分页（记忆多了一次只渲染当前页，页码上下页）；`recall` 增加候选预过滤（语义检索前先粗筛候选集，命中集不变，记忆量大时不再逐条全量语义 / 模糊 / 编辑距离）；公共 `index.json` 超过 5000 条时按年份分片（`index-<year>.json`），避免单文件膨胀。
@@ -134,7 +136,7 @@
 - **记忆库即引擎**：`serve` 把记忆目录挂成 MCP 服务，目录随盘走；引擎主机只需装 CLI 当存放点，无需装任何 AI 智能体。
 - **双模式可并存**：本地 `serve --stdio` 零进程（客户端按需拉起）；局域网 streamable HTTP（默认 `0.0.0.0:8787`）+ 每智能体 token 鉴权。
 - **开机自启**：`lan enable` 注册开机自启——Windows 优先计划任务（默认登录自启，`--onstart` 开机即启需管理员），非管理员自动降级为**用户级 Startup 静默自启**（免管理员，启动脚本内联启动命令、被清理也会在开机时自动重建，v0.6.3 起不再弹 80070002）；Linux 优先 **systemd 用户单元**（`systemctl --user`，登录自启；`--onstart` 附加 `loginctl enable-linger` 开机即启），systemd 不可用时自动降级**用户 crontab @reboot**（v0.6.4）；`lan disable` 移除，`lan status` 查询。
-- **安全边界**：管理动作（init / config / token / lan / serve）不进 MCP，token 不远程暴露；远程智能体只能读写记忆，不能改配置、不能管 token。
+- **安全边界**：管理动作（init / config / token / lan / serve）不进 MCP，token 不远程暴露；远程智能体只能读写记忆，且路径限记忆库内（export/import 的 out/src 必须落在库内）、distill 不支持 `--model`（仅本地 CLI），不能改配置、不能管 token。
 - 完整操作步骤见上文「局域网多机共享」章节与 [USER_GUIDE.md](USER_GUIDE.md)。
 
 ## 与其他方案对比
@@ -288,7 +290,7 @@ yotta-memory recall --type FACT --limit 10
 }
 ```
 
-连接后可通过 MCP tools（remember / recall / search / forget / archive / reindex / export / import / agent_info）读写记忆与确认身份；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露。`X-Agent-Id` 必须与 token 登记的智能体一致；读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
+连接后可通过 MCP tools（remember / recall / search / forget / archive / reindex / export / import / agent_info）读写记忆与确认身份；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露；MCP export/import 路径限记忆库内、distill 不支持 `--model`（仅本地 CLI）。`X-Agent-Id` 必须与 token 登记的智能体一致；读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
 
 ### 位置持久化
 

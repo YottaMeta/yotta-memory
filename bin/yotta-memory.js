@@ -22,7 +22,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.8.4';
+const VERSION = '0.8.5';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -99,6 +99,56 @@ function typeSubdir(type, owner) {
 }
 function defaultScope(type) {
   return PRIVATE_TYPES.indexOf(String(type).toUpperCase()) === -1 ? 'public' : 'private';
+}
+// ---- 安全边界：路径必须落在记忆库根内（防 MCP 任意路径读写，v0.8.5）----
+function resolveWithinRoot(root, p) {
+  let abs = path.isAbsolute(p) ? path.resolve(p) : path.resolve(root, p);
+  const r = path.resolve(root);
+  if (abs === r) return abs;
+  if (abs.startsWith(r + path.sep)) return abs;
+  return null;
+}
+function isWithinRoot(root, p) { return !!resolveWithinRoot(root, p); }
+// 把命令行安全拆分为 argv（支持 ' " 引号包参，但绝不经过 shell，防元字符注入）
+function splitCommandArgv(s) {
+  const argv = [];
+  let cur = '';
+  let quote = null;
+  for (let i = 0; i < String(s).length; i++) {
+    const c = String(s)[i];
+    if (quote) {
+      if (c === quote) { quote = null; continue; }
+      if (c === '\\' && quote === '"') { cur += String(s)[i + 1] || ''; i++; continue; }
+      cur += c; continue;
+    }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === ' ' || c === '\t') { if (cur) { argv.push(cur); cur = ''; } continue; }
+    cur += c;
+  }
+  if (cur) argv.push(cur);
+  return argv;
+}
+// 模型命令允许清单：环境变量 YOTTA_DISTILL_MODELS（逗号分隔可执行名，不含扩展名）或 config.distill_models；
+// 未配置时放行（本地宿主 CLI 自担风险，但已去除 shell 注入面）；MCP 已在上层直接拒绝 model，不达此处。
+function distillModelAllowlist() {
+  const env = (process.env.YOTTA_DISTILL_MODELS || '').split(',').map(function (x) { return x.trim().toLowerCase(); }).filter(Boolean);
+  if (env.length) return env;
+  const cfg = loadConfig();
+  const c = cfg && (cfg.distill_models || []);
+  if (Array.isArray(c) && c.length) return c.map(function (x) { return String(x).trim().toLowerCase(); }).filter(Boolean);
+  return null;
+}
+// 安全执行外部模型命令：仅允许清单内可执行名；argv 分离、不经 shell。
+function runDistillModel(modelStr, payload) {
+  const argv = splitCommandArgv(modelStr);
+  if (!argv.length) throw new Error('模型命令为空');
+  const base = path.basename(argv[0]).toLowerCase().replace(/\.exe$/i, '');
+  const allow = distillModelAllowlist();
+  if (allow && allow.length && allow.indexOf(base) === -1) {
+    throw new Error('模型命令不在允许清单内: ' + base + '（可用: ' + allow.join(', ') + '；或设环境变量 YOTTA_DISTILL_MODELS）');
+  }
+  const r = child_process.spawnSync(argv[0], argv.slice(1), { input: payload, encoding: 'utf8', maxBuffer: 1024 * 1024, shell: false, windowsHide: true });
+  return r;
 }
 function parseFrontmatter(text) {
   const m = text.match(/^---\s*\n([\s\S]*?)\n---/);
@@ -1626,7 +1676,7 @@ function distillCore(opts) {
   if (opts.model) {
     try {
       const payload = JSON.stringify({ summary: lines.join('\n'), entries: entries.map(function (e) { return { type: e.type, subject: e.subject, statement: e.statement, tags: e.tags, confidence: e.confidence, access_count: e.access_count, feedback_net: e.feedback_net }; }).slice(0, 200) });
-      const r = child_process.spawnSync(String(opts.model), { input: payload, encoding: 'utf8', maxBuffer: 1024 * 1024, shell: process.platform === 'win32' });
+      const r = runDistillModel(String(opts.model), payload);
       if (r.stdout) modelOut = String(r.stdout).trim();
       if (!modelOut) modelOut = '（模型无输出）';
       body += '\n## 四、模型提炼（--model ' + opts.model + '）\n\n' + modelOut + '\n';
@@ -2603,13 +2653,13 @@ function mcpTools() {
     { name: 'forget', description: '删除一条记忆。file 为记忆文件路径（如 facts/2026-08-24-0001.md 或文件名）', inputSchema: { type: 'object', properties: { file: { type: 'string' } }, required: ['file'] } },
     { name: 'archive', description: '归档旧记忆。days 默认 180；threshold 默认 0.4', inputSchema: { type: 'object', properties: { days: { type: 'number' }, threshold: { type: 'number' } } } },
     { name: 'reindex', description: '重建索引（手动改 .md 后校正；扫描 facts/prefs/bounds/commits 四目录）', inputSchema: { type: 'object', properties: {} } },
-    { name: 'export', description: '导出全部记忆到引擎主机上的 JSON 文件。out 可选（默认 <记忆库>/yottamemory-export-<日期>.json）', inputSchema: { type: 'object', properties: { out: { type: 'string' } } } },
-    { name: 'import', description: '从引擎主机上的 JSON 文件导入记忆。src 为文件路径（可绝对路径，或相对记忆库目录）', inputSchema: { type: 'object', properties: { src: { type: 'string' } }, required: ['src'] } },
+    { name: 'export', description: '导出全部记忆到记忆库内的 JSON 文件。out 可选（默认 <记忆库>/yottamemory-export-<日期>.json；仅限记忆库内路径）', inputSchema: { type: 'object', properties: { out: { type: 'string' } } } },
+    { name: 'import', description: '从记忆库内的 JSON 文件导入记忆。src 为文件路径（相对记忆库目录，或记忆库内绝对路径；仅限记忆库内）', inputSchema: { type: 'object', properties: { src: { type: 'string' } }, required: ['src'] } },
     { name: 'agent_info', description: '查看当前智能体身份与登记状态（远端读经 token 校验的 X-Agent-Id；本机读 YOTTA_AGENT_ID）。开工先确认「我是谁」，禁止从记忆里抄别人的 ID', inputSchema: { type: 'object', properties: {} } },
     { name: 'profile', description: '生成当前智能体的用户画像（只读聚合 private/<owner>/ 下 PREF/BOUND/COMMIT 原文，零推断，写入 private/<owner>/profile.md）。owner 默认当前智能体', inputSchema: { type: 'object', properties: { owner: { type: 'string' } } } },
     { name: 'feedback', description: '显式使用反馈（自我学习）：useful/useless 调整记忆 weight/confidence/feedback_net。file 为记忆文件路径或文件名', inputSchema: { type: 'object', properties: { file: { type: 'string' }, useful: { type: 'boolean' }, useless: { type: 'boolean' }, reason: { type: 'string' } }, required: ['file'] } },
     { name: 'maintain', description: '记忆自组织（自我进化）：规则层归档/遗忘/去重预览。默认 dry-run；apply 才执行，purge 才真删', inputSchema: { type: 'object', properties: { apply: { type: 'boolean' }, purge: { type: 'boolean' }, dedup: { type: 'boolean' }, threshold: { type: 'number' }, age: { type: 'number' } } } },
-    { name: 'distill', description: '心理日志蒸馏（自我提升）：统计摘要/主题画像/知识地图。owner 默认当前智能体', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, subject: { type: 'string' }, model: { type: 'string' } } } },
+    { name: 'distill', description: '心理日志蒸馏（自我提升）：统计摘要/主题画像/知识地图。owner 默认当前智能体（MCP 不支持 --model 外部命令）', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, subject: { type: 'string' } } } },
     { name: 'explain', description: '解释单条记忆效用分项（为什么靠前/归档/遗忘）。file 为记忆文件路径或文件名', inputSchema: { type: 'object', properties: { file: { type: 'string' } }, required: ['file'] } },
   ];
 }
@@ -2641,11 +2691,22 @@ function callTool(name, args, ctx) {
       return { text: '已重建索引 ' + root + '（' + cnt + ' 条）', error: false };
     }
     if (name === 'export') {
-      const r = exportCore(userRoot(), args.out ? String(args.out) : null);
+      const root = userRoot();
+      let out = null;
+      if (args.out) {
+        const safe = resolveWithinRoot(root, String(args.out));
+        if (!safe) return { text: '拒绝: MCP 导出路径必须位于记忆库内（' + root + '），已阻止任意路径写入。', error: true };
+        out = safe;
+      }
+      const r = exportCore(root, out);
       return { text: r.text, error: r.error };
     }
     if (name === 'import') {
-      const r = importCore(userRoot(), String(args.src || ''));
+      const root = userRoot();
+      const src = String(args.src || '');
+      const safe = resolveWithinRoot(root, src);
+      if (!safe) return { text: '拒绝: MCP 导入路径必须位于记忆库内（' + root + '），已阻止任意路径读取。', error: true };
+      const r = importCore(root, safe);
       return { text: r.text, error: r.error };
     }
     if (name === 'agent_info') {
@@ -2681,7 +2742,8 @@ function callTool(name, args, ctx) {
       return { text: r.text, error: r.error };
     }
     if (name === 'distill') {
-      const r = distillCore({ selfAgent: agent, owner: args.owner ? String(args.owner) : agent, subject: args.subject ? String(args.subject) : '', model: args.model ? String(args.model) : '' });
+      if (args.model) return { text: '拒绝: MCP 不支持 --model（任意命令执行风险）；请在引擎主机本地 CLI 执行 yotta-memory distill --model <命令>。', error: true };
+      const r = distillCore({ selfAgent: agent, owner: args.owner ? String(args.owner) : agent, subject: args.subject ? String(args.subject) : '', model: '' });
       return { text: r.text, error: r.error };
     }
     if (name === 'explain') {
@@ -3328,6 +3390,10 @@ async function main() {
       else if (a === '--password') opts.password = v;
       else if (a === '--new-password') opts.newPassword = v;
       else if (a === '--recovery-key') opts.recoveryKey = v;
+      else if (a === '--reason') opts.reason = v;
+      else if (a === '--merge') opts.merge = v;
+      else if (a === '--model') opts.model = v;
+      else if (a === '--subject') opts.subject = v;
     } else if (a.startsWith('--')) {
       console.error('未知选项: ' + a);
       process.exit(2);

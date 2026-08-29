@@ -356,7 +356,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 - token 等同密码：只给需要接入的智能体，别外传。
 - 私密区机制级加密（v0.7 起）：PREF / BOUND / COMMIT 私密记忆默认落盘为密文（AES-256-GCM 信封加密），任何没有对应 owner 密钥的 AI 即使读到密文文件也解不开；隔离 = 权限边界（scope/owner）+ 机制层机密保护。用户是数据所有者，经 `yotta-memory view` 口令解锁可看全部。
 - 记忆读写一律走 CLI / MCP；禁止用 shell（`Get-ChildItem` / `cat` / `ls` / `type` 等）直接读改记忆库目录下的文件——否则会绕过 scope/owner 权限边界。
-- 管理动作（init / config / token / lan / serve）不通过 MCP 暴露，远程只能读写记忆，不能改配置、不能管 token。
+- 管理动作（init / config / token / lan / serve）不通过 MCP 暴露，远程只能读写记忆（路径限记忆库内，export/import 的 out/src 必须落在库内；distill 不支持 `--model`，仅本地 CLI），不能改配置、不能管 token。
 - `--no-auth` 会关闭鉴权，仅限可信内网使用。
 - 数据主权在用户：公共 FACT 明文、随时可看可改可删；私密区加密，用户经 `yotta-memory view` 口令解锁后同样可看、可改、可删、可导出。
 - 「记忆守则」内置底线：陪伴不操控 / 理解不越界（不贴标签）/ 诚实不伪装 / 不降格；数据安全（被遗忘权 = `forget`）；宿主隔离（只写本记忆库，不读写宿主 AI 自身 memory / 配置 / 系统文件）。
