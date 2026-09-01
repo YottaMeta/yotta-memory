@@ -25,12 +25,12 @@
 
 **典型使用场景：**
 
-- **跨会话续接**：AI 开工 `recall` 恢复上次上下文，不丢记忆。
+- **跨会话续接**：AI 开工 `recall` 恢复上次上下文，不丢记忆；v0.9.0 起可用 `context --focus <关键词>` 生成任务感知上下文。
 - **多智能体共享**：FACT 进公共区共享，PREF / BOUND / COMMIT 各自私密隔离。
 - **交接与团队协作**：项目级 `.yottamemory` 随仓库走，交接即恢复。
 - **便携记忆盘**：记忆装在固定主机上，本机与局域网其它主机共享同一份记忆（见第 4 / 5 篇）。
 - **越用越懂（v0.6.0）**：AI 按「记忆守则」主动捕获信号，`profile` 聚合画像、`context` 开工注入——用得越久越懂你。
-- **自我学习 / 自我进化 / 自我提升（v0.8.0）**：`recall` 语义检索（同义词 / 拼音 / 字段加权 / 模糊）+ `feedback` 使用反馈闭环 + `maintain` 规则层自组织（自动归档 / 遗忘候选 / 去重）+ `distill` 心理日志蒸馏——记忆系统会自己整理、提炼、演化。
+- **自我学习 / 自我进化 / 自我提升（v0.8.0 + v0.9.0）**：`recall` 语义检索（同义词 / 拼音 / 字段加权 / 模糊，v0.9.0 可选本地 embedding 插件）+ `feedback` 使用反馈闭环 + `maintain` 规则层自组织 + `distill` 心理日志蒸馏——记忆系统会自己整理、提炼、演化。
 
 ## 2. 安装（CLI + 技能）
 
@@ -142,8 +142,15 @@ statement: 本周完成发布
 
 - `recall <关键词>` 默认语义检索：同义词（内置词表）、拼音（全拼 / 首字母，内置 3755 常用字表）、字段加权（subject 优先）、模糊匹配（编辑距离 ≤ 2）、子串兜底。
 - 例：记过「越用越懂」，用 `recall yyyd`（首字母）或 `recall yueyong yuedong`（拼音）都能找回。
-- `recall --explain`：显示每条命中理由与效用分项。
+- `recall --explain`：显示每条命中理由与效用分项；配置 embedding 插件后还会显示向量相似度。
 - 旧索引首次 recall 自动重建（version 4），无需手动 reindex。
+
+**可选本地 embedding 插件（v0.9.0）**
+
+- `recall <关键词> --embedding <命令>`：调用本地子进程，stdin 传 `{texts:[]}`，stdout 返回 `{vectors:[]}`；向量与词法得分共同参与排序。
+- `config set embedding_cmd <命令>`：持久启用插件；`--embedding` 优先级更高。
+- `--embedding-timeout N`：默认 3000ms；插件失败、超时或输出非法时自动降级为词法检索，不会中断命令。
+- 向量缓存写入各记忆根下 `.embed/cache.json`，只存向量不存明文；同一命令与文本命中缓存时不再重复调用插件。
 
 **使用反馈闭环（feedback）**
 
@@ -308,9 +315,9 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库 |
 | `yotta-memory remember <类型> <主题> <内容> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入记忆（--source 来源；--weight 重要性权重；--verify 写后回读；--no-hint 关闭类型提示）|
-| `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain]` | 检索记忆（v0.8.0 默认语义检索：同义词 / 拼音 / 字段加权 / 模糊 + 效用分排序；`--explain` 显示命中理由；读取分区过滤；`--agent <其它>` 仅作身份声明、不授予跨读；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`）|
+| `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain] [--semantic] [--embedding <命令>] [--embedding-timeout N]` | 检索记忆（语义 + 效用分排序；可选本地 embedding 插件；读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（零推断，写 `profile.md`）|
-| `yotta-memory context [--limit N] [--owner <id>] [--budget N]` | 开工上下文包（身份+铁律+画像+近期记忆+边界+承诺；--budget 近期记忆字符预算）|
+| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 开工上下文包（身份+铁律+画像+任务相关记忆+近期记忆+边界+承诺；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆 |
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆 |
 | `yotta-memory reindex` | 重建索引 |

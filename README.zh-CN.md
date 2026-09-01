@@ -23,6 +23,8 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
+> 🆕 **v0.9.0**：召回质量与上下文选择——可选本地 embedding 插件、`context --focus`、`--explain` 选择解释。
+
 > 🆕 **v0.8.5**：安全加固——MCP `distill` 不再接受 `--model`；MCP `export` / `import` 路径限记忆库内；CLI `distill --model` 不再走 shell（改为允许清单）。
 
 > 🆕 **v0.8.2**：发布元数据修复——三次源重发带 `--name 元忆 yotta-memory`，修复 ClawHub 展示名缺失中文（原为裸 `yotta-memory`）；无功能变更。
@@ -98,18 +100,19 @@
 - **本机免 token**：本机 CLI / stdio 直连不经网络、不校验 token；身份经该智能体 MCP 配置的 `env.YOTTA_AGENT_ID` 声明。本机多个智能体各自声明唯一 ID，互不撞。
 - **私密记忆必须有 owner**：写 PREF / BOUND / COMMIT 时未声明身份会被拒绝（公共 FACT 不受影响），从机制上防止「抄别人的 ID」。
 
-### 画像与开工上下文（v0.6.0）
+### 画像与开工上下文（v0.6.0 + v0.9.0）
 
 - **profile**：聚合 `private/<owner>/` 下 PREF / BOUND / COMMIT 原文，按 type + subject + tags 归组，写 `profile.md`；引擎零推断，画像结论由 AI 依据「记忆守则」内部形成，不当面贴标签。
-- **context**：一键生成开工上下文包——多智能体接入铁律 + 身份 + 用户画像摘要 + 近期记忆（按 importance 排序）+ 边界提醒 + 承诺 / 锚点；支持 `--budget` 字符预算（token 恒定，不随记忆膨胀）。
+- **context**：一键生成开工上下文包——多智能体接入铁律 + 身份 + 用户画像摘要 + 任务相关记忆（`--focus`，v0.9.0）+ 近期记忆（按 importance 排序）+ 边界提醒 + 承诺 / 锚点；支持 `--budget` 字符预算与 `--explain` 选择解释。
 - **记忆守则**：SKILL.md 内置规则层（类型红线 / 主动捕获触发信号 / 了解用户三阶段四手法 / 心理学底座与对齐 / 底线与边界 / 宿主隔离 / 反模式），让 AI「越用越懂」有章法。
 
-### 检索：语义检索（v0.8.0）+ 中文分词打分
+### 检索：语义检索（v0.8.0 + v0.9.0 embedding）
 
 - `remember` 时自动构建 `index.json` 索引（v0.8.1 起 version=4，含字段加权与拼音 token；公共索引超过 5000 条按年份分片 `index-<year>.json`；旧索引首次 recall 自动重建）；recall 默认语义检索——精确（字段加权：subject×3 / tags×2 / statement×1）+ 同义词（内置词表，可扩展）+ 拼音（全拼 / 首字母，内置 3755 常用字表）+ 模糊（编辑距离 ≤ 2）+ 子串兜底，并与效用分融合排序（0.65 × 语义 + 0.35 × 效用），零依赖。
 - `recall --explain`：展示每条命中理由（精确 / 同义 / 拼音 / 模糊 + 字段）与效用分项。
 - **recall 候选预过滤（v0.8.1）**：语义打分前先用索引 token 粗筛候选集（精确 / 同义 / 拼音 / 子串 / 模糊长度门槛），命中集与 v0.8.0 完全一致；`view` 查看平台按偏移分页返回，一次只取当前页。
-- 可选 embedding 插件：协议预留（v0.9 实装），无插件自动零依赖降级。
+- **可选 embedding 插件（v0.9.0）**：`recall --embedding <命令>` 或 `config set embedding_cmd <命令>`，本地子进程通过 stdin/stdout JSON 协议返回向量；结果并入同一套排序。插件失败、超时或输出非法时自动降级为零依赖词法检索。
+- **向量缓存**：向量缓存在各记忆根下 `.embed/cache.json`，键为 `sha256(命令 + 文本)`；只存向量，不存明文。
 - `index.json` 的 `tokens` 字段是中文分词的词频表（TF 打分用），**不是**访问凭证；鉴权令牌在记忆目录下 `.server/tokens.json`。
 - 支持关键词、`--type` 过滤、`--limit` 截断、项目级优先。
 - **根位置去重（v0.6.5）**：当项目级与用户级记忆库指向同一目录（如 cwd = home 或其父）时，`recall` / `context` 自动唯一化根，同一文件只展示一次。
@@ -261,9 +264,9 @@ npm i -g @yottameta/yotta-memory
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库（默认用户级 `~/.yottamemory/`；--dir 显式指定位置）|
 | `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入记忆（同 subject+statement 自动更新；--owner 标注归属；--source 记录来源；--weight 重要性权重、去重取 max；--verify 写后回读；--no-hint 关闭类型提示）|
-| `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 检索记忆（索引+TF 打分，读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 仅作身份声明、不授予跨读；项目级优先）|
+| `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain] [--semantic] [--embedding <命令>] [--embedding-timeout N]` | 检索记忆（语义+效用分排序；可选本地 embedding 插件；读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 仅作身份声明、不授予跨读；项目级优先）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
-| `yotta-memory context [--limit N] [--owner <id>] [--budget N]` | 生成开工上下文包（身份 + 多智能体铁律 + 画像 + 近期记忆 + 边界 + 承诺；--budget 近期记忆字符预算，token 恒定）|
+| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 生成开工上下文包（身份 + 多智能体铁律 + 画像 + 任务相关记忆 + 近期记忆 + 边界 + 承诺；--budget 字符预算；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆（按类型目录路径或文件名）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（盖棺分+年龄，immutable 除外）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
@@ -341,7 +344,7 @@ yotta-memory recall --type FACT --limit 10
 }
 ```
 
-连接后可通过 MCP tools（remember / recall / search / forget / archive / reindex / export / import / agent_info）读写记忆与确认身份；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露；MCP export/import 路径限记忆库内、distill 不支持 `--model`（仅本地 CLI）。`X-Agent-Id` 必须与 token 登记的智能体一致；读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
+连接后可通过 MCP tools（remember / recall / search / context / forget / archive / reindex / export / import / agent_info）读写记忆与确认身份；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露；MCP export/import 路径限记忆库内、distill 不支持 `--model`，MCP 也不接受远端传入 embedding 命令——embedding 插件只能由引擎主机本地 `config set embedding_cmd` 配置。`X-Agent-Id` 必须与 token 登记的智能体一致；读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
 
 ### 位置持久化
 

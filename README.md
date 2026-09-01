@@ -23,6 +23,8 @@
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
 
+> 🆕 **v0.9.0**: recall quality + context selection — optional local embedding plugin, `context --focus`, and `--explain` selection trace.
+
 > 🆕 **v0.8.5**: security hardening — MCP `distill` no longer accepts `--model`; MCP `export` / `import` paths are restricted to the memory root; CLI `distill --model` no longer shells out (allowlist-based).
 
 ## Core value
@@ -71,18 +73,19 @@ Each agent has a globally unique agent ID: it is the ownership key for private m
 - **No token locally**: local CLI / stdio direct connection bypasses the network and does not validate tokens; identity is declared via the agent's MCP `env.YOTTA_AGENT_ID`.
 - **Private memory requires an owner**: writing PREF / BOUND / COMMIT without declaring identity is rejected (public FACT is unaffected), mechanically preventing ID spoofing.
 
-### Profile & start-of-work context (v0.6.0)
+### Profile & start-of-work context (v0.6.0 + v0.9.0)
 
 - **profile**: aggregates `private/<owner>/` PREF / BOUND / COMMIT verbatim, grouped by type + subject + tags, written to `profile.md`; the engine infers nothing — profile conclusions are formed internally by the AI per the "memory discipline", never pasted as labels.
-- **context**: one-shot start-of-work package — multi-agent integration rules + identity + user profile digest + recent memory (importance-sorted) + boundary reminders + commitments/anchors; supports `--budget` character budget (constant tokens, does not grow with memory).
+- **context**: one-shot start-of-work package — multi-agent integration rules + identity + user profile digest + optional task-focused memory (`--focus`) + recent memory (importance-sorted) + boundary reminders + commitments/anchors; supports `--budget` character budget and `--explain` selection trace.
 - **Memory discipline**: SKILL.md embeds a rule layer (type red lines / proactive trigger capture / know-the-user three stages / psychological grounding & alignment / bottom lines / host isolation / anti-patterns).
 
-### Retrieval: semantic search (v0.8.0) + Chinese tokenization scoring
+### Retrieval: semantic search (v0.8.0 + v0.9.0 embedding)
 
 - `remember` auto-builds the `index.json` index (version 4 since v0.8.1 with field weighting and pinyin tokens; public indexes over 5000 entries shard by year `index-<year>.json`; old indexes rebuild on first recall); recall defaults to semantic search — exact (field weighting: subject×3 / tags×2 / statement×1) + synonyms (built-in wordlist, extensible) + pinyin (full / initials, built-in 3755 common characters) + fuzzy (edit distance ≤ 2) + substring fallback, blended with utility score (0.65 × semantic + 0.35 × utility), zero-dependency.
 - `recall --explain`: shows each hit's reason (exact / synonym / pinyin / fuzzy + field) and utility components.
 - **Candidate pre-filtering (v0.8.1)**: before semantic scoring, index tokens coarsely filter the candidate set (exact / synonym / pinyin / substring / fuzzy length gate) — hit set identical to v0.8.0; the `view` platform paginates by offset, fetching only the current page.
-- Optional embedding plugin: protocol reserved (implemented in v0.9); without a plugin it degrades to zero-dependency automatically.
+- **Optional embedding plugin (v0.9.0)**: `recall --embedding <command>` or `config set embedding_cmd <command>` runs a local subprocess that accepts JSON on stdin and returns vectors on stdout; results are blended into the same ranking. Failures, timeouts, or malformed output automatically fall back to zero-dependency lexical recall.
+- **Embedding cache**: vectors are cached under each memory root at `.embed/cache.json`, keyed by `sha256(command + text)`; only vectors are stored, not plaintext.
 - The `tokens` field of `index.json` is a Chinese-tokenization term-frequency table (for TF scoring), **not** an access credential; auth tokens live at `.server/tokens.json`.
 - Supports keywords, `--type` filter, `--limit` truncation, project-level priority.
 - **Root de-duplication (v0.6.5)**: when project and user roots point at the same directory, recall / context uniquify roots so a file shows once.
@@ -221,9 +224,9 @@ npm i -g @yottameta/yotta-memory
 |---|---|
 | `yotta-memory init [--project] [--dir <dir>]` | Initialize the store (default user-level `~/.yottamemory/`; --dir sets an explicit location) |
 | `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <src>] [--weight <0..>] [--verify] [--no-hint]` | Write a memory (same subject+statement auto-updates; --owner marks ownership; --source records origin; --weight importance, dedup takes max; --verify read-back; --no-hint disables type hints) |
-| `yotta-memory recall [keywords] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | Search memory (index + TF scoring, partitioned reads; cross-reading other agents' private is denied by default, needs grant / identity=user / `--unsafe`; project-level priority) |
+| `yotta-memory recall [keywords] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain] [--semantic] [--embedding <cmd>] [--embedding-timeout N]` | Search memory (semantic + utility ranking; optional local embedding plugin; partitioned reads; cross-reading other agents' private is denied by default, needs grant / identity=user / `--unsafe`; project-level priority) |
 | `yotta-memory profile [--owner <id>]` | Generate a user profile (aggregates `private/<owner>` verbatim, zero inference, writes `profile.md`; cross-owner denied by default) |
-| `yotta-memory context [--limit N] [--owner <id>] [--budget N]` | Generate the start-of-work package (identity + multi-agent rules + profile + recent memory + boundaries + commitments; --budget budgets recent-memory chars, constant tokens) |
+| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <text>] [--explain] [--embedding <cmd>]` | Generate the start-of-work package (identity + multi-agent rules + profile + task-focused memory + recent memory + boundaries + commitments; --budget caps chars, --focus adds task relevance, --explain shows included/dropped) |
 | `yotta-memory forget <file>` | Delete a memory (by type-dir path or file name) |
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | Archive old memory (final score + age; immutable excluded) |
 | `yotta-memory reindex` | Rebuild the index (after manually editing .md) |
@@ -301,7 +304,7 @@ Register the connection in the agent's MCP config (`url` + two headers):
 }
 ```
 
-Once connected, MCP tools (remember / recall / search / forget / archive / reindex / export / import / agent_info) read/write memory and confirm identity; management actions (init / config / token / lan / serve) are not exposed via MCP, and token management is never exposed remotely. MCP `export` / `import` paths are restricted inside the memory root, and MCP `distill` does not support `--model` (local CLI only). `X-Agent-Id` must match the token's registered agent; read-partition rules are the same as the CLI (FACT public-readable, PREF / BOUND / COMMIT private).
+Once connected, MCP tools (remember / recall / search / context / forget / archive / reindex / export / import / agent_info) read/write memory and confirm identity; management actions (init / config / token / lan / serve) are not exposed via MCP, and token management is never exposed remotely. MCP `export` / `import` paths are restricted inside the memory root, MCP `distill` does not support `--model`, and MCP never accepts a raw embedding command from remote callers — the local embedding plugin must be configured on the engine host with `config set embedding_cmd`. `X-Agent-Id` must match the token's registered agent; read-partition rules are the same as the CLI (FACT public-readable, PREF / BOUND / COMMIT private).
 
 ### Location persistence
 

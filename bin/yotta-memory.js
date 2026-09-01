@@ -22,7 +22,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.8.7';
+const VERSION = '0.9.0';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -149,6 +149,103 @@ function runDistillModel(modelStr, payload) {
   }
   const r = child_process.spawnSync(argv[0], argv.slice(1), { input: payload, encoding: 'utf8', maxBuffer: 1024 * 1024, shell: false, windowsHide: true });
   return r;
+}
+function cosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = Number(a[i]) || 0;
+    const y = Number(b[i]) || 0;
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
+  }
+  if (!na || !nb) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+function runEmbeddingPlugin(command, texts, timeoutMs) {
+  const argv = splitCommandArgv(String(command || ''));
+  if (!argv.length) throw new Error('embedding 命令为空');
+  const payload = JSON.stringify({ texts: (texts || []).map(String) });
+  const timeout = Math.max(1, parseInt(timeoutMs, 10) || 3000);
+  const r = child_process.spawnSync(argv[0], argv.slice(1), {
+    input: payload,
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024,
+    shell: false,
+    windowsHide: true,
+    timeout: timeout
+  });
+  if (r.error) throw r.error;
+  if (r.status !== 0) throw new Error('embedding 插件退出码 ' + r.status);
+  const parsed = JSON.parse(String(r.stdout || ''));
+  if (!parsed || !Array.isArray(parsed.vectors)) throw new Error('embedding 插件输出缺少 vectors 数组');
+  if (parsed.vectors.length !== texts.length) throw new Error('embedding 向量数量不匹配');
+  return parsed.vectors;
+}
+function embeddingCandidates(entries, query, opts) {
+  opts = opts || {};
+  const command = opts.embedding || '';
+  if (!command) return [];
+  const texts = [String(query || '')].concat((entries || []).map(function (e) {
+    return [e.subject || '', e.statement || '', (e.tags || []).join(' ')].join(' ');
+  }));
+  const root = opts.root ? String(opts.root) : '';
+  let cache = {};
+  let cachePath = '';
+  if (root) {
+    cachePath = path.join(root, '.embed', 'cache.json');
+    try {
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    } catch (err) {
+      cache = {};
+    }
+  }
+  const keys = texts.map(function (text) {
+    return crypto.createHash('sha256').update(command + '\0' + text).digest('hex');
+  });
+  const missing = [];
+  const missingIndexes = [];
+  const vectors = new Array(texts.length);
+  for (let i = 0; i < texts.length; i++) {
+    if (cache[keys[i]]) {
+      vectors[i] = cache[keys[i]];
+    } else {
+      missing.push(texts[i]);
+      missingIndexes.push(i);
+    }
+  }
+  if (missing.length) {
+    const missingVectors = runEmbeddingPlugin(command, missing, opts.embeddingTimeout);
+    for (let i = 0; i < missingVectors.length; i++) {
+      const idx = missingIndexes[i];
+      vectors[idx] = missingVectors[i];
+      cache[keys[idx]] = missingVectors[i];
+    }
+    if (cachePath) {
+      try { fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2), 'utf8'); } catch (err) {}
+    }
+  }
+  const queryVec = vectors[0];
+  const out = [];
+  for (let i = 1; i < vectors.length; i++) {
+    const sim = cosineSimilarity(queryVec, vectors[i]);
+    if (sim > 0) out.push({ entry: entries[i - 1], score: sim, detail: ['embedding:' + round3(sim)] });
+  }
+  return out;
+}
+function effectiveEmbeddingCommand(opts) {
+  opts = opts || {};
+  if (opts.embedding) return String(opts.embedding);
+  const cfg = loadConfig();
+  return cfg && cfg.embedding_cmd ? String(cfg.embedding_cmd) : '';
+}
+function effectiveEmbeddingTimeout(opts) {
+  opts = opts || {};
+  if (opts.embeddingTimeout) return parseInt(opts.embeddingTimeout, 10) || 3000;
+  const cfg = loadConfig();
+  return cfg && cfg.embedding_timeout ? parseInt(cfg.embedding_timeout, 10) || 3000 : 3000;
 }
 function parseFrontmatter(text) {
   const m = text.match(/^---\s*\n([\s\S]*?)\n---/);
@@ -1154,6 +1251,28 @@ function recallCore(query, opts) {
   const wantExplain = !!opts.explain;
   const useSemantic = opts.semantic !== false;
   const prefilter = (q && useSemantic) ? recallPrefilter(q) : null;
+  const embeddingMap = new Map();
+  const embeddingCommand = effectiveEmbeddingCommand(opts);
+  const embeddingTimeout = effectiveEmbeddingTimeout(opts);
+  if (q && embeddingCommand) {
+    for (const root of roots) {
+      const rootEntries = ensureIndex(root).filter(function (e) {
+        return classifyRead(e, agent, ownerFilter, allSafe, selfAgent) !== 'denied';
+      });
+      try {
+        const hits = embeddingCandidates(rootEntries, q, {
+          embedding: embeddingCommand,
+          embeddingTimeout: embeddingTimeout,
+          root: root
+        });
+        for (const h of hits) {
+          embeddingMap.set(root + '\0' + h.entry.file, h);
+        }
+      } catch (err) {
+        // Plugin failure is not fatal; keep lexical-only recall.
+      }
+    }
+  }
   const hits = [];
   let deniedCount = 0;
   for (const root of roots) {
@@ -1164,12 +1283,19 @@ function recallCore(query, opts) {
       if (r === 'denied') { deniedCount++; continue; }
       let score = 0;
       let detail = null;
+      const embeddingHit = embeddingMap.get(root + '\0' + e.file) || null;
       if (q) {
         if (useSemantic) {
-          if (prefilter && !prefilter(e)) continue; // v0.8.1 候选预过滤：粗筛后再语义打分
+          if (prefilter && !prefilter(e) && !embeddingHit) continue; // v0.8.1 候选预过滤：粗筛后再语义打分；embedding 命中可越过词法预过滤
           const m = semanticMatch(e, q, wantExplain);
           score = m.score;
           if (wantExplain && m.detail && m.detail.length) detail = m.detail;
+          if (embeddingHit) {
+            score = Math.max(score, embeddingHit.score);
+            if (wantExplain && embeddingHit.detail) {
+              detail = (detail || []).concat(embeddingHit.detail);
+            }
+          }
         } else {
           const qtoks = tokenize(q);
           for (const tt of qtoks) { if (e.tokens && e.tokens[tt]) score += e.tokens[tt]; }
@@ -1245,7 +1371,21 @@ function recallCore(query, opts) {
   if (deniedCount > 0 && explicitCross) {
     lines.push('\n[警告] 本次检索共拒绝 ' + deniedCount + ' 条越界访问（其它智能体私密记忆，未授权不展示）。如需读取请加 --unsafe 或 --owner user。');
   }
-  return { error: false, exitCode: 0, text: lines.join('\n') };
+  return {
+    error: false,
+    exitCode: 0,
+    text: lines.join('\n'),
+    entries: shown.map(function (h) {
+      return {
+        root: h.root,
+        file: h.entry.file,
+        type: h.entry.type,
+        subject: h.entry.subject,
+        statement: h.entry.statement,
+        score: h.finalScore === undefined ? h.score : h.finalScore
+      };
+    })
+  };
 }
 function resolveMemoryFile(root, ref) {
   const map = {};
@@ -2509,6 +2649,11 @@ function contextCore(opts) {
   const owner = opts.owner || selfAgent;
   const unsafe = !!opts.unsafe;
   const budget = opts.budget ? parseInt(opts.budget, 10) : 0;
+  const focus = opts.focus ? String(opts.focus) : '';
+  const explain = !!opts.explain;
+  const embeddingCommand = effectiveEmbeddingCommand(opts);
+  const embeddingTimeout = effectiveEmbeddingTimeout(opts);
+  const trace = [];
   const lines = [];
   const FENCE = String.fromCharCode(96, 96, 96);
   function usedChars() { return lines.reduce(function (s, x) { return s + String(x).length + 1; }, 0); }
@@ -2561,6 +2706,32 @@ function contextCore(opts) {
     lines.push('（未声明身份，跳过画像；先 iam 登记后可生成）');
   }
   lines.push('');
+
+  if (focus) {
+    lines.push('## 2.5 任务相关记忆（--focus）');
+    lines.push('');
+    const focused = recallCore(focus, {
+      limit: limit,
+      owner: owner,
+      unsafe: unsafe,
+      selfAgent: selfAgent,
+      embedding: embeddingCommand,
+      embeddingTimeout: embeddingTimeout
+    });
+    const focusedEntries = focused.entries || [];
+    if (!focusedEntries.length) lines.push('（无匹配记忆）');
+    for (const e of focusedEntries) {
+      const line = '- [' + e.type + '] ' + e.subject + ': ' + e.statement;
+      if (budget > 0 && usedChars() + line.length > budget) {
+        trace.push('[dropped] ' + e.file + ' reason: budget_exceeded');
+        continue;
+      }
+      lines.push(line);
+      trace.push('[included] ' + e.file + ' reason: focus_match score: ' + round3(e.score));
+    }
+    lines.push('');
+  }
+
   lines.push('## 3. 近期记忆（按活跃度前 ' + limit + ' 条）');
   lines.push('');
   const recent = [];
@@ -2576,8 +2747,12 @@ function contextCore(opts) {
   if (!recentShown.length) lines.push('（暂无记忆）');
   for (const h of recentShown) {
     const line = '- [' + h.e.type + '] ' + h.e.subject + ': ' + h.e.statement;
-    if (budget > 0 && usedChars() + line.length > budget) break;
+    if (budget > 0 && usedChars() + line.length > budget) {
+      trace.push('[dropped] ' + h.e.file + ' reason: budget_exceeded');
+      break;
+    }
     lines.push(line);
+    trace.push('[included] ' + h.e.file + ' reason: recent_match');
   }
   lines.push('');
   lines.push('## 4. 边界提醒（BOUND）');
@@ -2620,6 +2795,13 @@ function contextCore(opts) {
   }
   const oldCount = allEntries.filter(function (e) { return e.created && daysBetween(e.created, today()) > 180 && classifyRead(e, owner, '', unsafe, selfAgent) !== 'denied'; }).length;
   if (oldCount > 0) lines.push('- 归档提醒: ' + oldCount + ' 条超 180 天，建议 archive');
+  if (explain) {
+    lines.push('');
+    lines.push('## 7. 选择解释（--explain）');
+    lines.push('');
+    if (!trace.length) lines.push('（无选择记录）');
+    for (const t of trace) lines.push(t);
+  }
   return { error: false, exitCode: 0, text: lines.join('\n') };
 }
 function cmdContext(opts) {
@@ -2630,16 +2812,20 @@ function cmdContext(opts) {
 
 // ---- config 命令 ----
 function cmdConfigSet(key, value) {
-  if (key !== 'memory_home') { console.error('未知配置项: ' + key + '（可用: memory_home）'); process.exit(2); }
-  if (!value) { console.error('缺少值: config set memory_home <目录>'); process.exit(2); }
+  if (key !== 'memory_home' && key !== 'embedding_cmd' && key !== 'embedding_timeout') { console.error('未知配置项: ' + key + '（可用: memory_home / embedding_cmd / embedding_timeout）'); process.exit(2); }
+  if (!value) { console.error('缺少值: config set ' + key + ' <值>'); process.exit(2); }
   const cfg = loadConfig();
-  cfg.memory_home = value;
+  if (key === 'memory_home') cfg.memory_home = value;
+  else if (key === 'embedding_cmd') cfg.embedding_cmd = value;
+  else if (key === 'embedding_timeout') cfg.embedding_timeout = parseInt(value, 10) || 3000;
   saveConfig(cfg);
-  console.log('已记住记忆库位置: ' + value);
+  console.log('已写入配置: ' + key + ' = ' + (key === 'embedding_timeout' ? (parseInt(value, 10) || 3000) : value));
 }
 function cmdConfigGet() {
   const cfg = loadConfig();
   console.log('memory_home: ' + (cfg.memory_home || '(未设置，默认 ~/.yottamemory)'));
+  console.log('embedding_cmd: ' + (cfg.embedding_cmd || '(未设置)'));
+  console.log('embedding_timeout: ' + (cfg.embedding_timeout || 3000));
   console.log('当前生效用户级位置: ' + userRoot());
   if (cfg.serve && Object.keys(cfg.serve).length) console.log('serve: ' + JSON.stringify(cfg.serve));
 }
@@ -2648,8 +2834,9 @@ function cmdConfigGet() {
 function mcpTools() {
   return [
     { name: 'remember', description: '写入一条记忆。参数 type(FACT/PREF/BOUND/COMMIT)、subject、statement 必填；owner 可选，默认当前智能体', inputSchema: { type: 'object', properties: { type: { type: 'string', description: 'FACT/PREF/BOUND/COMMIT' }, subject: { type: 'string' }, statement: { type: 'string' }, owner: { type: 'string' } }, required: ['type', 'subject', 'statement'] } },
-    { name: 'recall', description: '检索记忆。query 可选；type 可选；limit 可选（默认 20）。只返回当前智能体可读记忆', inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string' }, limit: { type: 'number' } } } },
-    { name: 'search', description: '检索记忆（同 recall）。query 可选；type 可选；limit 可选（默认 20）', inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string' }, limit: { type: 'number' } } } },
+    { name: 'recall', description: '检索记忆。query 可选；type 可选；limit 可选（默认 20）；explain 可选。只返回当前智能体可读记忆；embedding 插件只能由本机 config 配置，远端不可传命令', inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string' }, limit: { type: 'number' }, embeddingTimeout: { type: 'number' }, explain: { type: 'boolean' } } } },
+    { name: 'search', description: '检索记忆（同 recall）。query 可选；type 可选；limit 可选（默认 20）；explain 可选；embedding 插件只能由本机 config 配置，远端不可传命令', inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string' }, limit: { type: 'number' }, embeddingTimeout: { type: 'number' }, explain: { type: 'boolean' } } } },
+    { name: 'context', description: '生成开工上下文包。focus 可选；limit 可选；budget 可选；explain 可选；embedding 插件只能由本机 config 配置，远端不可传命令', inputSchema: { type: 'object', properties: { focus: { type: 'string' }, limit: { type: 'number' }, budget: { type: 'number' }, explain: { type: 'boolean' }, embeddingTimeout: { type: 'number' } } } },
     { name: 'forget', description: '删除一条记忆。file 为记忆文件路径（如 facts/2026-08-24-0001.md 或文件名）', inputSchema: { type: 'object', properties: { file: { type: 'string' } }, required: ['file'] } },
     { name: 'archive', description: '归档旧记忆。days 默认 180；threshold 默认 0.4', inputSchema: { type: 'object', properties: { days: { type: 'number' }, threshold: { type: 'number' } } } },
     { name: 'reindex', description: '重建索引（手动改 .md 后校正；扫描 facts/prefs/bounds/commits 四目录）', inputSchema: { type: 'object', properties: {} } },
@@ -2673,7 +2860,24 @@ function callTool(name, args, ctx) {
       return { text: r.text, error: r.error };
     }
     if (name === 'recall' || name === 'search') {
-      const r = recallCore(args.query ? String(args.query) : null, { limit: args.limit || 20, type: args.type ? String(args.type) : null, agent: agent });
+      const r = recallCore(args.query ? String(args.query) : null, {
+        limit: args.limit || 20,
+        type: args.type ? String(args.type) : null,
+        agent: agent,
+        embeddingTimeout: args.embeddingTimeout || 3000,
+        explain: !!args.explain
+      });
+      return { text: r.text, error: r.error };
+    }
+    if (name === 'context') {
+      const r = contextCore({
+        focus: args.focus ? String(args.focus) : '',
+        limit: args.limit || 10,
+        budget: args.budget || 0,
+        explain: !!args.explain,
+        embeddingTimeout: args.embeddingTimeout || 3000,
+        selfAgent: agent
+      });
       return { text: r.text, error: r.error };
     }
     if (name === 'forget') {
@@ -3315,7 +3519,7 @@ function usage() {
       ['view', '启动用户查看平台（--port/--host；口令解锁浏览/授权/吊销 AI）'],
       ['reset-password', '重设主口令（忘口令用恢复钥匙）'],
       ['key', '管理 AI 私密读取授权缓存（list / authorize <id> / revoke <id>）'],
-      ['config', '查看/记住记忆库位置（get / set memory_home <目录>）']
+      ['config', '查看/设置配置（get / set memory_home <目录> / set embedding_cmd <命令> / set embedding_timeout <毫秒>）']
     ]],
     ['平台与服务', [
       ['serve', '启动 MCP 记忆引擎（streamable HTTP；--stdio 本地零进程）'],
@@ -3343,7 +3547,7 @@ async function main() {
   if (!args.length) { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout']);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--version' || a === '-v') { console.log(VERSION); return; }
@@ -3394,6 +3598,9 @@ async function main() {
       else if (a === '--merge') opts.merge = v;
       else if (a === '--model') opts.model = v;
       else if (a === '--subject') opts.subject = v;
+      else if (a === '--embedding') opts.embedding = v;
+      else if (a === '--focus') opts.focus = v;
+      else if (a === '--embedding-timeout') opts.embeddingTimeout = parseInt(v, 10) || 3000;
     } else if (a.startsWith('--')) {
       console.error('未知选项: ' + a);
       process.exit(2);
@@ -3411,7 +3618,7 @@ async function main() {
       const sub = rest[0];
       if (sub === 'set') cmdConfigSet(rest[1], rest[2]);
       else if (sub === 'get') cmdConfigGet();
-      else { console.error('config 子命令: set memory_home <目录> / get'); process.exit(2); }
+      else { console.error('config 子命令: set memory_home <目录> / set embedding_cmd <命令> / set embedding_timeout <毫秒> / get'); process.exit(2); }
       break;
     }
     case 'remember': cmdRemember(rest[0], rest[1], rest[2], opts); break;
@@ -3536,6 +3743,9 @@ module.exports = {
   utilityScore: utilityScore,
   utilityBreakdown: utilityBreakdown,
   semanticMatch: semanticMatch,
+  runEmbeddingPlugin: runEmbeddingPlugin,
+  cosineSimilarity: cosineSimilarity,
+  embeddingCandidates: embeddingCandidates,
   pinyinTokens: pinyinTokens,
   isEncrypted: isEncrypted,
   collectOwners: collectOwners,
@@ -3585,4 +3795,3 @@ module.exports = {
   viewServerCore: viewServerCore,
 
 };
-

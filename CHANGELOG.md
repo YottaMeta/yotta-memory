@@ -1,3 +1,14 @@
+## v0.9.0 (2026-09-01)
+
+召回质量与上下文选择升级。
+
+- **两阶段召回**：词法候选 + 可选本地 embedding 插件候选，统一按语义分与效用分融合排序。
+- **可选 embedding 插件**：`--embedding <command>` 或 `config set embedding_cmd <command>`；本地子进程、`stdin/stdout` JSON 协议、超时默认 3000ms、失败自动降级为词法召回。
+- **任务感知上下文**：`context --focus <关键词>` 新增任务相关记忆段，按身份 / 边界 / 承诺 / 画像 / 任务记忆 / 近期记忆优先级组装。
+- **选择解释**：`context --explain` 输出 included / dropped 与原因；`recall --explain` 继续显示命中理由并补充 embedding 分。
+- **MCP 同步**：`recall` / `search` 新增 `embedding` / `embeddingTimeout` / `explain` 参数；新增 `context` 工具。
+- **版本四件对齐**：package.json / SKILL.md / CHANGELOG.md / 引擎 VERSION = 0.9.0。
+
 ## v0.8.7 (2026-09-01)
 
 评测反馈优化（文档 + 错误提示，功能不变）。
