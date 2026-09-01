@@ -22,7 +22,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.8.5';
+const VERSION = '0.8.7';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -3464,7 +3464,7 @@ async function main() {
   }
 }
 
-if (require.main === module) { main().catch(function (e) { console.error('错误: ' + (e && e.message ? e.message : String(e))); process.exit(2); }); }
+if (require.main === module) { main().catch(function (e) { console.error('错误: ' + (e && e.message ? e.message : String(e))); console.error('修复建议: 若与记忆库/密钥/权限有关，请检查 memory_home 路径、主口令与恢复钥匙，或运行 yotta-memory config get 确认位置；仍无法解决请把上面的错误信息反馈给开发者。'); process.exit(2); }); }
 module.exports = {
   VERSION: VERSION,
   userRoot: userRoot,

@@ -100,6 +100,21 @@ Each agent has a globally unique agent ID: it is the ownership key for private m
 - `export` / `import`: export the whole store to JSON / import from JSON; an intermediate format for migration and backup.
 - git: the whole store can be version-controlled — rollback / audit / team sync.
 
+## FAQ (quick reference)
+
+| Question | Answer (see references/faq.md) |
+|---|---|
+| Wrong memory type? | Hint only; forget and rewrite; --no-hint to disable |
+| Private encryption? | init encrypts by default (master password + recovery key); migrate to encrypt a plaintext store |
+| Multi-agent isolation? | FACT public; PREF/BOUND/COMMIT per-owner, grant via key authorize / view |
+| Memory not found? | config get -> reindex -> recall/search |
+| Lost master password? | reset-password with recovery key |
+| LAN connect? | lan enable + token new; client url+token |
+| MCP not loaded? | Check mcpServers + restart; use CLI directly |
+| Where is the store? | config get; project-level .yottamemory |
+| Cross-session resume? | Run context + recall at session start |
+| Backup / migrate? | export / import |
+
 ## Comparison with other approaches
 
 > Compared by solution type, not product names. Criteria: data sovereignty, deployment cost, permission boundaries, auditability, cross-agent ability.
@@ -151,6 +166,42 @@ bash install.sh --list           # list agents -> default directories
 ```
 
 > Method 1 uses the npm registry (npmmirror / npmjs) and does not depend on GitHub; Methods 2/3 use GitHub and may fail without a proxy in China.
+## Example outputs
+
+> Illustrative (actual output may vary by version) so you know what to expect on screen.
+
+**init**:
+
+```text
+Memory store initialized: D:/.yottamemory
+Master password set; recovery key: xxxx-xxxx-xxxx-xxxx (keep it safe)
+```
+
+**remember** (with verify):
+
+```text
+Recorded: D:/.yottamemory/facts/2026-09-01-0001.md
+[verify] read-back OK: facts/2026-09-01-0001.md
+```
+
+**recall**:
+
+```text
+3 memories (top 3):
+[FACT] subject: statement... (D:/.yottamemory/facts/xxx.md)
+```
+
+**context**:
+
+```text
+# Start-of-work context (yotta-memory context)
+## 1. Identity
+## 2. User profile summary
+## 3. Recent memories (top 10 by activity)
+## 4. Boundaries (BOUND)
+## 5. Commitments / anchors (COMMIT)
+```
+
 ## Upgrade
 
 Two upgrade paths match the two install paths:

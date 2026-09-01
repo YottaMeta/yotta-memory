@@ -77,7 +77,7 @@ yotta-memory config get                              # 查看记忆库位置
 ```bash
 yotta-memory profile                          # 生成用户画像（写 private/<owner>/profile.md）
 yotta-memory context --limit 10 --budget 1800 # 生成开工上下文包（身份+铁律+画像+近期记忆+边界+承诺，预算控 token）
-yotta-memory iam <id> --name 元忆 --user 老张 --relationship 伙伴   # 自我档案扩展显示名/用户/关系
+yotta-memory iam <id> --name 元忆 --user 用户 --relationship 伙伴   # 自我档案扩展显示名/用户/关系
 ```
 
 - `profile` 引擎零推断：只按类型 / 主题 / 标签归组呈现原文，画像结论由 AI 内部形成，不当面贴标签。

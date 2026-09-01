@@ -139,6 +139,21 @@
 - **安全边界**：管理动作（init / config / token / lan / serve）不进 MCP，token 不远程暴露；远程智能体只能读写记忆，且路径限记忆库内（export/import 的 out/src 必须落在库内）、distill 不支持 `--model`（仅本地 CLI），不能改配置、不能管 token。
 - 完整操作步骤见上文「局域网多机共享」章节与 [USER_GUIDE.md](USER_GUIDE.md)。
 
+## 常见问题 FAQ（速查）
+
+| 问题 | 答案（详见 references/faq.md） |
+|---|---|
+| 类型选错？ | 只提示不阻止；forget 后重写；--no-hint 关提示 |
+| 私密区加密？ | init 默认加密（主口令+恢复钥匙）；明文库 migrate 升级 |
+| 多智能体权限？ | FACT 公共；PREF/BOUND/COMMIT 按 owner 隔离，需 key authorize / view 授权 |
+| 记忆找不到？ | config get 查位置 → reindex 重建索引 → recall/search |
+| 忘记主口令？ | 用恢复钥匙 reset-password（无私密区锁定的预期行为） |
+| 局域网怎么连？ | 引擎 lan enable + token new；客户端配 url+token |
+| MCP 没加载？ | 检查 mcpServers + 重启会话；本机直连用 CLI |
+| 记忆库在哪？ | config get；项目级 .yottamemory |
+| 跨会话恢复？ | 开工跑 context + recall |
+| 备份迁移？ | export / import |
+
 ## 与其他方案对比
 
 > 以下按方案类型对比，不涉及具体产品名称。判断标准：数据主权、部署成本、权限边界、可审计性、跨智能体能力。
@@ -190,6 +205,42 @@ bash install.sh --list           # 列出智能体 -> 默认目录
 ```
 
 > 方式一走 npm 源（npmmirror / npmjs），不依赖 GitHub；方式二 / 三走 GitHub，国内无代理可能失败。
+## 命令输出样例
+
+> 以下为示意输出（以实际版本为准），让你知道执行命令后屏幕上会出现什么。
+
+**init（初始化记忆库）**：
+
+```text
+初始化记忆库成功：D:\.yottamemory
+主口令已设置；恢复钥匙：xxxx-xxxx-xxxx-xxxx（请妥善保存）
+```
+
+**remember（写入记忆，带 verify 回读）**：
+
+```text
+已记录: D:\.yottamemory\facts\2026-09-01-0001.md
+[verify] 已写回读 OK: facts/2026-09-01-0001.md
+```
+
+**recall（检索）**：
+
+```text
+共 3 条记忆（前 3 条）：
+[FACT] 项目名: 描述……（D:\.yottamemory\facts\xxx.md）
+```
+
+**context（开工上下文包）**：
+
+```text
+# 开工上下文包（yotta-memory context）
+## 1. 身份
+## 2. 用户画像摘要
+## 3. 近期记忆（按活跃度前 10 条）
+## 4. 边界提醒（BOUND）
+## 5. 承诺 / 锚点（COMMIT）
+```
+
 ## 升级
 
 两种升级方式对应两种安装方式：
