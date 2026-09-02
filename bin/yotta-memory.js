@@ -22,7 +22,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.9.2';
+const VERSION = '0.10.0';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -49,6 +49,7 @@ function loadConfig() {
 }
 function saveConfig(cfg) {
   fs.mkdirSync(path.dirname(configPath()), { recursive: true });
+  decayConfigCache = null;
   fs.writeFileSync(configPath(), JSON.stringify(cfg, null, 2), 'utf8');
 }
 function userRoot() {
@@ -439,11 +440,7 @@ function utilityScore(meta) {
   const fb = feedbackNetOf(meta);
   const usageScore = 0.5 * (Math.min(acc, 20) / 20) + 0.5 * (fb / (1 + Math.abs(fb)));
   const last = meta.last_accessed || meta.created || '';
-  let recencyScore = 0;
-  if (last) {
-    const d = daysBetween(last, today());
-    recencyScore = Math.max(0, 1 - d / 365);
-  }
+  const recencyScore = decayRecency(String(meta.type || 'FACT').toUpperCase(), last ? daysBetween(last, today()) : 0, decayConfig());
   const typeScore = ({ BOUND: 1.0, COMMIT: 0.9, PREF: 0.8, FACT: 0.6 })[String(meta.type || 'FACT').toUpperCase()] || 0.6;
   let structureScore = 0;
   if (meta.source) structureScore += 0.2;
@@ -463,8 +460,7 @@ function utilityBreakdown(meta) {
   const fb = feedbackNetOf(meta);
   const usageScore = 0.5 * (Math.min(acc, 20) / 20) + 0.5 * (fb / (1 + Math.abs(fb)));
   const last = meta.last_accessed || meta.created || '';
-  let recencyScore = 0;
-  if (last) { const d = daysBetween(last, today()); recencyScore = Math.max(0, 1 - d / 365); }
+  const recencyScore = decayRecency(String(meta.type || 'FACT').toUpperCase(), last ? daysBetween(last, today()) : 0, decayConfig());
   const typeScore = ({ BOUND: 1.0, COMMIT: 0.9, PREF: 0.8, FACT: 0.6 })[String(meta.type || 'FACT').toUpperCase()] || 0.6;
   let structureScore = 0;
   if (meta.source) structureScore += 0.2;
@@ -1442,9 +1438,10 @@ function archiveCore(opts) {
     const createdTs = new Date(meta.created).getTime();
     if (isNaN(createdTs)) continue;
     const t = (meta.type || 'FACT').toUpperCase();
+    if (t === 'BOUND') continue; // v0.10.0 BOUND 豁免归档（边界常驻）
     // v0.8.0 统一效用分（盖棺分）替代 vitality
     if (utilityScore(meta) < threshold && createdTs < cutoff) {
-      const destDir = path.join(root, ARCHIVE_DIR, TYPE_DIRS[t]);
+      const destDir = archiveDirFor(root, t, owner);
       fs.mkdirSync(destDir, { recursive: true });
       fs.renameSync(fp, path.join(destDir, path.basename(fp)));
       const rel = relOf(root, fp);
@@ -1558,18 +1555,20 @@ function explainCore(ref, opts) {
   const ub = utilityBreakdown(entry);
   const ageDays = entry.created ? daysBetween(entry.created, today()) : 0;
   const cfg = loadConfig();
+  const hlText = entry.type === 'BOUND' ? 'BOUND 不衰减' : (decayHalflifeDays(entry.type, cfg) + ' 天');
   const archU = parseFloat(cfg.maintain_archived_utility || 0.35);
   const archAge = parseInt(cfg.maintain_archived_age || '180', 10) || 180;
   const forgetU = parseFloat(cfg.maintain_forget_utility || 0.12);
   const forgetAge = parseInt(cfg.maintain_forget_age || '365', 10) || 365;
   const lines = ['[' + entry.type + '] ' + entry.subject + ': ' + entry.statement];
   lines.push('  文件: ' + target.rel + (readable ? '' : '（其它智能体私密，仅元数据）'));
-  lines.push('  效用分: ' + ub.total + ' = confidence ' + ub.confidence + ' + 使用 ' + ub.usage + ' + 时效 ' + ub.recency + ' + 类型 ' + ub.type + ' + 结构 ' + ub.structure + '）×weight ' + ub.weight);
+  lines.push('  效用分: ' + ub.total + ' = confidence ' + ub.confidence + ' + 使用 ' + ub.usage + ' + 时效 ' + ub.recency + '（半衰 ' + hlText + '） + 类型 ' + ub.type + ' + 结构 ' + ub.structure + '）×weight ' + ub.weight);
   lines.push('  年龄: ' + ageDays + ' 天 / access_count ' + (entry.access_count || 0) + ' / feedback_net ' + entry.feedback_net + ' / immutable ' + (entry.immutable ? '是' : '否'));
   const importScore = round3(importanceScore(entry));
   lines.push('  importance(旧): ' + importScore + ' / vitality(旧): ' + round3(vitality(entry)));
   if (entry.immutable) lines.push('  状态: immutable 豁免自动归档/遗忘');
-  else if (ub.total < forgetU && ageDays > forgetAge && entry.type !== 'BOUND') lines.push('  状态: 遗忘候选（utility < ' + forgetU + ' 且年龄 > ' + forgetAge + ' 天；--purge 才真删）');
+  else if (entry.type === 'BOUND') lines.push('  状态: BOUND 豁免归档/遗忘（边界常驻）');
+  else if (ub.total < forgetU && ageDays > forgetAge) lines.push('  状态: 遗忘候选（utility < ' + forgetU + ' 且年龄 > ' + forgetAge + ' 天；--purge 才真删）');
   else if (ub.total < archU && ageDays > archAge) lines.push('  状态: 归档候选（utility < ' + archU + ' 且年龄 > ' + archAge + ' 天）');
   else lines.push('  状态: 保留（未达归档/遗忘阈值）');
   return { error: false, text: lines.join('\n') };
@@ -1602,7 +1601,7 @@ function maintainCore(opts) {
   const archAge = parseInt(opts.age || cfg.maintain_archived_age || '180', 10) || 180;
   const forgetU = parseFloat(cfg.maintain_forget_utility || 0.12);
   const forgetAge = parseInt(cfg.maintain_forget_age || '365', 10) || 365;
-  const mode = apply ? (purge ? '执行（含遗忘真删 --purge）' : '执行') : '预览（dry-run，未改动；加 --apply 执行，--purge 才真删）';
+  const mode = opts.dedup ? (apply ? '查重执行（--dedup --apply 只自动合并高置信重复组，不执行归档/遗忘）' : '查重预览（--dedup；不执行归档/遗忘）') : (apply ? (purge ? '执行（含遗忘真删 --purge）' : '执行') : '预览（dry-run，未改动；加 --apply 执行，--purge 才真删）');
   const lines = ['## yotta-memory maintain（记忆自组织）'];
   lines.push('- 模式: ' + mode);
   lines.push('- 归档阈值: utility < ' + archU + ' 且年龄 > ' + archAge + ' 天；遗忘阈值: utility < ' + forgetU + ' 且年龄 > ' + forgetAge + ' 天');
@@ -1622,15 +1621,18 @@ function maintainCore(opts) {
       if (type === 'BOUND') { skipped.push({ fp: fp, reason: 'BOUND 豁免遗忘' }); }
       else { toForget.push(rec); continue; }
     }
-    if (u < archU && ageDays > archAge) toArchive.push(rec);
+    if (u < archU && ageDays > archAge) {
+      if (type === 'BOUND') skipped.push({ fp: fp, reason: 'BOUND 豁免归档' });
+      else toArchive.push(rec);
+    }
   }
   let archived = 0, forgotten = 0;
   if (toArchive.length) {
     lines.push('### 归档候选（' + toArchive.length + ' 条）');
     for (const rec of toArchive) {
       lines.push('- [' + rec.type + '] ' + rec.rel + '（utility ' + round3(rec.utility) + '，' + rec.ageDays + ' 天）— ' + (rec.meta.subject || '') + ': ' + String(rec.meta.statement || '').slice(0, 40) + (rec.type === 'COMMIT' ? '  ⚠️ COMMIT 收工纪律锚点，请确认' : ''));
-      if (apply) {
-        const destDir = path.join(root, ARCHIVE_DIR, TYPE_DIRS[rec.type]);
+      if (apply && !opts.dedup) {
+        const destDir = archiveDirFor(root, rec.type, rec.owner);
         fs.mkdirSync(destDir, { recursive: true });
         fs.renameSync(rec.fp, path.join(destDir, path.basename(rec.fp)));
         appendAudit(root, 'audit', { ts: new Date().toISOString(), file: rec.rel, action: 'archive', reason: 'utility<' + round3(rec.utility) + ',age>' + rec.ageDays, utility: round3(rec.utility) });
@@ -1643,8 +1645,8 @@ function maintainCore(opts) {
     lines.push('### 遗忘候选（' + toForget.length + ' 条，默认不真删；--purge 才删除）');
     for (const rec of toForget) {
       lines.push('- [' + rec.type + '] ' + rec.rel + '（utility ' + round3(rec.utility) + '，' + rec.ageDays + ' 天）');
-      if (apply && purge) {
-        const destDir = path.join(root, ARCHIVE_DIR, TYPE_DIRS[rec.type]);
+      if (apply && purge && !opts.dedup) {
+        const destDir = archiveDirFor(root, rec.type, rec.owner);
         fs.mkdirSync(destDir, { recursive: true });
         const dest = path.join(destDir, path.basename(rec.fp));
         fs.renameSync(rec.fp, dest);
@@ -1652,20 +1654,22 @@ function maintainCore(opts) {
         // 真删前二次确认标记：purge 已显式授权，删除 .archive 内副本前的最终动作 = 记录审计后删除
         try { fs.unlinkSync(dest); } catch (e) { /* 保留副本 */ }
         forgotten++;
-      } else if (apply) {
+      } else if (apply && !opts.dedup) {
         lines.push('    （--purge 未开启，跳过真删）');
       }
     }
     lines.push('');
   }
-  if (apply) {
-    if (archived || forgotten) {
-      const allMoved = toArchive.concat(toForget).filter(function (r) { return true; });
-      removeIndexEntries(root, allMoved.map(function (r) { return r.rel; }));
+  if (!opts.dedup) {
+    if (apply) {
+      if (archived || forgotten) {
+        const allMoved = toArchive.concat(toForget).filter(function (r) { return true; });
+        removeIndexEntries(root, allMoved.map(function (r) { return r.rel; }));
+      }
+      lines.push('- 已执行: 归档 ' + archived + ' 条，遗忘 ' + forgotten + ' 条。审计: ' + auditPath(root, 'audit'));
+    } else {
+      lines.push('- 未执行任何变更（dry-run）。加 --apply 执行归档，--purge 才真删遗忘候选。');
     }
-    lines.push('- 已执行: 归档 ' + archived + ' 条，遗忘 ' + forgotten + ' 条。审计: ' + auditPath(root, 'audit'));
-  } else {
-    lines.push('- 未执行任何变更（dry-run）。加 --apply 执行归档，--purge 才真删遗忘候选。');
   }
   if (skipped.length) {
     lines.push('');
@@ -1674,32 +1678,8 @@ function maintainCore(opts) {
     for (const s of skipped) { grouped[s.reason] = (grouped[s.reason] || 0) + 1; }
     for (const k of Object.keys(grouped)) lines.push('- ' + k + ': ' + grouped[k] + ' 条');
   }
-  // 去重
-  if (opts.dedup) {
-    lines.push('');
-    lines.push('### 去重候选（--dedup）');
-    const entries = ensureIndex(root);
-    const groups = [];
-    const used = new Set();
-    for (let i = 0; i < entries.length; i++) {
-      if (used.has(i)) continue;
-      const g = [entries[i]];
-      used.add(i);
-      for (let j = i + 1; j < entries.length; j++) {
-        if (used.has(j)) continue;
-        if (subjectsSimilar(entries[i], entries[j]) && jaccardTokens(entries[i], entries[j]) >= 0.7) {
-          g.push(entries[j]); used.add(j);
-        }
-      }
-      if (g.length > 1) groups.push(g);
-    }
-    if (!groups.length) lines.push('（无重复候选）');
-    for (const g of groups) {
-      lines.push('- 组: ' + g.map(function (e) { return e.file; }).join(' | '));
-      lines.push('  ' + g.map(function (e) { return e.subject + ': ' + e.statement; }).join(' / '));
-    }
-    lines.push('  合并: yotta-memory maintain --merge <fileA> <fileB>');
-  }
+  // 去重（v0.10.0：置信度分档 + --apply 自动合并；--dedup 与归档/遗忘互斥）
+  if (opts.dedup) appendDedupBlock(lines, root, opts);
   return { error: false, text: lines.join('\n') };
 }
 // 手动合并两条相似记忆：保留高 confidence，低 confidence 移入 .archive
@@ -2811,21 +2791,34 @@ function cmdContext(opts) {
 }
 
 // ---- config 命令 ----
+// v0.10.0：maintain_* / consolidate_* 数值键纳入 config set/get（此前只支持 3 个键但文档已写可调）
+function isNumericConfigKey(key) { return /^(maintain_|consolidate_)/.test(key); }
 function cmdConfigSet(key, value) {
-  if (key !== 'memory_home' && key !== 'embedding_cmd' && key !== 'embedding_timeout') { console.error('未知配置项: ' + key + '（可用: memory_home / embedding_cmd / embedding_timeout）'); process.exit(2); }
-  if (!value) { console.error('缺少值: config set ' + key + ' <值>'); process.exit(2); }
+  const known = ['memory_home', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'];
+  if (known.indexOf(key) === -1) { console.error('未知配置项: ' + key + '（可用: memory_home / embedding_cmd / embedding_timeout / maintain_* / consolidate_*）'); process.exit(2); }
+  if (value === undefined || value === null || value === '') { console.error('缺少值: config set ' + key + ' <值>'); process.exit(2); }
   const cfg = loadConfig();
   if (key === 'memory_home') cfg.memory_home = value;
   else if (key === 'embedding_cmd') cfg.embedding_cmd = value;
   else if (key === 'embedding_timeout') cfg.embedding_timeout = parseInt(value, 10) || 3000;
+  else if (isNumericConfigKey(key)) {
+    const n = parseFloat(value);
+    if (!(n >= 0)) { console.error('配置项 ' + key + ' 需要非负数值'); process.exit(2); }
+    cfg[key] = n;
+  }
   saveConfig(cfg);
-  console.log('已写入配置: ' + key + ' = ' + (key === 'embedding_timeout' ? (parseInt(value, 10) || 3000) : value));
+  console.log('已写入配置: ' + key + ' = ' + (key === 'memory_home' || key === 'embedding_cmd' ? value : cfg[key]));
 }
 function cmdConfigGet() {
   const cfg = loadConfig();
   console.log('memory_home: ' + (cfg.memory_home || '(未设置，默认 ~/.yottamemory)'));
   console.log('embedding_cmd: ' + (cfg.embedding_cmd || '(未设置)'));
   console.log('embedding_timeout: ' + (cfg.embedding_timeout || 3000));
+  const keys = ['memory_home', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'];
+  for (const k of keys) {
+    if (k === 'memory_home' || k === 'embedding_cmd' || k === 'embedding_timeout') continue;
+    if (cfg[k] !== undefined) console.log(k + ': ' + cfg[k]);
+  }
   console.log('当前生效用户级位置: ' + userRoot());
   if (cfg.serve && Object.keys(cfg.serve).length) console.log('serve: ' + JSON.stringify(cfg.serve));
 }
@@ -3493,6 +3486,496 @@ function cmdLanStatus() {
   if (p === 'linux') return cmdLanLinuxStatus();
   console.log('lan 命令当前仅支持 Windows / Linux；本机平台: ' + p);
 }
+
+// ================= v0.10.0 压缩遗忘：分类型衰减 / consolidate 周期摘要 / 自动合并 / 批次回滚 =================
+var decayConfigCache = null;
+
+function decayConfig() {
+  if (decayConfigCache) return decayConfigCache;
+  try { decayConfigCache = loadConfig() || {}; } catch (e) { decayConfigCache = {}; }
+  return decayConfigCache;
+}
+
+// 分类型衰减半衰期（天）：FACT 慢 / PREF 中 / COMMIT（任务类）快；BOUND 固定不衰减
+function decayHalflifeDays(type, cfg) {
+  cfg = cfg || {};
+  const t = String(type || 'FACT').toUpperCase();
+  if (t === 'BOUND') return null;
+  const d = parseFloat(cfg['maintain_decay_halflife_' + t]);
+  if (d > 0) return d;
+  return ({ FACT: 730, PREF: 365, COMMIT: 90 })[t] || 365;
+}
+
+// 指数半衰时效：recency = 0.5^(d / halfLife)；BOUND 恒 1.0（不衰减）
+function decayRecency(type, ageDays, cfg) {
+  const hl = decayHalflifeDays(type, cfg);
+  if (hl === null) return 1;
+  if (!(ageDays > 0)) return 1;
+  return Math.pow(0.5, ageDays / hl);
+}
+
+// v0.10.0 归档目标目录：公共 .archive/facts/；私密 .archive/private/<owner>/<type>/（带 owner，防跨 owner 撞名）
+function archiveDirFor(root, type, owner) {
+  const t = String(type || 'FACT').toUpperCase();
+  if (t === 'FACT') return path.join(root, ARCHIVE_DIR, 'facts');
+  if (owner) return path.join(root, ARCHIVE_DIR, PRIVATE_DIR, owner, TYPE_DIRS[t] || 'facts');
+  return path.join(root, ARCHIVE_DIR, TYPE_DIRS[t] || 'facts');
+}
+
+function newBatchId() {
+  const d = new Date();
+  const p = function (n, w) { return String(n).padStart(w || 2, '0'); };
+  let rand = '';
+  try { rand = crypto.randomBytes(3).toString('hex'); } catch (e) { rand = String(Math.floor(Math.random() * 16777215)).padStart(6, '0'); }
+  return p(d.getFullYear(), 4) + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '-' + rand;
+}
+
+function collectAuditRecords(root) {
+  const out = [];
+  const log = auditPath(root, 'audit');
+  if (!fs.existsSync(log)) return out;
+  const raw = fs.readFileSync(log, 'utf8');
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line)); } catch (e) { /* 跳过坏行 */ }
+  }
+  return out;
+}
+
+function listBatchesCore(opts) {
+  opts = opts || {};
+  const limit = (opts.limit && opts.limit > 0) ? opts.limit : 20;
+  const roots = memoryRoots();
+  const manifests = [];
+  for (const root of roots) {
+    for (const rec of collectAuditRecords(root)) {
+      if (rec.action !== 'manifest') continue;
+      manifests.push({ root: root, batch: rec.batch, ts: rec.ts || '', command: rec.command || '', mode: rec.mode || '' });
+    }
+  }
+  manifests.sort(function (a, b) { return String(b.batch).localeCompare(String(a.batch)); });
+  const lines = ['## yotta-memory consolidate --batches（近期批次审计）'];
+  if (!manifests.length) lines.push('（无批次记录；批次由 v0.10.0+ consolidate / maintain --dedup --apply 写入 .archive/audit-<日期>.jsonl）');
+  const shown = manifests.slice(0, limit);
+  for (const m of shown) {
+    lines.push('- ' + m.batch + '  [' + (m.command || '?') + ' / ' + (m.mode || '') + ']  root=' + m.root);
+  }
+  if (manifests.length > shown.length) lines.push('（共 ' + manifests.length + ' 个批次，显示前 ' + shown.length + ' 个；--limit N 查看更多）');
+  lines.push('回滚: yotta-memory consolidate --undo <batch>');
+  return { error: false, text: lines.join('\n') };
+}
+
+function findBatchRecords(batch) {
+  const out = [];
+  for (const root of memoryRoots()) {
+    for (const rec of collectAuditRecords(root)) {
+      if (rec.batch === batch) out.push({ root: root, rec: rec });
+    }
+  }
+  return out;
+}
+
+function consolidateUndoCore(batch, opts) {
+  opts = opts || {};
+  const lines = ['## yotta-memory consolidate --undo ' + batch];
+  const recs = findBatchRecords(batch);
+  if (!recs.length) return { error: true, text: '未找到批次 ' + batch + '（.archive/audit-<日期>.jsonl 无该 batch 记录）。' };
+  const done = recs.some(function (x) { return x.rec.action === 'undo_done'; });
+  if (done) return { error: false, text: lines.join('\n') + '\n批次 ' + batch + ' 已回滚过（幂等拒绝重复执行）。' };
+  const force = !!opts.force;
+  let err = null;
+  // 1) 删除 consolidate 生成的摘要（含索引）
+  for (const x of recs) {
+    if (x.rec.action !== 'summary_create') continue;
+    const fp = path.join(x.root, x.rec.file);
+    try { if (resolveWithinRoot(x.root, fp) && fs.existsSync(fp)) fs.unlinkSync(fp); } catch (e) { err = err || ('摘要删除失败: ' + x.rec.file + ' ' + e.message); }
+    if (resolveWithinRoot(x.root, fp)) removeIndexEntry(x.root, x.rec.file);
+    lines.push('- 已删除摘要: ' + x.rec.file);
+  }
+  // 2) 合并回滚：keep 还原最早 before 影像；drop 从 .archive 归位
+  const mergeKeeps = {};
+  for (const x of recs) {
+    if (x.rec.action !== 'merge') continue;
+    const kf = x.rec.keepFile;
+    if (!mergeKeeps[kf]) mergeKeeps[kf] = [];
+    mergeKeeps[kf].push(x);
+  }
+  for (const kf of Object.keys(mergeKeeps)) {
+    const xs = mergeKeeps[kf].sort(function (a, b) { return String(a.rec.ts || '').localeCompare(String(b.rec.ts || '')); });
+    const first = xs[0];
+    const keepFp = path.join(first.root, kf);
+    const owner = ownerFromPrivatePath(first.root, keepFp);
+    const before = first.rec.before || {};
+    try {
+      const patch = {};
+      if (before.updated !== undefined) patch.updated = before.updated;
+      if (before.tags !== undefined) patch.tags = JSON.stringify(before.tags);
+      if (before.access_count !== undefined) patch.access_count = before.access_count;
+      if (before.feedback_net !== undefined) patch.feedback_net = before.feedback_net;
+      if (Object.keys(patch).length && fs.existsSync(keepFp)) {
+        rewriteFrontmatter(keepFp, patch, first.root, owner);
+        upsertIndexEntry(first.root, readEntry(keepFp, first.root));
+        lines.push('- 已还原 keep: ' + kf);
+      }
+    } catch (e) { err = err || ('keep 还原失败: ' + kf + ' ' + e.message); }
+    for (const x of xs) {
+      const dropFp = path.join(x.root, x.rec.dropFile);
+      const dropTo = path.join(x.root, x.rec.dropTo);
+      if (!resolveWithinRoot(x.root, dropFp)) continue;
+      if (fs.existsSync(dropFp) && !force) { err = err || ('归位冲突: ' + x.rec.dropFile + ' 已存在（--force 覆盖）'); continue; }
+      try {
+        if (fs.existsSync(dropFp)) fs.unlinkSync(dropFp);
+        if (fs.existsSync(dropTo)) {
+          fs.mkdirSync(path.dirname(dropFp), { recursive: true });
+          fs.renameSync(dropTo, dropFp);
+          upsertIndexEntry(x.root, readEntry(dropFp, x.root));
+          lines.push('- 已归位 drop: ' + x.rec.dropFile);
+        } else {
+          err = err || ('drop 归档副本缺失: ' + x.rec.dropFile + '（无法归位）');
+        }
+      } catch (e2) { err = err || ('drop 归位失败: ' + x.rec.dropFile + ' ' + e2.message); }
+    }
+  }
+  // 3) consolidate 归档原文归位
+  for (const x of recs) {
+    if (x.rec.action !== 'archive') continue;
+    const to = path.join(x.root, x.rec.file);
+    const from = path.join(x.root, x.rec.to);
+    if (!resolveWithinRoot(x.root, to)) continue;
+    if (fs.existsSync(to) && !force) { err = err || ('归位冲突: ' + x.rec.file + ' 已存在（--force 覆盖）'); continue; }
+    try {
+      if (fs.existsSync(to)) fs.unlinkSync(to);
+      if (fs.existsSync(from)) {
+        fs.mkdirSync(path.dirname(to), { recursive: true });
+        fs.renameSync(from, to);
+        upsertIndexEntry(x.root, readEntry(to, x.root));
+        lines.push('- 已归位: ' + x.rec.file);
+      } else {
+        err = err || ('归档副本缺失: ' + x.rec.to + '（无法归位）');
+      }
+    } catch (e3) { err = err || ('归位失败: ' + x.rec.file + ' ' + e3.message); }
+  }
+  // 4) 幂等标记
+  const roots = [];
+  for (const x of recs) if (roots.indexOf(x.root) === -1) roots.push(x.root);
+  for (const r of roots) appendAudit(r, 'audit', { ts: new Date().toISOString(), batch: batch, action: 'undo_done', note: err ? 'partial: ' + err : 'ok' });
+  lines.push(err ? '- 结果: 部分失败 —— ' + err : '- 结果: 回滚完成（重复 --undo 会被幂等拒绝）');
+  return { error: false, text: lines.join('\n') };
+}
+
+function pickSummaryTheme(group) {
+  let best = group[0];
+  for (const c of group) {
+    if (c.e.confidence > best.e.confidence) best = c;
+    else if (c.e.confidence === best.e.confidence && String(c.e.updated || '') > String(best.e.updated || '')) best = c;
+  }
+  let s = String(best.e.subject || '（无主题）').replace(/\s+/g, ' ').trim();
+  if (s.length > 30) s = s.slice(0, 29) + '…';
+  return s;
+}
+
+function sharedTag(a, b) {
+  const ta = a.e.tags || [], tb = b.e.tags || [];
+  for (const t of ta) if (tb.indexOf(t) !== -1) return true;
+  return false;
+}
+
+function similarForConsolidate(a, b) {
+  if (subjectsSimilar(a.e, b.e)) return true;
+  if (jaccardTokens(a.e, b.e) >= 0.35) return true;
+  if (sharedTag(a, b)) return true;
+  return false;
+}
+
+function clusterConsolidateCandidates(cands) {
+  const buckets = {};
+  for (const c of cands) {
+    const key = (c.scope === 'private' ? 'priv:' + c.owner : 'pub') + '|' + c.type;
+    (buckets[key] = buckets[key] || []).push(c);
+  }
+  const groups = [];
+  for (const key of Object.keys(buckets)) {
+    const arr = buckets[key].slice().sort(function (a, b) { return String(a.e.created || '').localeCompare(String(b.e.created || '')); });
+    const clusters = [];
+    for (const c of arr) {
+      let placed = false;
+      for (const cl of clusters) {
+        if (similarForConsolidate(c, cl[0])) { cl.push(c); placed = true; break; }
+      }
+      if (!placed) clusters.push([c]);
+    }
+    for (const cl of clusters) if (cl.length >= 2) groups.push(cl);
+  }
+  return groups;
+}
+
+function applyConsolidateGroup(root, group, batch, period) {
+  const e0 = group[0];
+  const type = e0.type;
+  const owner = e0.scope === 'private' ? e0.owner : '';
+  const theme = pickSummaryTheme(group);
+  const subject = '周期摘要 ' + theme + '（' + period + ' 天窗）';
+  const absDir = path.join(root, typeSubdir(type, owner));
+  fs.mkdirSync(absDir, { recursive: true });
+  const enc = isEncrypted(root) && owner ? ENC_SUFFIX : '';
+  let fname = today() + '-' + nextSeq(absDir) + '.md' + enc;
+  let fp = path.join(absDir, fname);
+  let guard = 0;
+  while (fs.existsSync(fp) && guard < 100) { guard++; fname = today() + '-' + nextSeq(absDir) + '.md' + enc; fp = path.join(absDir, fname); }
+  const confs = group.map(function (c) { return c.e.confidence; });
+  const maxConf = Math.max.apply(null, confs);
+  const ws = group.map(function (c) { return c.e.weight || 1.0; }).sort(function (a, b) { return a - b; });
+  const medW = ws.length % 2 ? ws[(ws.length - 1) / 2] : (ws[ws.length / 2 - 1] + ws[ws.length / 2]) / 2;
+  const allTags = [];
+  for (const c of group) for (const t of (c.e.tags || [])) if (allTags.indexOf(t) === -1) allTags.push(t);
+  const tags = ['consolidate', 'summary'].concat(allTags);
+  const createdDates = group.map(function (c) { return c.e.created; }).sort();
+  const avgU = round3(group.reduce(function (s, c) { return s + c.utility; }, 0) / group.length);
+  const bodyLines = ['# 周期摘要：' + theme, '', '> 生成: yotta-memory consolidate | 类型 ' + type + ' | 范围 ' + createdDates[0] + ' ~ ' + createdDates[createdDates.length - 1] + ' | ' + group.length + ' 条 | 平均效用 ' + avgU, '', '## 主题要点', ''];
+  const sorted = group.slice().sort(function (a, b) { return String(b.e.updated || '').localeCompare(String(a.e.updated || '')); });
+  for (const c of sorted) bodyLines.push('- [' + c.e.type + '] ' + (c.e.subject || '') + ': ' + (c.e.statement || ''));
+  bodyLines.push('', '## 溯源（原文已入 .archive，可 consolidate --undo <batch> 恢复）', '');
+  for (const c of group) bodyLines.push('- ' + c.e.file + '（created ' + c.e.created + ' / confidence ' + c.e.confidence + ' / utility ' + round3(c.utility) + '）');
+  const body = bodyLines.join('\n');
+  const statement = '周期摘要 ' + theme + '：' + group.length + ' 条 ' + type + '（' + createdDates[0] + ' ~ ' + createdDates[createdDates.length - 1] + '，平均效用 ' + avgU + '）。要点与溯源见正文。';
+  const meta = { type: type, subject: subject, statement: statement, confidence: round3(maxConf), created: today(), updated: today(), tags: tags, immutable: false, scope: owner ? 'private' : 'public', owner: owner, source: 'consolidate', weight: round3(medW), access_count: 0, last_accessed: '', feedback_net: 0 };
+  writeMemoryText(root, fp, frontmatterToText(meta, body), owner);
+  const summaryRel = relOf(root, fp);
+  upsertIndexEntry(root, readEntry(fp, root));
+  appendAudit(root, 'audit', { action: 'summary_create', ts: new Date().toISOString(), batch: batch, file: summaryRel, sourceFiles: group.map(function (c) { return c.e.file; }) });
+  let moved = 0;
+  for (const c of group) {
+    const destDir = archiveDirFor(root, type, owner);
+    fs.mkdirSync(destDir, { recursive: true });
+    const dest = path.join(destDir, path.basename(c.e.file));
+    fs.renameSync(path.join(root, c.e.file), dest);
+    removeIndexEntry(root, c.e.file);
+    appendAudit(root, 'audit', { action: 'archive', ts: new Date().toISOString(), batch: batch, file: c.e.file, to: relOf(root, dest), type: type, owner: owner, utility: round3(c.utility) });
+    moved++;
+  }
+  return { made: 1, moved: moved, summaryRel: summaryRel };
+}
+
+function consolidateCore(opts) {
+  opts = opts || {};
+  if (opts.undo) return consolidateUndoCore(String(opts.undo), opts);
+  if (opts.batches) return listBatchesCore(opts);
+  const root = userRoot();
+  if (!fs.existsSync(root)) return { error: false, text: '记忆库不存在。' };
+  const apply = !!opts.apply;
+  const selfAgent = opts.selfAgent || currentAgent();
+  const unsafe = !!opts.unsafe;
+  const cfg = loadConfig();
+  const minAge = (opts.minAge !== undefined && opts.minAge !== null) ? opts.minAge : (parseInt(cfg.consolidate_min_age || '180', 10) || 180);
+  const minIdle = (opts.minIdle !== undefined && opts.minIdle !== null) ? opts.minIdle : (parseInt(cfg.consolidate_min_idle || '90', 10) || 90);
+  const maxUTmp = (opts.maxUtility !== undefined && opts.maxUtility !== null) ? parseFloat(opts.maxUtility) : parseFloat(cfg.consolidate_max_utility);
+  const maxU = (maxUTmp > 0) ? maxUTmp : 0.6;
+  const minGroup = (opts.minGroup !== undefined && opts.minGroup !== null) ? opts.minGroup : (parseInt(cfg.consolidate_min_group || '2', 10) || 2);
+  const period = (opts.period !== undefined && opts.period !== null) ? opts.period : (parseInt(cfg.consolidate_period || '90', 10) || 90);
+  const typeOnly = opts.type ? String(opts.type).toUpperCase() : '';
+  const lines = ['## yotta-memory consolidate（周期摘要压缩）'];
+  lines.push('- 模式: ' + (apply ? '执行' : '预览（dry-run，未改动；加 --apply 执行）'));
+  lines.push('- 候选: 天龄 ≥ ' + minAge + ' 天 ∧ 闲置 ≥ ' + minIdle + ' 天 ∧ utility ≤ ' + maxU + (typeOnly ? ' ∧ 仅类型 ' + typeOnly : '') + '；immutable / BOUND 豁免');
+  lines.push('');
+  const cands = [];
+  const stats = { scan: 0, denied: 0, immutable: 0, bound: 0, typeSkip: 0, noCreated: 0, active: 0 };
+  for (const fp of collectEntryFiles(root)) {
+    stats.scan++;
+    const owner = ownerFromPrivatePath(root, fp);
+    const rel = relOf(root, fp);
+    if (checkOwnerWritable(root, rel, selfAgent, unsafe)) { stats.denied++; continue; }
+    let e;
+    try { e = readEntry(fp, root); } catch (err) { stats.denied++; continue; }
+    if (e.immutable) { stats.immutable++; continue; }
+    if (e.type === 'BOUND') { stats.bound++; continue; }
+    if (typeOnly && e.type !== typeOnly) { stats.typeSkip++; continue; }
+    if (!e.created) { stats.noCreated++; continue; }
+    const age = daysBetween(e.created, today());
+    const last = e.last_accessed || e.created || '';
+    const idle = last ? daysBetween(last, today()) : age;
+    const u = utilityScore(e.meta);
+    if (age < minAge || idle < minIdle || u > maxU) { stats.active++; continue; }
+    cands.push({ e: e, owner: owner, type: e.type, age: age, idle: idle, utility: u, scope: e.scope === 'private' ? 'private' : 'public' });
+  }
+  if (!cands.length) {
+    lines.push('（无可压缩候选；扫描 ' + stats.scan + ' 条，跳过: 其它 owner/无密钥 ' + stats.denied + ' / immutable ' + stats.immutable + ' / BOUND ' + stats.bound + ' / 类型过滤 ' + stats.typeSkip + ' / 无 created ' + stats.noCreated + ' / 不够老或仍活跃 ' + stats.active + '）');
+    return { error: false, text: lines.join('\n') };
+  }
+  const groups = clusterConsolidateCandidates(cands);
+  lines.push('候选 ' + cands.length + ' 条（扫描 ' + stats.scan + '，跳过: 其它 owner/无密钥 ' + stats.denied + ' / immutable ' + stats.immutable + ' / BOUND ' + stats.bound + ' / 类型过滤 ' + stats.typeSkip + ' / 无 created ' + stats.noCreated + ' / 不够老或仍活跃 ' + stats.active + '）');
+  if (!groups.length) {
+    lines.push('');
+    lines.push('（无可归纳组：同主题聚类 ≥ ' + minGroup + ' 条才生成周期摘要；零散单条旧记忆请用 maintain --apply 归档）');
+    return { error: false, text: lines.join('\n') };
+  }
+  lines.push('');
+  lines.push('### 周期摘要组（' + groups.length + ' 组，每组将生成摘要 1 条 + 归档原文 N 条）');
+  for (const g of groups) {
+    const type = g[0].type;
+    const scopeLabel = g[0].scope === 'private' ? ('private/' + g[0].owner) : 'public';
+    const ages = g.map(function (c) { return c.age; });
+    const minA = Math.min.apply(null, ages), maxA = Math.max.apply(null, ages);
+    const avgU = round3(g.reduce(function (s, c) { return s + c.utility; }, 0) / g.length);
+    lines.push('- [' + type + '] 主题: ' + pickSummaryTheme(g) + '（' + scopeLabel + '，' + g.length + ' 条，' + minA + '~' + maxA + ' 天，平均效用 ' + avgU + '）' + (type === 'COMMIT' ? '  ⚠️ COMMIT 承诺/任务类，请确认' : ''));
+    for (const c of g) lines.push('    · ' + c.e.file + ' — ' + String(c.e.subject || '').slice(0, 32) + ': ' + String(c.e.statement || '').slice(0, 60));
+  }
+  if (!apply) {
+    lines.push('');
+    lines.push('dry-run 未执行任何变更。确认后加 --apply 执行（写入批次审计，可 consolidate --undo <batch> 回滚）。');
+    return { error: false, text: lines.join('\n') };
+  }
+  const batch = newBatchId();
+  appendAudit(root, 'audit', { action: 'manifest', ts: new Date().toISOString(), batch: batch, command: 'consolidate', mode: 'apply', root: root, active_before: collectEntryFiles(root).length, undone: false });
+  lines.push('');
+  lines.push('- 批次: ' + batch + '（审计 .archive/audit-<日期>.jsonl；回滚: yotta-memory consolidate --undo ' + batch + '）');
+  let made = 0, moved = 0;
+  for (const g of groups) {
+    const res = applyConsolidateGroup(root, g, batch, period);
+    made += res.made; moved += res.moved;
+    lines.push('- 已生成摘要 ' + res.summaryRel + '（归档原文 ' + res.moved + ' 条）');
+  }
+  appendAudit(root, 'audit', { action: 'batch_done', ts: new Date().toISOString(), batch: batch, command: 'consolidate', summaries: made, archived: moved, active_after: collectEntryFiles(root).length });
+  lines.push('- 完成: 生成摘要 ' + made + ' 条 / 原文归档 ' + moved + ' 条');
+  return { error: false, text: lines.join('\n') };
+}
+
+function cmdConsolidate(opts) {
+  const r = consolidateCore(opts);
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+
+// ---- 近重复自动合并：置信度分档 + --apply 批量执行（maintain --dedup 增强）----
+function dupScorePair(a, b) {
+  const jac = jaccardTokens(a, b);
+  const sa = String(a.subject || '').toLowerCase(), sb = String(b.subject || '').toLowerCase();
+  let subSim = 0;
+  if (sa && sb) { if (sa === sb) subSim = 1; else subSim = Math.max(0, 1 - editDistance(sa, sb) / 3); }
+  const typeEq = (a.type === b.type) ? 1 : 0;
+  const scopeEq = (String(a.scope || '') === String(b.scope || '') && String(a.owner || '') === String(b.owner || '')) ? 1 : 0;
+  let score = 0.45 * jac + 0.25 * subSim + 0.15 * typeEq + 0.15 * scopeEq;
+  const la = String(a.statement || '').length, lb = String(b.statement || '').length;
+  const mn = Math.min(la, lb), mx = Math.max(la, lb);
+  if (mx > 0 && mn / mx < 0.3) score = 0;
+  return round3(score);
+}
+
+function groupDupScore(g) {
+  if (g.length < 2) return 0;
+  let mn = 2, sum = 0, n = 0;
+  for (let i = 0; i < g.length; i++) for (let j = i + 1; j < g.length; j++) {
+    const sc = dupScorePair(g[i], g[j]);
+    if (sc < mn) mn = sc;
+    sum += sc; n++;
+  }
+  return round3(n ? (mn + sum / n) / 2 : 0);
+}
+
+function dupGroupMergeable(g) {
+  if (g.length < 2) return false;
+  const t = g[0].type, sc = String(g[0].scope || ''), ow = String(g[0].owner || '');
+  for (const e of g) {
+    if (e.type !== t || String(e.scope || '') !== sc || String(e.owner || '') !== ow) return false;
+    if (e.immutable || e.type === 'BOUND') return false;
+  }
+  return true;
+}
+
+function autoMergePairCore(root, keepE, dropE, batch, selfAgent, unsafe) {
+  for (const f of [keepE.file, dropE.file]) {
+    const deny = checkOwnerWritable(root, f, selfAgent, unsafe);
+    if (deny) return { error: true, text: deny };
+  }
+  const keepFp = path.join(root, keepE.file);
+  const dropFp = path.join(root, dropE.file);
+  const keepOwner = ownerFromPrivatePath(root, keepFp);
+  const dropOwner = ownerFromPrivatePath(root, dropFp);
+  let kMeta, dMeta;
+  try {
+    kMeta = parseFrontmatter(readMemoryText(root, keepFp, keepOwner)).meta;
+    dMeta = parseFrontmatter(readMemoryText(root, dropFp, dropOwner)).meta;
+  } catch (e) { return { error: true, text: '读取失败: ' + e.message }; }
+  const before = { updated: kMeta.updated || '', tags: parseTags(kMeta.tags), access_count: parseInt(kMeta.access_count || '0', 10) || 0, feedback_net: feedbackNetOf(kMeta) };
+  const mergedTags = [];
+  for (const t of parseTags(kMeta.tags).concat(parseTags(dMeta.tags))) if (mergedTags.indexOf(t) === -1) mergedTags.push(t);
+  const patch = {
+    updated: today(),
+    tags: JSON.stringify(mergedTags),
+    access_count: before.access_count + (parseInt(dMeta.access_count || '0', 10) || 0),
+    feedback_net: round3(before.feedback_net + feedbackNetOf(dMeta))
+  };
+  rewriteFrontmatter(keepFp, patch, root, keepOwner);
+  upsertIndexEntry(root, readEntry(keepFp, root));
+  const destDir = archiveDirFor(root, String(dMeta.type || 'FACT').toUpperCase(), dropOwner);
+  fs.mkdirSync(destDir, { recursive: true });
+  const dest = path.join(destDir, path.basename(dropFp));
+  fs.renameSync(dropFp, dest);
+  removeIndexEntry(root, dropE.file);
+  appendAudit(root, 'audit', { ts: new Date().toISOString(), batch: batch, action: 'merge', keepFile: keepE.file, dropFile: dropE.file, dropTo: relOf(root, dest), before: before, after: { updated: patch.updated, tags: mergedTags, access_count: patch.access_count, feedback_net: patch.feedback_net } });
+  return { error: false, text: '已合并 ' + dropE.file + ' -> ' + keepE.file };
+}
+
+function appendDedupBlock(lines, root, opts) {
+  const apply = !!opts.apply;
+  const selfAgent = opts.selfAgent || currentAgent();
+  const unsafe = !!opts.unsafe;
+  lines.push('');
+  lines.push('### 重复候选与置信度（--dedup' + (apply ? ' --apply 自动合并' : '') + '）');
+  const entries = ensureIndex(root);
+  const groups = [];
+  const used = new Set();
+  for (let i = 0; i < entries.length; i++) {
+    if (used.has(i)) continue;
+    const g = [entries[i]];
+    used.add(i);
+    for (let j = i + 1; j < entries.length; j++) {
+      if (used.has(j)) continue;
+      if (subjectsSimilar(entries[i], entries[j]) && jaccardTokens(entries[i], entries[j]) >= 0.5) {
+        g.push(entries[j]); used.add(j);
+      }
+    }
+    if (g.length > 1) groups.push(g);
+  }
+  if (!groups.length) { lines.push('（无重复候选）'); return; }
+  const plans = [];
+  for (const g of groups) {
+    const score = groupDupScore(g);
+    const mergeable = dupGroupMergeable(g) && score >= 0.85;
+    plans.push({ g: g, score: score, mergeable: mergeable });
+  }
+  const high = plans.filter(function (p) { return p.mergeable; });
+  const suggest = plans.filter(function (p) { return !p.mergeable && p.score >= 0.65; });
+  for (const p of plans) {
+    const tag = p.mergeable ? '可自动合并' : (p.score >= 0.65 ? '建议手动合并' : '低置信（忽略）');
+    lines.push('- 置信度 ' + p.score + ' [' + tag + '] 组: ' + p.g.map(function (e) { return e.file; }).join(' | '));
+    lines.push('  ' + p.g.map(function (e) { return e.subject + ': ' + String(e.statement || '').slice(0, 60); }).join(' / '));
+  }
+  if (!apply) {
+    lines.push('  执行: yotta-memory maintain --dedup --apply（自动合并高置信组，写入批次审计可回滚）；手动: maintain --merge <A>,<B>');
+    return;
+  }
+  if (!high.length) { lines.push('  （无高置信可自动合并组）'); return; }
+  const batch = newBatchId();
+  appendAudit(root, 'audit', { action: 'manifest', ts: new Date().toISOString(), batch: batch, command: 'dedup-merge', mode: 'apply', root: root, undone: false });
+  let merged = 0;
+  for (const p of high) {
+    const arr = p.g.slice().sort(function (a, b) {
+      const ca = a.confidence - b.confidence;
+      if (ca !== 0) return b.confidence - a.confidence;
+      return String(b.updated || '').localeCompare(String(a.updated || ''));
+    });
+    const keep = arr[0];
+    for (let k = 1; k < arr.length; k++) {
+      const r = autoMergePairCore(root, keep, arr[k], batch, selfAgent, unsafe);
+      lines.push('- ' + r.text + (r.error ? '（失败）' : ''));
+      if (!r.error) merged++;
+    }
+  }
+  appendAudit(root, 'audit', { action: 'batch_done', ts: new Date().toISOString(), batch: batch, command: 'dedup-merge', merged: merged });
+  lines.push('- 批次: ' + batch + '（自动合并 ' + merged + ' 条；回滚: yotta-memory consolidate --undo ' + batch + '）');
+}
+
+
 // ---- usage / main ----
 function usage() {
   const banner = 'yotta-memory v' + VERSION + ' — 元忆：有权限边界的文件式智能体记忆';
@@ -3503,6 +3986,11 @@ function usage() {
       ['recall', '检索记忆（--type/--limit/--agent/--owner/--all/--unsafe）'],
       ['forget', '删除一条记忆'],
       ['archive', '归档（--days/--threshold 盖棺分+年龄）'],
+      ['maintain', '记忆自组织（归档/遗忘候选/去重/合并；默认 dry-run；--dedup 查重+置信度，--dedup --apply 自动合并高置信组）'],
+      ['consolidate', '周期摘要压缩（默认 dry-run；--apply 执行；--undo <batch> 回滚；--batches 查批次；候选=超龄+闲置+低效用，immutable/BOUND 豁免）'],
+      ['distill', '心理日志蒸馏（统计摘要/主题画像/知识地图；--model 可选外部模型）'],
+      ['feedback', '使用反馈（--useful/--useless/--undo）'],
+      ['explain', '查看单条记忆效用分项与归档/遗忘状态判定'],
       ['reindex', '重建索引'],
       ['export', '导出全部记忆（--out 文件.json）'],
       ['import', '导入记忆（<文件.json>）']
@@ -3519,7 +4007,7 @@ function usage() {
       ['view', '启动用户查看平台（--port/--host；口令解锁浏览/授权/吊销 AI）'],
       ['reset-password', '重设主口令（忘口令用恢复钥匙）'],
       ['key', '管理 AI 私密读取授权缓存（list / authorize <id> / revoke <id>）'],
-      ['config', '查看/设置配置（get / set memory_home <目录> / set embedding_cmd <命令> / set embedding_timeout <毫秒>）']
+      ['config', '查看/设置配置（get；set memory_home <目录> / embedding_cmd <命令> / embedding_timeout <毫秒> / maintain_* 阈值与半衰 / consolidate_* 参数）']
     ]],
     ['平台与服务', [
       ['serve', '启动 MCP 记忆引擎（streamable HTTP；--stdio 本地零进程）'],
@@ -3547,7 +4035,7 @@ async function main() {
   if (!args.length) { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period']);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--version' || a === '-v') { console.log(VERSION); return; }
@@ -3570,6 +4058,7 @@ async function main() {
     else if (a === '--apply') opts.apply = true;
     else if (a === '--purge') opts.purge = true;
     else if (a === '--dedup') opts.dedup = true;
+    else if (a === '--batches') opts.batches = true;
     else if (a === '--explain') opts.explain = true;
     else if (a === '--semantic') opts.semantic = true;
     else if (valueOpts.has(a)) {
@@ -3601,6 +4090,11 @@ async function main() {
       else if (a === '--embedding') opts.embedding = v;
       else if (a === '--focus') opts.focus = v;
       else if (a === '--embedding-timeout') opts.embeddingTimeout = parseInt(v, 10) || 3000;
+      else if (a === '--min-age') opts.minAge = parseInt(v, 10) || 0;
+      else if (a === '--min-idle') opts.minIdle = parseInt(v, 10) || 0;
+      else if (a === '--max-utility') opts.maxUtility = parseFloat(v);
+      else if (a === '--min-group') opts.minGroup = parseInt(v, 10) || 0;
+      else if (a === '--period') opts.period = parseInt(v, 10) || 0;
     } else if (a.startsWith('--')) {
       console.error('未知选项: ' + a);
       process.exit(2);
@@ -3618,7 +4112,7 @@ async function main() {
       const sub = rest[0];
       if (sub === 'set') cmdConfigSet(rest[1], rest[2]);
       else if (sub === 'get') cmdConfigGet();
-      else { console.error('config 子命令: set memory_home <目录> / set embedding_cmd <命令> / set embedding_timeout <毫秒> / get'); process.exit(2); }
+      else { console.error('config 子命令: set <键> <值>（memory_home / embedding_cmd / embedding_timeout / maintain_* / consolidate_*）/ get'); process.exit(2); }
       break;
     }
     case 'remember': cmdRemember(rest[0], rest[1], rest[2], opts); break;
@@ -3628,6 +4122,7 @@ async function main() {
     case 'explain': cmdExplain(rest[0], opts); break;
     case 'maintain': cmdMaintain(opts); break;
     case 'distill': cmdDistill(opts); break;
+    case 'consolidate': if (opts.undo === true && rest.length) opts.undo = rest[0]; cmdConsolidate(opts); break;
     case 'forget': cmdForget(rest[0]); break;
     case 'archive': cmdArchive(opts); break;
     case 'reindex': cmdReindex(); break;
@@ -3684,6 +4179,13 @@ module.exports = {
   importanceScore: importanceScore,
   forgetCore: forgetCore,
   archiveCore: archiveCore,
+  maintainCore: maintainCore,
+  consolidateCore: consolidateCore,
+  mergeCore: mergeCore,
+  utilityScore: utilityScore,
+  utilityBreakdown: utilityBreakdown,
+  decayRecency: decayRecency,
+  decayHalflifeDays: decayHalflifeDays,
   mcpTools: mcpTools,
   callTool: callTool,
   handleMessage: handleMessage,

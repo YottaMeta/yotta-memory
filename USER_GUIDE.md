@@ -136,7 +136,7 @@ statement: 本周完成发布
 
 ## 3.6 自我学习 / 自我进化 / 自我提升（v0.8.0）
 
-元忆 v0.8.0 让记忆系统「越用越懂」：语义检索、使用反馈闭环、规则层自组织、心理日志蒸馏，全部零依赖内置。
+元忆 v0.8.0 让记忆系统「越用越懂」：语义检索、使用反馈闭环、规则层自组织、心理日志蒸馏；v0.10.0 补齐「压缩遗忘」：周期摘要压缩、近重复自动合并、分类型衰减、批次回滚。全部零依赖内置。
 
 **语义检索（recall）**
 
@@ -161,11 +161,38 @@ statement: 本周完成发布
 
 **规则层自组织（maintain）**
 
-- `maintain`（默认 dry-run 预览）：列出归档候选（统一效用分 < 0.35 且超 180 天）与遗忘候选（< 0.12 且超 365 天），immutable / BOUND 豁免。
-- `maintain --apply`：执行归档（移入 `.archive/`，可恢复）。
-- `maintain --apply --purge`：真删遗忘候选（谨慎，先确认）。
-- `maintain --dedup`：列出重复候选；`maintain --merge A,B` 合并两条相似记忆。
-- 阈值可用 `config set maintain_archived_utility 0.3` 等调整；审计在 `.archive/audit-<日期>.jsonl`。
+- `maintain`（默认 dry-run 预览）：列出归档候选与遗忘候选（v0.10.0 起按**分类型衰减后**的效用分 + 年龄判定；默认：utility < 0.35 且超 180 天 = 归档候选，utility < 0.12 且超 365 天 = 遗忘候选）。
+- **immutable / BOUND 豁免**：红线与边界不参与任何自动归档 / 遗忘。
+- `maintain --apply`：执行归档（公共 → `.archive/facts/`，私密 → `.archive/private/<owner>/<type>/`，可恢复）。
+- `maintain --apply --purge`：真删遗忘候选（谨慎；硬删除不可回滚）。
+- `maintain --dedup`：查重复候选并给**置信度分档**——≥0.85 高置信（可自动合并）/ 0.65–0.85 建议手动 / 其余忽略。
+- `maintain --dedup --apply`：自动合并同归属（同类型 + 同 scope/owner）高置信组：保留 confidence 最高的一条，合并 tags / 使用次数 / 反馈，其余移入 `.archive/` 并写批次审计（可 `consolidate --undo <batch>` 回滚）。**注意 `--dedup` 与归档互斥**：`--dedup [--apply]` 只查重 / 自动合并，不会顺手归档单条旧记忆——要归档请单独跑 `maintain --apply`。
+- `maintain --merge A,B`：手动合并两条相似记忆（保留高 confidence，低 confidence 归档）。
+- 阈值与半衰可用 `config set maintain_archived_utility 0.3` / `config set maintain_decay_halflife_FACT 1000` 等调整（`config get` 查看）；审计在 `.archive/audit-<日期>.jsonl`。
+
+**分类型衰减曲线（v0.10.0）**
+
+- 记忆「价值」由效用分衡量，其中「时效」分量按类型指数衰减：`时效 = 0.5^(已过天数 / 半衰期)`。
+- 默认半衰期：**FACT 730 天**（事实 / 知识慢衰减，事实不过时）→ **PREF 365 天**（偏好中速）→ **COMMIT 90 天**（承诺 / 任务类快衰减，兑现或过期后快速让位）→ **BOUND 不衰减**（边界常驻，永不归档 / 遗忘）。
+- 效果：`recall` / `context` 排序里，持久事实不会被时间一刀切遗忘；过期任务类承诺更快让位给新任务。
+- 调整示例：`yotta-memory config set maintain_decay_halflife_COMMIT 180`（单位：天）。
+
+**周期摘要压缩（consolidate，v0.10.0）**
+
+- 干什么：记忆库长期使用后，同一主题会积累大量「又老又不常用」的旧条目。`consolidate` 把这类旧记忆归纳成 **1 条带溯源的周期摘要**（留在活跃区，recall 能搜到），原文整体进 `.archive/`——主题叙事不丢、记忆库不膨胀。
+- 候选条件（全部满足才收）：created 距今 ≥ 180 天（`--min-age`）∧ 长期闲置 ≥ 90 天（`--min-idle`，最近用过的不收）∧ 效用 ≤ 0.6（`--max-utility`，重要的不收）；同主题 ≥ 2 条成组（`--min-group`）。**immutable / BOUND 永远豁免**。
+- 用法：先 `yotta-memory consolidate` 看预览（列出每组摘要计划与影响条数），确认后 `yotta-memory consolidate --apply` 执行。
+- 摘要形态：新记忆 `subject = 周期摘要 <主题>（<N>天窗）`、tags 含 `consolidate` / `summary`、正文含主题要点 + **溯源清单**（每条原文路径 / 日期 / confidence），statement 简短可检索。
+- 归属：公共 FACT 摘要进 `facts/`；私密 PREF / COMMIT 摘要进 `private/<owner>/<type>/`（密文库自动加密）。
+- 可选模型提炼：`consolidate --apply --model <命令>`（仅本机 CLI，stdin→stdout 协议同 distill；失败自动降级启发式）。
+- 常用参数：`--min-age N` / `--min-idle N` / `--max-utility N` / `--min-group N` / `--period N`（摘要标称窗口）/ `--type FACT|PREF|COMMIT`。
+
+**批次审计与回滚（v0.10.0）**
+
+- 每次 `consolidate --apply` 与 `maintain --dedup --apply` 都写一个**批次**：`.archive/audit-<日期>.jsonl` 先写 manifest（batch id / 时间 / 命令 / 库位置），再逐条记录摘要新建、原文归档、自动合并的 before/after 影像。
+- 反悔？`yotta-memory consolidate --undo <batch>` 一键回滚：删除生成的摘要、把原文从 `.archive/` 归位、还原被合并记忆的原始 frontmatter，并同步索引；重复 `--undo` 同一批次会被幂等拒绝。
+- 查看近期批次：`yotta-memory consolidate --batches`（只读列出 batch id / 命令 / 库位置，`--limit N` 控制数量）。
+- `--purge` 硬删除不可回滚——删之前先 `--batches` + `explain` 确认。
 
 **心理日志蒸馏（distill）**
 
@@ -175,7 +202,7 @@ statement: 本周完成发布
 
 **查看效用（explain）**
 
-- `explain <文件>`：显示单条记忆的效用分项（confidence / 使用 / 时效 / 类型 / 结构 × weight）与归档 / 遗忘状态判定，帮助理解为什么某条记忆靠前 / 被归档。
+- `explain <文件>`：显示单条记忆的效用分项（confidence / 使用 / 时效（含半衰）/ 类型 / 结构 × weight）与归档 / 遗忘状态判定；BOUND 显示「豁免」，帮助理解为什么某条记忆靠前 / 被归档 / 被压缩。
 
 ## 3.7 查看平台分页与检索优化（v0.8.1）
 
@@ -319,17 +346,18 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（零推断，写 `profile.md`）|
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 开工上下文包（身份+铁律+画像+任务相关记忆+近期记忆+边界+承诺；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆 |
-| `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆 |
+| `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；私密入 `.archive/private/<owner>/<type>/`）|
 | `yotta-memory reindex` | 重建索引 |
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |
-| `yotta-memory config set memory_home <目录>` / `config get` | 记忆库位置 |
+| `yotta-memory config set <键> <值>` / `config get` | 记忆库位置与引擎参数（`memory_home` / `embedding_cmd` / `embedding_timeout` / `maintain_archived_utility` / `maintain_decay_halflife_<TYPE>` / `consolidate_*` 等）|
 | `yotta-memory whoami` | 查看当前智能体身份与登记状态（读 `YOTTA_AGENT_ID` / `X-Agent-Id`，不猜不默认）|
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 访问 token（同 ID 已被其它来源占用需 `--force` 覆盖）|
 | `yotta-memory serve [--port 8787] [--stdio] [--no-auth]` | 启动记忆引擎（--no-auth 关闭鉴权，仅限可信内网）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务/用户级 Startup 静默自启；Linux：systemd 用户单元/用户 crontab @reboot）|
 | `yotta-memory feedback <文件|主题> --useful|--useless [--reason <原因>] [--undo]` | 使用反馈（v0.8.0：useful/useless 调 weight/confidence/feedback_net；--undo 回滚）|
-| `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--merge A,B]` | 记忆自组织（v0.8.0：归档 / 遗忘候选 / 去重；默认 dry-run，--apply 执行，--purge 才真删）|
+| `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--dedup --apply] [--merge A,B]` | 记忆自组织（v0.8.0 + v0.10.0 自动合并）：归档 / 遗忘候选 / 置信度查重 / 自动合并；默认 dry-run，`--dedup` 与归档互斥 |
+| `yotta-memory consolidate [--min-age N] [--min-idle N] [--max-utility N] [--min-group N] [--period N] [--type T] [--model <cmd>] [--apply] [--undo <batch>] [--batches]` | 周期摘要压缩（v0.10.0：同主题旧记忆 → 带溯源摘要 + 原文归档；默认 dry-run；`--undo <batch>` 回滚批次；`--batches` 查批次）|
 | `yotta-memory distill [--owner <id>] [--subject <主题>] [--model <cmd>] [--out <路径>]` | 心理日志蒸馏（v0.8.0：统计摘要 / 主题画像 / 知识地图）|
 | `yotta-memory explain <文件|主题>` | 查看单条记忆效用分项（v0.8.0）|
 

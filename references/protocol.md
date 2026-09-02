@@ -25,7 +25,9 @@
 │       ├── commits/        # COMMIT 承诺（该 owner 私密）
 │       ├── distills/       # 心理日志蒸馏产物（v0.8.0：distill 命令生成，私密）
 │       └── profile.md      # 用户画像（profile 命令生成，零推断，可再生成）
-├── .archive/               # 归档区（archive 命令移入）
+├── .archive/               # 归档区（archive / maintain / consolidate / merge 移入，v0.10.0 起带 owner）
+│   ├── facts/                # 公共 FACT 归档
+│   └── private/<owner>/<type>/  # 私密归档（PREF/BOUND/COMMIT，带 owner 防撞名）
 ├── index.json              # 公共 FACT 索引 + TF 打分（加密库只含公共条目）
 ├── keys/                   # 加密库密钥库（v0.7）：salt / <owner>.key.enc(UMK 包裹) / <owner>.key.recovery(恢复钥匙包裹) / recovery.key.enc / cache/<id>.key(授权缓存 600)
 ├── agents.json             # 智能体身份登记表（iam 写入，唯一性强制）
@@ -195,6 +197,55 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 - **maintain（规则层自组织）**：统一效用分 `utility = (0.30×confidence + 0.25×usage + 0.20×recency + 0.15×type + 0.10×structure) × weight`（typeScore：BOUND 1.0 / COMMIT 0.9 / PREF 0.8 / FACT 0.6）；归档条件 utility<0.35 且年龄>180 天，遗忘候选 utility<0.12 且年龄>365 天；默认 dry-run，`--apply` 归档（移入 `.archive/`），`--purge` 才真删；immutable / BOUND 豁免；`--dedup` 相似候选（subject 编辑距离 ≤3 且 token Jaccard ≥0.7），`--merge A,B` 手动合并；审计写 `.archive/audit-<日期>.jsonl`。
 - **distill（心理日志蒸馏）**：统计摘要（类型 / 年龄 / 热度 / 反馈）+ 主题画像（按 subject 聚类合并）+ 知识地图（type → tags）；`--model <cmd>` 外部模型协议（stdin JSON → stdout 提炼文本）；私密产物 `private/<owner>/distills/<日期>-<slug>.md`（加密库随 owner key 加密），公共 `facts/distills/`。
 - **explain（效用解释）**：`explain <文件>` 输出效用分项明细与归档 / 遗忘状态判定。
+
+### v0.10.0：压缩遗忘（consolidate / 自动合并 / 分类型衰减 / 批次回滚）
+
+目标：记忆库长期可用不膨胀——同主题旧记忆压缩成带溯源摘要、近重复自动合并、分类型时效衰减，每一步可审计可回滚。
+
+**分类型衰减曲线（v0.10.0 起替换 utility 的 recency 子式）**
+
+- `recency = 0.5^(d / halfLife)`（d = 距 last_accessed||created 天数），指数半衰；此前为全类型同一线性 `max(0, 1 - d/365)`。
+- 默认半衰：FACT 730 天（慢）/ PREF 365 天（中）/ COMMIT 90 天（快，任务类）/ BOUND 不衰减（恒 1.0 → 永不归档/遗忘，收口「BOUND 豁免」口径）。
+- 配置：`config set maintain_decay_halflife_<TYPE> <天>`；`config get` 查看。`config set/get` 自 v0.10.0 支持 `maintain_*` / `consolidate_*` 键。
+
+**maintain --dedup（近重复自动合并）**
+
+- 组判定：subject 编辑距离 ≤ 3 且 token Jaccard ≥ 0.5。
+- 置信度：`score = 0.45×jaccard + 0.25×subjectSim + 0.15×typeEq + 0.15×scopeOwnerEq`；statement 长度比 < 0.3 视为不可合并（score=0）。分档：≥0.85 高置信 / 0.65–0.85 建议手动 / 其余忽略。
+- `maintain --dedup --apply` 自动合并「同类型 + 同 scope/owner」高置信组：保留 confidence 最高者，合并 tags / access_count / feedback_net，其余移入 `.archive/`；**与归档互斥**（不执行 archive/forget）。
+- immutable / BOUND 永不参与自动合并；跨 owner/scope 只预览不执行。
+
+**consolidate（周期摘要压缩）数据流**
+
+```
+候选（可写范围 ∧ type≠BOUND ∧ immutable≠true ∧ created 距今≥180 ∧ 闲置≥90 ∧ utility≤0.6）
+  → 按 scope+owner / type 分桶 → 桶内主题聚类（subject 相似 ∨ jaccard≥0.35 ∨ 共享 tag）
+  → 组 ≥ min-group(2) → 生成 1 条周期摘要（活跃索引） + 原文整体移 .archive/
+```
+
+- 摘要条目：type = 原类型；subject = `周期摘要 <主题>（<N>天窗）`；tags = [consolidate, summary, …原标签]；source = consolidate；confidence = 组内 max；weight = 组内中位；statement = 概述（可检索）；body = 主题要点 + 溯源清单（原文 rel / created / confidence）。公共入 `facts/`，私密入 `private/<owner>/<type>/`（密文库自动加密）。
+- 归档路径：公共 `.archive/facts/<basename>`；私密 `.archive/private/<owner>/<type>/<basename>`（owner-scoped，避免跨 owner 同名撞名）。
+- `--model <cmd>` 仅本地 CLI（安全协议同 distill，MCP 禁）；失败自动降级启发式。
+
+**批次审计与回滚（audit-<日期>.jsonl，向后兼容）**
+
+```json
+{"action":"manifest","batch":"20260902-123456-ab12cd","ts":"...","command":"consolidate|dedup-merge","mode":"apply","root":"..."}
+{"action":"summary_create","batch":"...","file":"facts/2026-09-02-0004.md","sourceFiles":["facts/...1.md", ...]}
+{"action":"archive","batch":"...","file":"facts/...1.md","to":".archive/facts/...1.md","type":"FACT","owner":""}
+{"action":"merge","batch":"...","keepFile":"facts/a.md","dropFile":"facts/b.md","dropTo":".archive/facts/b.md","before":{...},"after":{...}}
+{"action":"batch_done","batch":"...","summaries":1,"archived":3}
+{"action":"undo_done","batch":"...","note":"ok"}
+```
+
+- `consolidate --undo <batch>`：逆序回滚——删摘要（含索引）→ drop/原文从 `.archive/` 归位 → 被合并 keep 还原为最早 before 影像 → 同步索引；重复 undo 幂等拒绝。
+- `consolidate --batches [--limit N]`：只读列出 manifest。`--purge` 硬删除不可回滚。
+
+**权限与安全边界（不变式）**
+
+- consolidate / undo / batches 为管理动作，**不进 MCP**；maintain / archive 维持既有 MCP 暴露。
+- 自动合并 / 压缩只写「公共 FACT + 本 owner 私密」；其它 owner 只预览，`--unsafe` 显式授权才处理。
+- 路径全程 `resolveWithinRoot` 校验；.archive 目标由引擎按 rel 生成。
 
 ## 6. 与其他系统互操作
 

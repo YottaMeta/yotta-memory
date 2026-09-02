@@ -1,3 +1,18 @@
+## v0.10.0 (2026-09-02)
+
+压缩遗忘（S1）——consolidate 周期摘要 + 近重复自动合并 + 分类型衰减 + 批次回滚。
+
+- **新增 `consolidate`（周期摘要压缩）**：把超龄（默认 ≥180 天）+ 长期闲置（默认 ≥90 天）+ 低效用（默认 ≤0.6）的同主题旧记忆聚类成**带溯源**的周期摘要并留在活跃区，原文整体移入 `.archive/`。默认 dry-run；`--apply` 执行；`--undo <batch>` 一键回滚（幂等拒绝重复）；`--batches` 只读查批次审计。immutable / BOUND 豁免；活跃 / 高效用记忆不动；参数可调（--min-age / --min-idle / --max-utility / --min-group / --period / --type）；`--model <cmd>` 可选本地模型提炼（仅 CLI，协议同 distill）。
+- **近重复自动合并（maintain --dedup 增强）**：重复组带置信度分档（≥0.85 高置信 / 0.65–0.85 建议手动 / 其余忽略）；`maintain --dedup --apply` 自动合并同归属高置信组（写批次审计可回滚）。**`--dedup` 与归档/遗忘互斥**：`--dedup [--apply]` 只查重 / 自动合并，不执行归档。
+- **分类型衰减曲线**：效用分「时效」从全类型同一线性（365 天归零）改为**指数半衰** `0.5^(d/半衰)`——FACT 慢（默认 730 天）/ PREF 中（默认 365 天）/ COMMIT 任务类快（默认 90 天）/ BOUND 不衰减；半衰可用 `config set maintain_decay_halflife_<TYPE> <天>` 调整。
+- **BOUND 归档豁免口径收口**：BOUND 永不归档 / 遗忘（行为对齐文档「immutable / BOUND 豁免」；此前代码只豁免遗忘）。
+- **`.archive/` 路径带 owner**：公共 `.archive/facts/`；私密 `.archive/private/<owner>/<type>/`（archive / maintain / merge / consolidate 统一，修复跨 owner 同名撞名隐患；既有存量不迁移）。
+- **`config set/get` 支持 maintain_* / consolidate_* 键**（此前文档写了但 CLI 写端只支持 3 个键）。
+- **审计升级**：consolidate / 自动合并写批次审计（batch manifest + before/after 影像）；`consolidate --batches` 可查、`--undo <batch>` 可回滚；`--purge` 硬删除维持不可回滚。
+- **安全边界不变**：consolidate / undo / batches 属管理动作**不进 MCP**；maintain / archive 维持既有 MCP 暴露；自动合并全程受 owner 写权限约束，跨智能体只预览不执行。
+- 测试：新增 `test/consolidate.test.js`（30 断言：dry-run / 公共与私密压缩 / immutable·BOUND 豁免 / 活跃与高效用保护 / min-group / undo 幂等 / 自动合并置信度 / 跨 owner 预览 / 归档互斥 / 衰减单元）+ `test/security-boundary.test.js` 扩至 9 断言（MCP 不暴露 consolidate / undo / batches）；兼容回归 recall-context 4 断言全绿。
+- 版本对齐：package.json / SKILL.md frontmatter / CHANGELOG / 引擎 VERSION / 插件 package.json = 0.10.0。
+
 ## v0.9.2 (2026-09-02)
 
 发布日期修正。

@@ -23,6 +23,8 @@
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
 
+> 🆕 **v0.10.0**: compression & forgetting — `consolidate` turns old low-use memories on the same topic into one **provenance-carrying periodic summary** that stays searchable (originals archived; `consolidate --undo <batch>` restores everything); near-duplicate **auto-merge with confidence** (`maintain --dedup --apply`); **per-type decay curves** (FACT slow / PREF medium / COMMIT task-like fast / BOUND never decays); batch audit via `consolidate --batches`.
+
 > 🆕 **v0.9.0**: recall quality + context selection — optional local embedding plugin, `context --focus`, and `--explain` selection trace.
 
 > 🆕 **v0.8.5**: security hardening — MCP `distill` no longer accepts `--model`; MCP `export` / `import` paths are restricted to the memory root; CLI `distill --model` no longer shells out (allowlist-based).
@@ -36,6 +38,7 @@ Most memory solutions treat "remembering" as a black box: data goes into a datab
 - **Zero dependency, ready to use** — no daemon, no database, no vector store; just Node.js. Install and use; data stays on the machine; deployable anywhere.
 - **Grows smarter (v0.6.0)** — `profile` aggregates a user profile (the engine infers nothing; it only groups verbatim text) + `context` generates a one-shot start-of-work package (identity + profile + recent memory + boundaries + commitments); the SKILL "memory discipline" injects rule layers (type red lines / trigger signals / know the user / bottom lines / host isolation) — rules and mechanisms only, no personality data; zero data out of the box.
 - **Self-learning / self-evolving / self-improving (v0.8.0)** — `recall` semantic search (synonyms / pinyin full + initials / field weighting / fuzzy match, zero-dependency) with utility-score blended ranking; `feedback` explicit usage feedback loop (useful / useless adjusts weight / confidence / feedback_net); `maintain` rule-layer self-organization (unified utility score + age-based auto-archive / forget candidates / dedup, dry-run by default, immutable / BOUND exempt); `distill` psychological-log distillation (statistical summary / topic profile / knowledge map, optional `--model` external model enhancement).
+- **Compression & forgetting (v0.10.0) — memory that never bloats** — `consolidate` summarizes old, low-use memories on the same topic into one **provenance-carrying periodic summary** that stays in active memory (every original file is listed as provenance; originals move to `.archive/`; `--undo <batch>` restores everything); `maintain --dedup` scores near-duplicates and `--apply` auto-merges high-confidence groups; the utility recency component now decays **per type** (FACT slow / PREF medium / COMMIT task-like fast / BOUND never) so durable facts are not wiped by time and stale commitments step aside quickly; every batch is auditable via `consolidate --batches`.
 - **Private-zone encryption (v0.7.0)** — private files AES-256-GCM envelope encrypted (passphrase-derived master key + recovery key + per-owner encrypted index); `yotta-memory view` user review platform (unlock with passphrase to see all AI memory).
 
 ### Memory types
@@ -91,13 +94,15 @@ Each agent has a globally unique agent ID: it is the ownership key for private m
 - **Root de-duplication (v0.6.5)**: when project and user roots point at the same directory, recall / context uniquify roots so a file shows once.
 - Hits accumulate `access_count` / `last_accessed` for lifecycle management.
 
-### Lifecycle management (v0.8.0 rule-layer self-organization)
+### Lifecycle management (v0.8.0 rule-layer self-organization + v0.10.0 compression)
 
-- `maintain`: unified utility score (final score = confidence + usage + recency + type + structure) × weight; low-utility + over-age auto-archive; extreme low value listed as forget candidates (not really deleted by default; `--purge` deletes); `--dedup` dedup candidates; `--merge A,B` manual merge. Dry-run preview by default, `--apply` to execute; immutable / BOUND exempt; audit writes `.archive/audit-<date>.jsonl`.
-- `archive`: moves low-value old memory into `.archive/` by "unified utility score + age" (immutable excluded) so the store never grows without bound.
+- **Per-type decay (v0.10.0)**: the recency component of the utility score is now `0.5^(days / half-life)` — FACT 730d (slow, facts do not age out), PREF 365d (medium), COMMIT 90d (task-like, fast), BOUND never decays (so boundaries are never auto-archived / forgotten). Tune with `config set maintain_decay_halflife_<TYPE> <days>`.
+- `maintain`: unified utility score (confidence + usage + recency + type + structure) × weight; low-utility + over-age auto-archive candidates; extreme low value listed as forget candidates (not deleted by default; `--purge` deletes); `--dedup` now scores duplicates (≥0.85 high confidence auto-mergeable / 0.65–0.85 suggested / below ignored) and `--dedup --apply` auto-merges high-confidence groups of the same type + scope/owner (batch-audited, rollback-able; **`--dedup` is mutually exclusive with archiving** — it never silently archives); `--merge A,B` manual merge. Dry-run preview by default; immutable / BOUND exempt; audit writes `.archive/audit-<date>.jsonl`.
+- `consolidate` (v0.10.0): **periodic-summary compression** — groups old (≥180d), idle (≥90d), low-utility (≤0.6) memories on the same topic into one summary entry (tags `consolidate` / `summary`, `source=consolidate`, body carries the full provenance list) that stays searchable, then archives the originals; dry-run by default; `--apply` writes a batch manifest + per-file before/after audit, `consolidate --undo <batch>` rolls the batch back (idempotent), `consolidate --batches` lists recent batches. Public summaries go to `facts/`, private to `private/<owner>/<type>/`.
+- `archive`: moves low-value old memory into `.archive/` (public `.archive/facts/`, private `.archive/private/<owner>/<type>/`; immutable / BOUND exempt) by decay-blended utility + age, so the store never grows without bound.
 - `feedback`: explicit usage feedback loop — useful → weight ×1.2 (cap 3.0) + confidence +0.05 + feedback_net +1; useless → weight ×0.8 (floor 0.2) + confidence −0.05 + feedback_net −1; `--undo` rolls back; audit writes `.archive/feedback-<date>.jsonl`.
 - `distill`: psychological-log distillation — statistical summary (type / age / heat / feedback) + topic profile (clustered by subject) + knowledge map (type → tags); optional `--model <cmd>` external model stdin→stdout refinement (local CLI only; MCP distill does not expose `--model`); output to `private/<owner>/distills/` or `facts/distills/`.
-- `explain`: view a single memory's utility components and archive / forget status decision.
+- `explain`: view the utility components (recency shows its half-life), archive / forget / BOUND-exempt status decision of a single memory.
 - `forget`: delete a single memory (by type-dir path or file name).
 - `reindex`: rebuild the index after manually editing `.md` files.
 - `export` / `import`: export the whole store to JSON / import from JSON; an intermediate format for migration and backup.
@@ -216,6 +221,18 @@ npm i -g @yottameta/yotta-memory
 
 **Upgrade the skill**: rerun your install command from the `## Install` section (e.g. `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>` or `bash install.sh --agent <name>`) to overwrite the old skill folder.
 
+**v0.10.0 upgrade notes** — upgrading touches no data: no migration, no reindex, no re-init needed. v0.10.0 does not change the memory file format, the `facts/` / `private/<owner>/<type>/` layout, or the index version, so existing stores open as-is.
+
+Behavior changes to be aware of:
+
+- Recall / context ranking now decays the recency component **per type** (`0.5^(days / half-life)`: FACT 730d / PREF 365d / COMMIT 90d; BOUND never decays) — durable facts rank slightly higher, stale task-like commitments step aside faster.
+- BOUND is now **never auto-archived or auto-forgotten** (previously the code only exempted it from forgetting, not archiving — this release closes the gap).
+- `maintain --dedup` is now **mutually exclusive with archiving**: `--dedup [--apply]` only lists / auto-merges duplicates and never silently archives old single memories.
+- Archive paths changed for **future operations only**: public → `.archive/facts/`, private → `.archive/private/<owner>/<type>/`; existing `.archive/` files are left in place (not migrated, not re-indexed).
+- New commands are additive: `consolidate`, `consolidate --undo <batch>`, `consolidate --batches`.
+
+Optional post-upgrade self-check: `yotta-memory config get` (confirm `memory_home` is unchanged) and `yotta-memory recall <keyword>` still finds old memories. Tune decay with `config set maintain_decay_halflife_<TYPE> <days>`.
+
 > Upgrades only affect commands and skill files — **they never touch your stored memories** (memory is independent of the install, kept in its own directory).
 
 ## CLI usage
@@ -228,15 +245,20 @@ npm i -g @yottameta/yotta-memory
 | `yotta-memory profile [--owner <id>]` | Generate a user profile (aggregates `private/<owner>` verbatim, zero inference, writes `profile.md`; cross-owner denied by default) |
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <text>] [--explain] [--embedding <cmd>]` | Generate the start-of-work package (identity + multi-agent rules + profile + task-focused memory + recent memory + boundaries + commitments; --budget caps chars, --focus adds task relevance, --explain shows included/dropped) |
 | `yotta-memory forget <file>` | Delete a memory (by type-dir path or file name) |
-| `yotta-memory archive [--days 180] [--threshold 0.4]` | Archive old memory (final score + age; immutable excluded) |
+| `yotta-memory archive [--days 180] [--threshold 0.4]` | Archive old memory (decay-blended utility + age; immutable / BOUND exempt; private to `.archive/private/<owner>/<type>/`) |
 | `yotta-memory reindex` | Rebuild the index (after manually editing .md) |
 | `yotta-memory export [--out f.json]` / `import <f.json>` | Export / import |
-| `yotta-memory config set memory_home <dir>` / `config get` | Persist / view the store location (`~/.yottamemory/config.json`) |
+| `yotta-memory config set <key> <value>` / `config get` | Store location and engine tuning (`memory_home` / `embedding_cmd` / `embedding_timeout` / `maintain_archived_utility` / `maintain_decay_halflife_<TYPE>` / `consolidate_*`) |
 | `yotta-memory whoami` | Show the current agent identity and registration status |
 | `yotta-memory iam <id> [--name <name>] [--user <user>] [--relationship <rel>] [--force]` | Register this agent's unique identity and auto-write the self profile (`agents.json`, ID must be unique) |
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | Create / list / revoke access tokens for agents (registered at `.server/tokens.json`) |
 | `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | Start the MCP memory engine (streamable HTTP LAN / --stdio local zero-process mode; Bearer token + X-Agent-Id auth) |
 | `yotta-memory lan enable [--onstart] / disable / status` | Autostart management (Windows: scheduled task, default ONLOGON, --onstart needs admin, non-admin auto-degrades to user-level Startup; Linux: systemd user unit, falls back to user crontab @reboot) |
+| `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--dedup --apply] [--merge A,B]` | Self-organization: archive / forget candidates / confidence-scored dedup / auto-merge high-confidence groups; dry-run by default; `--dedup` is mutually exclusive with archiving |
+| `yotta-memory consolidate [--min-age N] [--min-idle N] [--max-utility N] [--min-group N] [--period N] [--type T] [--model <cmd>] [--apply] [--undo <batch>] [--batches]` | Periodic-summary compression (v0.10.0): group old idle low-value memories into one traceable summary and archive the originals; dry-run by default; `--undo <batch>` rolls a batch back; `--batches` lists batches |
+| `yotta-memory feedback <file> --useful|--useless [--reason <r>] [--undo]` | Usage feedback (useful/useless adjusts weight / confidence / feedback_net; --undo rolls back the last one) |
+| `yotta-memory distill [--owner <id>] [--subject <topic>] [--model <cmd>] [--out <path>]` | Psychological-log distillation (stats / topic profile / knowledge map; optional local model, local CLI only) |
+| `yotta-memory explain <file>` | Show the utility breakdown and archive / forget / BOUND-exempt status of one memory |
 
 Types: `FACT` (fact, public shared) / `PREF` (preference) / `BOUND` (boundary) / `COMMIT` (commitment).
 
