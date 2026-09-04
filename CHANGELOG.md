@@ -1,3 +1,10 @@
+## v0.10.1 (2026-09-05)
+
+发布件修复：SKILL.md frontmatter `description` 曾以 ASCII 双引号开头但未闭合
+（v0.10.0 引入），严格 YAML 解析器会报 MISSING_CHAR，导致技能在 ClawHub/OpenClaw 等
+平台注册被跳过。已改为无引号裸标量（内容不变）；validate-skill 新增 frontmatter 引号
+闭合检查（防再犯）。版本 0.10.0 → 0.10.1。
+
 ## v0.10.0 (2026-09-02)
 
 压缩遗忘（S1）——consolidate 周期摘要 + 近重复自动合并 + 分类型衰减 + 批次回滚。
