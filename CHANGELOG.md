@@ -1,3 +1,7 @@
+## v0.11.0 (2026-09-06)
+
+**MCP 协议对齐最新版 2026-07-28（无状态时代）**：yotta-memory MCP（stdio + serve streamable HTTP）升级 dual-era——modern 直连（server/discover 免握手、逐请求 _meta 版本声明、resultType、-32022 版本错误、HTTP header 校验 HeaderMismatch -32020）服务新客户端；legacy（initialize 握手，protocolVersion 2025-11-25）兼容旧客户端，旧形状响应零惊扰；HTTP+SSE GET 保留为 deprecated 兼容入口。SKILL 标注「基于 MCP 最新协议 2026-07-28（向后兼容 2025-11-25 及更早握手）」。新增 test/mcp-dualera.test.js（26/26：A 层 + HTTP 层），存量测试全绿。
+
 ## v0.10.1 (2026-09-05)
 
 发布件修复：SKILL.md frontmatter `description` 曾以 ASCII 双引号开头但未闭合

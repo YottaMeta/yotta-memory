@@ -22,7 +22,10 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.10.1';
+const VERSION = '0.11.0';
+// MCP 协议（2026-07-28 无状态 + 2025-11-25 legacy 握手，dual-era）
+const MCP_PROTOCOL_MODERN = '2026-07-28';
+const MCP_PROTOCOL_LEGACY = '2025-11-25';
 const TYPES = ['FACT', 'PREF', 'BOUND', 'COMMIT'];
 const TYPE_DIRS = { FACT: 'facts', PREF: 'prefs', BOUND: 'bounds', COMMIT: 'commits' };
 const PUBLIC_DIR = 'facts';
@@ -2952,14 +2955,50 @@ function callTool(name, args, ctx) {
     return { text: '错误: ' + (e && e.message ? e.message : String(e)), error: true };
   }
 }
+function reqVersion(params) {
+  const meta = (params && params._meta) || {};
+  return meta['io.modelcontextprotocol/protocolVersion'] || null;
+}
+function modernOk(payload, ttl) {
+  const out = { resultType: 'complete' };
+  Object.assign(out, payload);
+  if (ttl) { out.ttlMs = ttl[0]; out.cacheScope = ttl[1]; }
+  out._meta = { 'io.modelcontextprotocol/serverInfo': { name: 'yotta-memory', version: VERSION } };
+  return out;
+}
+function unsupportedVersion(id, pv) {
+  return { jsonrpc: '2.0', id: id, error: { code: -32022, message: 'Unsupported protocol version', data: { supported: [MCP_PROTOCOL_MODERN], requested: pv } } };
+}
 function handleMessage(msg, ctx) {
   if (!msg || msg.jsonrpc !== '2.0') return { jsonrpc: '2.0', id: msg && msg.id, error: { code: -32600, message: 'invalid request' } };
   const id = msg.id;
   if (id === undefined || id === null) return null;
   const method = msg.method || '';
   const params = msg.params || {};
+  const pv = reqVersion(params);
+  if (pv !== null) {
+    // ---- modern（2026-07-28 无状态）----
+    if (pv !== MCP_PROTOCOL_MODERN) return unsupportedVersion(id, pv);
+    if (method === 'server/discover') {
+      return { jsonrpc: '2.0', id: id, result: modernOk({
+        supportedVersions: [MCP_PROTOCOL_MODERN],
+        capabilities: { tools: {} },
+        instructions: '元忆 MCP（基于 MCP 最新协议 2026-07-28，向后兼容 2025-11-25 及更早握手）：文件式智能体记忆 remember/recall/search/context/forget/archive/maintain 等读写检索与维护；私密按 owner 物理隔离，数据不出本机。'
+      }, [3600000, 'public']) };
+    }
+    if (method === 'tools/list') return { jsonrpc: '2.0', id: id, result: modernOk({ tools: mcpTools() }, [300000, 'public']) };
+    if (method === 'tools/call') {
+      const out = callTool(params.name || '', params.arguments || {}, ctx);
+      return { jsonrpc: '2.0', id: id, result: modernOk({ content: [{ type: 'text', text: out.text }], isError: !!out.error }) };
+    }
+    if (method === 'initialize') {
+      return { jsonrpc: '2.0', id: id, error: { code: -32601, message: "initialize removed in MCP 2026-07-28; use server/discover. supported: ['2026-07-28']" } };
+    }
+    return { jsonrpc: '2.0', id: id, error: { code: -32601, message: 'Method not found: ' + method } };
+  }
+  // ---- legacy（<=2025-11-25，initialize 握手；响应保持旧形状）----
   if (method === 'initialize') {
-    return { jsonrpc: '2.0', id: id, result: { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'yotta-memory', version: VERSION } } };
+    return { jsonrpc: '2.0', id: id, result: { protocolVersion: MCP_PROTOCOL_LEGACY, capabilities: { tools: {} }, serverInfo: { name: 'yotta-memory', version: VERSION } } };
   }
   if (method === 'ping') return { jsonrpc: '2.0', id: id, result: {} };
   if (method === 'tools/list') return { jsonrpc: '2.0', id: id, result: { tools: mcpTools() } };
@@ -2987,17 +3026,34 @@ function cmdServe(opts) {
     if (tokenMap[agent] && tokenMap[agent].token === token) return { agent: agent };
     return null;
   }
+  function originAllowed(req) {
+    const origin = req.headers['origin'];
+    if (!origin) return true;
+    let oHost = '';
+    try { oHost = new URL(origin).host; } catch (e) { return false; }
+    const hHost = req.headers['host'] || '';
+    const allowed = [hHost, 'localhost', 'localhost:' + port, '127.0.0.1', '127.0.0.1:' + port, '[::1]', '[::1]:' + port];
+    return oHost === hHost || allowed.indexOf(oHost) !== -1;
+  }
+  function sendJson(res, code, obj) {
+    res.writeHead(code, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(obj));
+  }
   const server = http.createServer(function (req, res) {
     let pathname = '/';
     try { pathname = new URL(req.url, 'http://' + (req.headers.host || 'localhost')).pathname; } catch (e) {}
     if (pathname !== '/mcp') { res.writeHead(404, { 'Content-Type': 'text/plain' }); res.end('not found'); return; }
+    if (!originAllowed(req)) {
+      sendJson(res, 403, { jsonrpc: '2.0', error: { code: -32000, message: 'origin not allowed' } });
+      return;
+    }
     const auth = authorize(req);
     if (!auth) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32001, message: 'unauthorized: 需要有效 Bearer token 与 X-Agent-Id' } }));
+      sendJson(res, 401, { jsonrpc: '2.0', error: { code: -32001, message: 'unauthorized: 需要有效 Bearer token 与 X-Agent-Id' } });
       return;
     }
     if (req.method === 'GET') {
+      // deprecated 兼容：HTTP+SSE 端点（MCP 2026-07-28 起正式 Deprecated，12 个月窗口内保留给老客户端；新客户端走 POST）
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
       res.write('event: endpoint\ndata: /mcp\n\n');
       const iv = setInterval(function () { res.write(': keep-alive\n\n'); }, 15000);
@@ -3010,14 +3066,23 @@ function cmdServe(opts) {
       req.on('end', function () {
         let msg;
         try { msg = JSON.parse(body); } catch (e) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32700, message: 'parse error' } }));
+          sendJson(res, 400, { jsonrpc: '2.0', error: { code: -32700, message: 'parse error' } });
+          return;
+        }
+        const metaPv = reqVersion(msg.params) || null;
+        const hdrPv = req.headers['mcp-protocol-version'] || null;
+        if (hdrPv && metaPv && hdrPv !== metaPv) {
+          sendJson(res, 400, { jsonrpc: '2.0', id: msg.id, error: { code: -32020, message: 'HeaderMismatch: MCP-Protocol-Version header/body 不一致', data: { header: hdrPv, body: metaPv } } });
+          return;
+        }
+        const mcpMethod = req.headers['mcp-method'];
+        if (mcpMethod && metaPv === MCP_PROTOCOL_MODERN && mcpMethod !== msg.method) {
+          sendJson(res, 400, { jsonrpc: '2.0', id: msg.id, error: { code: -32020, message: 'HeaderMismatch: Mcp-Method header/body 不一致', data: { header: mcpMethod, body: msg.method } } });
           return;
         }
         const resp = handleMessage(msg, auth);
         if (resp === null) { res.writeHead(204); res.end(); return; }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(resp));
+        sendJson(res, 200, resp);
       });
       return;
     }
@@ -3027,12 +3092,12 @@ function cmdServe(opts) {
     console.log('yotta-memory 记忆引擎已启动（v' + VERSION + '）');
     console.log('URL: http://' + host + ':' + port + '/mcp');
     console.log('记忆库: ' + root);
+    console.log('MCP 协议: 2026-07-28（modern，server/discover）/ 2025-11-25（legacy 握手兼容）');
     if (noAuth) console.log('鉴权: 已关闭（--no-auth，仅限可信内网）');
     else console.log('鉴权: Bearer token + X-Agent-Id（yotta-memory token new --agent <id> 生成）');
     console.log('按 Ctrl+C 停止');
   });
 }
-
 // ---- stdio 本地零进程模式（客户端按需拉起 CLI）----
 function cmdServeStdio() {
   const root = userRoot();
