@@ -19,7 +19,7 @@ license: MIT
 - **自我学习 / 自我进化 / 自我提升（v0.8.0）**：`recall` 语义检索（同义词 / 拼音 / 字段加权 / 模糊匹配，零依赖）；`feedback` 显式使用反馈闭环（useful / useless → weight / confidence / feedback_net 演化，越用越懂）；`maintain` 规则层自组织（统一效用分 + 年龄自动归档 / 遗忘候选 / 去重，默认 dry-run，immutable / BOUND 豁免）；`distill` 心理日志蒸馏（统计摘要 / 主题画像 / 知识地图，可选 `--model` 外部模型增强）；`explain` 查看单条记忆效用分项。
 - **召回质量与上下文选择（v0.9.0）**：`recall` 支持可选本地 embedding 插件（`--embedding <command>` / `config set embedding_cmd <command>`）；`context --focus <关键词>` 生成任务感知上下文；`--explain` 输出选择 trace，无插件时自动降级为词法检索。
 - **压缩遗忘（v0.10.0）**：记忆库长期可用不膨胀——`consolidate` 周期摘要压缩（把超龄 + 低效用 + 长期闲置的同主题旧记忆归纳成**带溯源**的摘要，原文整体进 `.archive/`，`--undo` 一键回滚）；`maintain --dedup` 近重复**自动合并**（置信度分档，`--apply` 批量执行高置信组）；效用分时效改为**分类型衰减**（FACT 慢 / PREF 中 / COMMIT 任务类快 / BOUND 不衰减）；`consolidate --batches` 批次审计可查。
-- **可靠性基线（v0.12.0）**：`init` 对非空记忆库默认拒绝覆盖（`--attach` 接入现有库）；`forget` 先移入 `.trash/` 并写审计；新增 `backup create / list / doctor / restore`，备份到独立盘、带 SHA-256 清单与恢复校验。
+- **可靠性基线（v0.12.0）**：`init` 对非空记忆库默认拒绝覆盖（`--attach` 接入现有库）；`forget` 先移入 `.trash/` 并写审计；新增 `backup volumes / setup / status / ensure-daily / schedule / drill`（用户确认真实独立卷后默认每日自动备份）与 `backup create / list / doctor / restore`。
 
 ## 何时使用（触发）
 
@@ -52,11 +52,35 @@ license: MIT
 - 审计写入 `.trash/audit-<日期>.jsonl`（记录时间、原路径、回收路径、owner、执行者）。
 - 永久删除和回收区清理属于后续管理动作，不能作为默认 `forget` 行为。
 
-### 3. backup 备份与恢复
+### 3. 每日自动备份（用户确认式）
+
+AI 必须先枚举真实卷，再让用户决定一次位置；不得凭经验报盘符，也不得在用户确认前写 `backup_dir` 或注册调度器。
 
 ```bash
-# 建议先在配置里指定独立盘目录
-yotta-memory config set backup_dir <独立盘目录>
+# 1. 只展示当前机器实际存在、可写、与记忆库异卷的路径
+yotta-memory backup volumes
+
+# 2. 用户从真实列表确认后启用；默认每天 03:30，错过则下次启动补跑
+yotta-memory backup setup --dir <用户确认的目录> --time 03:30
+
+# 查看状态；用户明确拒绝自动备份时记录手动选择，不再反复打扰
+yotta-memory backup status
+yotta-memory backup setup --manual
+
+# 查看/修复系统调度器（Windows Task Scheduler / systemd user timer / launchd）
+yotta-memory backup schedule status
+yotta-memory backup schedule enable --time 03:30
+```
+
+- `backup setup` 成功后创建首份备份，并默认启用每日自动备份。
+- `backup ensure-daily` 幂等：当天已有成功备份就跳过，没有才创建；`serve` 启动后 10 秒与运行期间每 6 小时调用一次补跑。
+- `context` 在未配置、备份超过 36 小时或失败时追加可靠性提醒；用户已选手动模式时不重复提示。
+- 备份盘不可用、调度注册失败或备份失败时记录状态并告警，不伪造成功，也不退回同卷备份。
+
+### 4. backup 备份与恢复
+
+```bash
+# 推荐先走上面的 backup volumes + backup setup（自动写入 backup_dir）
 
 # 创建整库备份（默认拒绝与记忆库同卷）
 yotta-memory backup create
@@ -69,6 +93,10 @@ yotta-memory backup doctor --id <备份ID>
 
 # 恢复到新目录；默认不覆盖正在使用的记忆库
 yotta-memory backup restore <备份ID> --to <新目录>
+
+# 恢复演练：恢复到隔离副本，校验 manifest、索引并解密一条测试私密
+# 默认用本机已有的 owner 授权缓存；完全裸恢复请加 --recovery-key
+yotta-memory backup drill [<备份ID>]
 ```
 
 - 备份覆盖：`facts/`、`private/`、`keys/`（排除 `keys/cache/` 授权缓存）、`agents.json`、`index.json`、`.archive/`。
@@ -208,7 +236,8 @@ yotta-memory backup restore <备份ID> --to <新目录>
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <command>]` | 生成开工上下文包（身份 + 多智能体铁律 + 画像 + 任务相关记忆 + 近期记忆 + 边界 + 承诺；--budget 字符预算，0=不限；--explain 输出 included / dropped 选择 trace）|
 | `yotta-memory forget <文件>` | 移入 `.trash/<时间>/` 回收区并写审计（v0.12.0；不再物理删除）|
-| `yotta-memory backup create / list / doctor / restore <ID> --to <目录>` | 备份与恢复（v0.12.0；独立盘校验、SHA-256 清单、排除 `keys/cache`、恢复默认只写新目录）|
+| `yotta-memory backup volumes / setup --dir <目录> / status / ensure-daily / schedule enable|disable|status` | 每日自动备份（v0.12.0；只展示实际枚举的异卷、用户确认一次位置后默认每日执行，Windows Task Scheduler / systemd timer / launchd 调度，`serve` 补跑）|
+| `yotta-memory backup create / list / doctor / restore <ID> --to <目录> / drill [<ID>]` | 备份、恢复与恢复演练（v0.12.0；独立盘校验、SHA-256 清单、排除 `keys/cache`、恢复默认只写新目录；drill 验证 manifest / 索引 / 测试私密解密）|
 | `yotta-memory archive [--days 180] [--threshold 0.35]` | 归档旧记忆（v0.8.0 统一效用分 + v0.10.0 分类型衰减；immutable / BOUND 豁免；私密归档入 `.archive/private/<owner>/<type>/`；阈值默认读 config `maintain_archived_utility`）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |

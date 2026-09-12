@@ -5,7 +5,10 @@
 - `init` 对已有记忆库默认拒绝覆盖；新增 `--attach` 接入现有库；`--force` 在未完成备份前明确拒绝，防止初始化再次清空记忆。
 - `forget` 不再物理删除，改为移动到 `.trash/<timestamp>/<原相对路径>`，并写 `audit-<date>.jsonl` 审计记录。
 - 新增 `backup create / list / doctor / restore <id> --to <目录>`：备份 `facts/`、`private/`、`keys/`（排除 `keys/cache/` 授权缓存）、`agents.json`、`index.json`、`.archive/`，生成 SHA-256 清单；默认拒绝同卷备份；`restore` 默认只恢复到新目录，不覆盖正在使用的记忆库。
-- 新增 `test/reliability-init.test.js`、`test/reliability-forget.test.js`、`test/reliability-backup.test.js`；`npm test` 覆盖既有 4 组测试与新增可靠性测试。
+- 新增每日自动备份闭环：`backup volumes` 只枚举当前机器实际存在、可写、与记忆库异卷的路径；用户确认一次位置后 `backup setup` 默认启用每日备份（默认 03:30），Windows Task Scheduler / Linux systemd user timer（cron 降级）/ macOS LaunchAgent 负责无人值守，`serve` 启动与每 6 小时用幂等 `backup ensure-daily` 补跑。
+- `context` 增加可靠性提醒：未配置、超过 36 小时或失败时提示；用户明确选择手动备份后不重复打扰。
+- 新增 `backup drill`：恢复到隔离副本，校验 manifest、重建索引并解密一条测试私密；默认使用本机 owner 授权缓存，裸恢复可显式传恢复钥匙。
+- 新增 `test/reliability-init.test.js`、`test/reliability-forget.test.js`、`test/reliability-backup.test.js`、`reliability-backup-volumes/setup/daily/schedule/context/drill`；`npm test` 覆盖既有与新增可靠性测试。
 - 事故背景与后续约束见 YottaSkills 项目文档 `docs/元忆可靠性基线与误删事故复盘-2026-09-12.md`。
 
 ## v0.11.0 (2026-09-06)

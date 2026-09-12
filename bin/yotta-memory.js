@@ -40,11 +40,19 @@ const SERVER_SUBDIR = '.server';
 const TOKENS_FILE = 'tokens.json';
 const AGENTS_FILE = 'agents.json';
 const PROFILE_FILE = 'profile.md';
+const BACKUP_TASK_NAME = 'YottaMemoryBackup';
+const BACKUP_SYSTEMD_SERVICE = 'yotta-memory-backup.service';
+const BACKUP_SYSTEMD_TIMER = 'yotta-memory-backup.timer';
+const BACKUP_CRON_MARKER = '#YTM_BACKUP:yotta-memory-backup';
+const BACKUP_LAUNCHD_LABEL = 'cn.yottameta.yotta-memory.backup';
 // remember 类型启发式提示关键词（statement 含主观/关系词且 type=FACT 时提示改 PREF，仅提示不拦截）
 const HINT_KEYWORDS = ['用户', '偏好', '喜欢', '关系', '称呼', '本人', '希望', '讨厌', '欣赏', '习惯', '忌讳', '介意', '不要', '别用'];
 
 // ---- 全局配置（记忆库位置持久化，固定 ~/.yottamemory/config.json）----
 function configPath() {
+  if (process.env.YOTTA_MEMORY_CONFIG_DIR) {
+    return path.join(path.resolve(process.env.YOTTA_MEMORY_CONFIG_DIR), CONFIG_FILE);
+  }
   return path.join(os.homedir(), '.yottamemory', CONFIG_FILE);
 }
 function loadConfig() {
@@ -1142,6 +1150,650 @@ function backupDestination(opts) {
 function sameVolume(left, right) {
   return path.parse(path.resolve(left)).root.toLowerCase() === path.parse(path.resolve(right)).root.toLowerCase();
 }
+function platformPathApi(platform) {
+  return platform === 'win32' ? path.win32 : path.posix;
+}
+function normalizeVolumeCandidate(candidate, platform) {
+  const p = platformPathApi(platform);
+  const value = String(candidate || '').trim();
+  if (!value) return '';
+  if (platform === 'win32') {
+    const drive = /^([A-Za-z]):[\\/]*$/.exec(value);
+    if (drive) return drive[1].toUpperCase() + ':\\';
+  }
+  return p.resolve(value);
+}
+function sameVolumeOnPlatform(left, right, platform, statFn) {
+  if (platform === 'win32') {
+    return path.win32.parse(left).root.toLowerCase() === path.win32.parse(right).root.toLowerCase();
+  }
+  try {
+    return statFn(left).dev === statFn(right).dev;
+  } catch (_) {
+    return left === right;
+  }
+}
+function defaultVolumeCandidates(platform) {
+  if (platform === 'win32') {
+    const out = [];
+    for (let i = 65; i <= 90; i++) {
+      const root = String.fromCharCode(i) + ':\\';
+      if (fs.existsSync(root)) out.push(root);
+    }
+    return out;
+  }
+  try {
+    const output = child_process.execFileSync('df', ['-Pk'], {
+      encoding: 'utf8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const excluded = /^\/(proc|sys|dev|run|snap|boot)(\/|$)/;
+    return output.split(/\r?\n/).slice(1).map(function (line) {
+      const parts = line.trim().split(/\s+/);
+      return parts.length >= 6 ? parts[parts.length - 1] : '';
+    }).filter(function (mount) {
+      return mount && mount.charAt(0) === '/' && !excluded.test(mount);
+    });
+  } catch (_) {
+    return [];
+  }
+}
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let n = value;
+  let unit = 0;
+  while (n >= 1024 && unit < units.length - 1) { n /= 1024; unit++; }
+  return (unit === 0 ? Math.round(n) : n.toFixed(1)) + ' ' + units[unit];
+}
+function listBackupVolumesCore(opts) {
+  opts = opts || {};
+  const platform = opts.platform || process.platform;
+  const p = platformPathApi(platform);
+  const rootForStore = opts.root || userRoot();
+  const storeRoot = normalizeVolumeCandidate(rootForStore, platform);
+  const candidates = opts.candidates || defaultVolumeCandidates(platform);
+  const existsFn = opts.existsFn || fs.existsSync;
+  const statFn = opts.statFn || fs.statSync;
+  const statfsFn = opts.statfsFn || fs.statfsSync;
+  const accessFn = opts.accessFn || fs.accessSync;
+  const volumes = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const normalized = normalizeVolumeCandidate(candidate, platform);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    try {
+      if (!existsFn(normalized)) continue;
+      const stat = statFn(normalized);
+      if (!stat || !stat.isDirectory()) continue;
+      accessFn(normalized, fs.constants.W_OK);
+      if (sameVolumeOnPlatform(storeRoot, normalized, platform, statFn)) continue;
+      const usage = statfsFn(normalized);
+      const blockSize = Number(usage && usage.bsize) || 0;
+      const availableBlocks = Number(usage && usage.bavail) || 0;
+      const totalBlocks = Number(usage && usage.blocks) || 0;
+      volumes.push({
+        root: normalized,
+        writable: true,
+        sameVolume: false,
+        free: blockSize * availableBlocks,
+        total: blockSize * totalBlocks,
+      });
+    } catch (_) {
+      // A mounted path that is not currently accessible is not a valid recommendation.
+    }
+  }
+  volumes.sort(function (a, b) { return String(a.root).localeCompare(String(b.root)); });
+  const lines = volumes.length
+    ? ['可用的独立卷（排除记忆库所在卷 ' + storeRoot + '）:'].concat(volumes.map(function (v) {
+      return '- ' + v.root + '  可用 ' + formatBytes(v.free);
+    }))
+    : ['未发现可写的独立卷（已排除记忆库所在卷 ' + storeRoot + '）；请接入另一块磁盘或独立分区后重试。'];
+  return { error: false, volumes: volumes, text: lines.join('\n') };
+}
+function validBackupTime(value) {
+  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(String(value || ''));
+}
+function backupTimeParts(value) {
+  const text = String(value || '');
+  if (!validBackupTime(text)) throw new Error('备份时间格式无效: ' + text + '（应为 HH:MM）');
+  const parts = text.split(':');
+  return { hour: parseInt(parts[0], 10), minute: parseInt(parts[1], 10), text: text };
+}
+function xmlEscape(value) {
+  return String(value === undefined || value === null ? '' : value).replace(/[&<>"']/g, function (ch) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[ch];
+  });
+}
+function backupWindowsTaskXml(opts) {
+  opts = opts || {};
+  const time = backupTimeParts(opts.time || '03:30');
+  const nodePath = opts.nodePath || process.execPath;
+  const scriptPath = opts.scriptPath || __filename;
+  const userId = opts.userId || '';
+  const principal = userId
+    ? '<Principal id="Author"><UserId>' + xmlEscape(userId) + '</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>'
+    : '<Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>';
+  return [
+    '<?xml version="1.0" encoding="UTF-16"?>',
+    '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
+    '<RegistrationInfo><Description>Yotta Memory daily backup</Description></RegistrationInfo>',
+    '<Triggers><CalendarTrigger><StartBoundary>2026-01-01T' + time.text + ':00</StartBoundary><Enabled>true</Enabled><ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay></CalendarTrigger></Triggers>',
+    '<Principals>' + principal + '</Principals>',
+    '<Settings>',
+    '<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>',
+    '<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>',
+    '<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>',
+    '<AllowHardTerminate>true</AllowHardTerminate>',
+    '<StartWhenAvailable>true</StartWhenAvailable>',
+    '<RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>',
+    '<IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>',
+    '<Enabled>true</Enabled>',
+    '<Hidden>false</Hidden>',
+    '<RunOnlyIfIdle>false</RunOnlyIfIdle>',
+    '<WakeToRun>false</WakeToRun>',
+    '<ExecutionTimeLimit>PT2H</ExecutionTimeLimit>',
+    '<Priority>7</Priority>',
+    '</Settings>',
+    '<Actions Context="Author"><Exec><Command>' + xmlEscape(nodePath) + '</Command><Arguments>"' + xmlEscape(scriptPath) + '" backup ensure-daily</Arguments></Exec></Actions>',
+    '</Task>',
+  ].join('\r\n');
+}
+function backupSystemdServiceContent(opts) {
+  opts = opts || {};
+  const nodePath = opts.nodePath || process.execPath;
+  const scriptPath = opts.scriptPath || __filename;
+  return [
+    '[Unit]',
+    'Description=Yotta Memory daily backup',
+    '',
+    '[Service]',
+    'Type=oneshot',
+    'ExecStart=' + systemdEscapeArg(nodePath) + ' ' + systemdEscapeArg(scriptPath) + ' backup ensure-daily',
+    'Nice=10',
+    '',
+  ].join('\n');
+}
+function backupSystemdTimerContent(opts) {
+  opts = opts || {};
+  const time = backupTimeParts(opts.time || '03:30');
+  return [
+    '[Unit]',
+    'Description=Yotta Memory daily backup timer',
+    '',
+    '[Timer]',
+    'OnCalendar=*-*-* ' + time.text + ':00',
+    'Persistent=true',
+    'RandomizedDelaySec=300',
+    '',
+    '[Install]',
+    'WantedBy=timers.target',
+    '',
+  ].join('\n');
+}
+function backupCronLine(opts) {
+  opts = opts || {};
+  const time = backupTimeParts(opts.time || '03:30');
+  const nodePath = opts.nodePath || process.execPath;
+  const scriptPath = opts.scriptPath || __filename;
+  const logPath = opts.logPath || '';
+  const redirect = logPath ? ' >> ' + shQuote(logPath) + ' 2>&1' : '';
+  return time.minute + ' ' + time.hour + ' * * * ' + shQuote(nodePath) + ' ' + shQuote(scriptPath) + ' backup ensure-daily' + redirect + ' ' + BACKUP_CRON_MARKER;
+}
+function backupLaunchdPlist(opts) {
+  opts = opts || {};
+  const time = backupTimeParts(opts.time || '03:30');
+  const nodePath = opts.nodePath || process.execPath;
+  const scriptPath = opts.scriptPath || __filename;
+  const logPath = opts.logPath || '';
+  const lines = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0"><dict>',
+    '<key>Label</key><string>' + BACKUP_LAUNCHD_LABEL + '</string>',
+    '<key>ProgramArguments</key><array>',
+    '<string>' + xmlEscape(nodePath) + '</string>',
+    '<string>' + xmlEscape(scriptPath) + '</string>',
+    '<string>backup</string>',
+    '<string>ensure-daily</string>',
+    '</array>',
+    '<key>StartCalendarInterval</key><dict>',
+    '<key>Hour</key><integer>' + time.hour + '</integer>',
+    '<key>Minute</key><integer>' + time.minute + '</integer>',
+    '</dict>',
+  ];
+  if (logPath) {
+    lines.push('<key>StandardOutPath</key><string>' + xmlEscape(logPath) + '</string>');
+    lines.push('<key>StandardErrorPath</key><string>' + xmlEscape(logPath) + '</string>');
+  }
+  lines.push('</dict></plist>');
+  return lines.join('\n');
+}
+function schedulerExec(opts, command, args, input) {
+  if (opts && typeof opts.execFileFn === 'function') return opts.execFileFn(command, args, { input: input });
+  return child_process.execFileSync(command, args, {
+    encoding: 'utf8',
+    timeout: 15000,
+    input: input,
+    stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+  });
+}
+function schedulerTry(opts, command, args, input) {
+  try {
+    return { ok: true, stdout: String(schedulerExec(opts, command, args, input) || '') };
+  } catch (error) {
+    return {
+      ok: false,
+      stdout: String((error && error.stdout) || ''),
+      error: String((error && error.message) || error),
+    };
+  }
+}
+function backupScheduleEnableCore(opts) {
+  opts = opts || {};
+  const platform = opts.platform || process.platform;
+  const time = opts.time || '03:30';
+  try { backupTimeParts(time); } catch (error) { return { error: true, text: error.message }; }
+  const nodePath = opts.nodePath || process.execPath;
+  const scriptPath = opts.scriptPath || __filename;
+  try {
+    if (platform === 'win32') {
+      const userId = opts.userId || (process.env.USERDOMAIN && process.env.USERNAME ? process.env.USERDOMAIN + '\\' + process.env.USERNAME : '');
+      const taskName = opts.taskName || BACKUP_TASK_NAME;
+      const xmlPath = opts.xmlPath || path.join(os.tmpdir(), taskName + '.xml');
+      fs.writeFileSync(xmlPath, '\ufeff' + backupWindowsTaskXml({ time: time, nodePath: nodePath, scriptPath: scriptPath, userId: userId }), 'utf16le');
+      schedulerExec(opts, 'schtasks', ['/create', '/tn', taskName, '/xml', xmlPath, '/f']);
+      return { error: false, scheduler: 'windows-task', taskName: taskName, text: '已注册 Windows 每日备份任务: ' + taskName };
+    }
+    if (platform === 'linux') {
+      const unitDir = opts.unitDir || path.join(os.homedir(), '.config', 'systemd', 'user');
+      const servicePath = path.join(unitDir, BACKUP_SYSTEMD_SERVICE);
+      const timerPath = path.join(unitDir, BACKUP_SYSTEMD_TIMER);
+      fs.mkdirSync(unitDir, { recursive: true });
+      fs.writeFileSync(servicePath, backupSystemdServiceContent({ nodePath: nodePath, scriptPath: scriptPath }), 'utf8');
+      fs.writeFileSync(timerPath, backupSystemdTimerContent({ time: time }), 'utf8');
+      const reload = schedulerTry(opts, 'systemctl', ['--user', 'daemon-reload']);
+      const enable = reload.ok ? schedulerTry(opts, 'systemctl', ['--user', 'enable', '--now', BACKUP_SYSTEMD_TIMER]) : reload;
+      if (enable.ok) {
+        return { error: false, scheduler: 'linux-systemd', unit: BACKUP_SYSTEMD_TIMER, text: '已注册 systemd 用户定时器: ' + BACKUP_SYSTEMD_TIMER };
+      }
+      const logPath = opts.logPath || path.join(os.homedir(), '.yottamemory', 'backup.log');
+      const line = backupCronLine({ time: time, nodePath: nodePath, scriptPath: scriptPath, logPath: logPath });
+      const current = schedulerTry(opts, 'crontab', ['-l']);
+      const kept = current.stdout.split(/\r?\n/).filter(function (item) {
+        return item && item.indexOf(BACKUP_CRON_MARKER) === -1;
+      });
+      kept.push(line);
+      schedulerExec(opts, 'crontab', ['-'], kept.join('\n') + '\n');
+      return {
+        error: false,
+        scheduler: 'linux-cron',
+        unit: 'crontab',
+        warning: 'systemd 用户定时器不可用，已降级用户 crontab: ' + enable.error,
+        text: '已注册用户 crontab 每日备份；systemd 不可用。',
+      };
+    }
+    if (platform === 'darwin') {
+      const dir = opts.launchAgentDir || path.join(os.homedir(), 'Library', 'LaunchAgents');
+      const plistPath = path.join(dir, BACKUP_LAUNCHD_LABEL + '.plist');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(plistPath, backupLaunchdPlist({
+        time: time,
+        nodePath: nodePath,
+        scriptPath: scriptPath,
+        logPath: opts.logPath || path.join(os.homedir(), 'Library', 'Logs', 'yotta-memory-backup.log'),
+      }), 'utf8');
+      const uid = typeof process.getuid === 'function' ? process.getuid() : '';
+      const bootstrap = schedulerTry(opts, 'launchctl', ['bootstrap', 'gui/' + uid, plistPath]);
+      if (!bootstrap.ok) schedulerTry(opts, 'launchctl', ['load', '-w', plistPath]);
+      return { error: false, scheduler: 'macos-launchd', plist: plistPath, text: '已注册 macOS LaunchAgent 每日备份。' };
+    }
+  } catch (error) {
+    return { error: true, text: '注册自动备份调度失败: ' + error.message };
+  }
+  return { error: true, text: '当前平台暂不支持自动备份调度: ' + platform };
+}
+function backupScheduleDisableCore(opts) {
+  opts = opts || {};
+  const platform = opts.platform || process.platform;
+  try {
+    if (platform === 'win32') {
+      const taskName = opts.taskName || BACKUP_TASK_NAME;
+      const result = schedulerTry(opts, 'schtasks', ['/delete', '/tn', taskName, '/f']);
+      if (!result.ok && !/cannot find|找不到|不存在/i.test(result.error)) return { error: true, text: result.error };
+      return { error: false, scheduler: 'windows-task', text: result.ok ? '已移除 Windows 备份任务。' : 'Windows 备份任务未注册。' };
+    }
+    if (platform === 'linux') {
+      schedulerTry(opts, 'systemctl', ['--user', 'disable', '--now', BACKUP_SYSTEMD_TIMER]);
+      const unitDir = opts.unitDir || path.join(os.homedir(), '.config', 'systemd', 'user');
+      for (const name of [BACKUP_SYSTEMD_SERVICE, BACKUP_SYSTEMD_TIMER]) {
+        try { fs.unlinkSync(path.join(unitDir, name)); } catch (_) {}
+      }
+      const current = schedulerTry(opts, 'crontab', ['-l']);
+      const kept = current.stdout.split(/\r?\n/).filter(function (item) {
+        return item && item.indexOf(BACKUP_CRON_MARKER) === -1;
+      });
+      schedulerTry(opts, 'crontab', ['-'], kept.join('\n') + (kept.length ? '\n' : ''));
+      return { error: false, scheduler: 'linux', text: '已移除 systemd 定时器与备份 cron 行。' };
+    }
+    if (platform === 'darwin') {
+      const dir = opts.launchAgentDir || path.join(os.homedir(), 'Library', 'LaunchAgents');
+      const plistPath = path.join(dir, BACKUP_LAUNCHD_LABEL + '.plist');
+      const uid = typeof process.getuid === 'function' ? process.getuid() : '';
+      schedulerTry(opts, 'launchctl', ['bootout', 'gui/' + uid, plistPath]);
+      try { fs.unlinkSync(plistPath); } catch (_) {}
+      return { error: false, scheduler: 'macos-launchd', text: '已移除 macOS LaunchAgent 备份。' };
+    }
+  } catch (error) {
+    return { error: true, text: '移除自动备份调度失败: ' + error.message };
+  }
+  return { error: true, text: '当前平台暂不支持自动备份调度: ' + platform };
+}
+function backupScheduleStatusCore(opts) {
+  opts = opts || {};
+  const platform = opts.platform || process.platform;
+  if (platform === 'win32') {
+    const taskName = opts.taskName || BACKUP_TASK_NAME;
+    const result = schedulerTry(opts, 'schtasks', ['/query', '/tn', taskName, '/fo', 'LIST']);
+    return { error: false, registered: result.ok, scheduler: 'windows-task', text: result.ok ? 'Windows 备份任务已注册。' : 'Windows 备份任务未注册。' };
+  }
+  if (platform === 'linux') {
+    const unitDir = opts.unitDir || path.join(os.homedir(), '.config', 'systemd', 'user');
+    const timer = fs.existsSync(path.join(unitDir, BACKUP_SYSTEMD_TIMER));
+    let cron = false;
+    try {
+      cron = schedulerTry(opts, 'crontab', ['-l']).stdout.indexOf(BACKUP_CRON_MARKER) !== -1;
+    } catch (_) {}
+    return { error: false, registered: timer || cron, scheduler: timer ? 'linux-systemd' : (cron ? 'linux-cron' : ''), text: timer || cron ? 'Linux 备份定时器已注册。' : 'Linux 备份定时器未注册。' };
+  }
+  if (platform === 'darwin') {
+    const dir = opts.launchAgentDir || path.join(os.homedir(), 'Library', 'LaunchAgents');
+    const registered = fs.existsSync(path.join(dir, BACKUP_LAUNCHD_LABEL + '.plist'));
+    return { error: false, registered: registered, scheduler: 'macos-launchd', text: registered ? 'macOS 备份 LaunchAgent 已注册。' : 'macOS 备份 LaunchAgent 未注册。' };
+  }
+  return { error: false, registered: false, scheduler: '', text: '当前平台不支持自动备份调度: ' + platform };
+}
+function backupFallbackCommand() {
+  return { command: process.execPath, args: [__filename, 'backup', 'ensure-daily'] };
+}
+function startBackupFallback() {
+  const cfg = loadConfig();
+  if (!cfg.backup_enabled) return;
+  const launch = function () {
+    try {
+      const spec = backupFallbackCommand();
+      const child = child_process.spawn(spec.command, spec.args, {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+    } catch (error) {
+      console.error('备份补跑启动失败: ' + error.message);
+    }
+  };
+  const initial = setTimeout(launch, 10000);
+  if (initial.unref) initial.unref();
+  const interval = setInterval(launch, 6 * 60 * 60 * 1000);
+  if (interval.unref) interval.unref();
+}
+function backupSetupCore(opts) {
+  opts = opts || {};
+  const root = path.resolve(opts.root || userRoot());
+  if (!isExistingStore(root)) return { error: true, text: '记忆库不存在或未初始化: ' + root };
+  const cfg = loadConfig();
+  const nowIso = new Date().toISOString();
+  if (opts.manual) {
+    cfg.backup_enabled = false;
+    cfg.backup_schedule = 'manual';
+    cfg.backup_setup_choice = 'manual';
+    cfg.backup_setup_at = nowIso;
+    delete cfg.backup_dir;
+    saveConfig(cfg);
+    return {
+      error: false,
+      configured: false,
+      manual: true,
+      text: '已记录：用户选择手动备份。未注册自动备份，也不会在会话开工时反复提示。',
+    };
+  }
+  if (!opts.dir) return { error: true, text: '缺少备份目录 --dir <目录>。请先运行 backup volumes，只从实际枚举结果中选择。' };
+  const dir = path.resolve(String(opts.dir));
+  const same = opts.sameVolumeFn ? !!opts.sameVolumeFn(root, dir) : sameVolume(root, dir);
+  if (same) return { error: true, text: '拒绝: 备份目录与记忆库在同一卷，请选择实际存在的独立卷。' };
+  const time = String(opts.time || '03:30');
+  if (!validBackupTime(time)) return { error: true, text: '备份时间格式无效: ' + time + '（应为 HH:MM，例如 03:30）' };
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.accessSync(dir, fs.constants.W_OK);
+  } catch (error) {
+    return { error: true, text: '备份目录不可写: ' + dir + '（' + error.message + '）' };
+  }
+  const created = backupCreateCore({
+    root: root,
+    dir: dir,
+    allowSameVolume: !!opts.allowSameVolume,
+  });
+  if (created.error) return created;
+  cfg.backup_dir = dir;
+  cfg.backup_enabled = true;
+  cfg.backup_schedule = 'daily';
+  cfg.backup_time = time;
+  cfg.backup_max_age_hours = opts.maxAgeHours !== undefined ? opts.maxAgeHours : 36;
+  cfg.backup_setup_choice = 'daily';
+  cfg.backup_setup_at = nowIso;
+  cfg.backup_last_success = created.manifest.created;
+  cfg.backup_last_backup_id = created.id;
+  delete cfg.backup_last_error;
+  saveConfig(cfg);
+  let schedule = null;
+  if (!opts.skipSchedule && typeof backupScheduleEnableCore === 'function') {
+    schedule = backupScheduleEnableCore({ dir: dir, time: time, root: root });
+    if (schedule && schedule.error) {
+      cfg.backup_scheduler_error = schedule.text;
+      delete cfg.backup_scheduler;
+    } else if (schedule) {
+      cfg.backup_scheduler = schedule.scheduler || '';
+      delete cfg.backup_scheduler_error;
+    }
+    saveConfig(cfg);
+  }
+  return {
+    error: false,
+    configured: true,
+    id: created.id,
+    dir: dir,
+    time: time,
+    schedule: schedule,
+    text: '已启用每日自动备份: ' + dir + '（每天 ' + time + '）\n首份备份: ' + created.id
+      + (schedule && schedule.error ? '\n[警告] ' + schedule.text + '；serve 补跑仍会在启动后检查。' : ''),
+  };
+}
+function backupStatusCore(opts) {
+  opts = opts || {};
+  const root = path.resolve(opts.root || userRoot());
+  const cfg = loadConfig();
+  const dir = cfg.backup_dir ? path.resolve(String(cfg.backup_dir)) : '';
+  const maxAge = Number(cfg.backup_max_age_hours) || 36;
+  if (!dir) {
+    const manual = cfg.backup_setup_choice === 'manual';
+    return {
+      error: false,
+      configured: false,
+      enabled: false,
+      healthy: false,
+      manual: manual,
+      text: manual
+        ? '备份状态: 手动模式（未配置自动备份）'
+        : '备份状态: 未配置\n请运行 backup volumes，只从实际枚举结果中选择独立卷，并由用户确认后再运行 backup setup。',
+    };
+  }
+  const listed = backupListCore({ dir: dir });
+  const latest = listed.backups[0] || null;
+  const now = opts.now ? new Date(opts.now).getTime() : Date.now();
+  const createdTs = latest && latest.created ? new Date(latest.created).getTime() : NaN;
+  const ageHours = isNaN(createdTs) ? null : (now - createdTs) / 3600000;
+  const fresh = ageHours !== null && ageHours <= maxAge;
+  const same = opts.sameVolumeFn ? !!opts.sameVolumeFn(root, dir) : sameVolume(root, dir);
+  const independent = !same;
+  const healthy = !!latest && fresh && independent && !cfg.backup_last_error && !cfg.backup_scheduler_error;
+  const lines = [
+    '备份状态: ' + (cfg.backup_enabled ? '已启用' : '已关闭'),
+    '- 备份目录: ' + dir,
+    '- 独立卷: ' + (independent ? '是' : '否（不可作为可靠备份）'),
+    '- 计划: ' + (cfg.backup_schedule || 'manual') + (cfg.backup_time ? ' ' + cfg.backup_time : ''),
+    '- 调度器: ' + (cfg.backup_scheduler || '(未注册)'),
+    '- 调度异常: ' + (cfg.backup_scheduler_error || '(无)'),
+    '- 上次成功: ' + (cfg.backup_last_success || (latest && latest.created) || '(无)'),
+    '- 备份年龄: ' + (ageHours === null ? '(无可用备份)' : ageHours.toFixed(1) + ' 小时'),
+    '- 最近失败: ' + (cfg.backup_last_error || '(无)'),
+    '- 健康: ' + (healthy ? '正常' : '异常'),
+  ];
+  return {
+    error: false,
+    configured: true,
+    enabled: !!cfg.backup_enabled,
+    healthy: healthy,
+    latest: latest,
+    ageHours: ageHours,
+    text: lines.join('\n'),
+  };
+}
+function localDateKey(value) {
+  const d = value instanceof Date ? value : new Date(value);
+  const p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+function latestBackupByCreated(backups) {
+  return (backups || []).slice().sort(function (a, b) {
+    return String(b.created || '').localeCompare(String(a.created || ''));
+  })[0] || null;
+}
+function acquireBackupLock(lockPath, now, staleHours) {
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const maxAgeMs = (staleHours || 6) * 3600000;
+  try {
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fs.writeFileSync(lockPath, JSON.stringify({
+      pid: process.pid,
+      created: new Date(nowMs).toISOString(),
+    }), { encoding: 'utf8', flag: 'wx' });
+    return { acquired: true };
+  } catch (error) {
+    if (error.code !== 'EEXIST') return { acquired: false, error: error };
+    try {
+      const stat = fs.statSync(lockPath);
+      if (nowMs - stat.mtimeMs > maxAgeMs) {
+        fs.unlinkSync(lockPath);
+        return acquireBackupLock(lockPath, now, staleHours);
+      }
+    } catch (_) {
+      try { fs.unlinkSync(lockPath); } catch (__) {}
+      return acquireBackupLock(lockPath, now, staleHours);
+    }
+    return { acquired: false, fresh: true };
+  }
+}
+function releaseBackupLock(lockPath) {
+  try { fs.unlinkSync(lockPath); } catch (_) {}
+}
+function backupEnsureDailyCore(opts) {
+  opts = opts || {};
+  const root = path.resolve(opts.root || userRoot());
+  const cfg = loadConfig();
+  const now = opts.now ? new Date(opts.now) : new Date();
+  const nowIso = now.toISOString();
+  if (!cfg.backup_enabled || cfg.backup_schedule === 'manual') {
+    return { error: false, created: false, skipped: true, reason: 'disabled', text: '自动备份未启用；跳过 ensure-daily。' };
+  }
+  const dir = cfg.backup_dir ? path.resolve(String(cfg.backup_dir)) : '';
+  if (!dir) {
+    const text = '自动备份已启用但未配置 backup_dir；拒绝执行。';
+    cfg.backup_last_attempt = nowIso;
+    cfg.backup_last_error = text;
+    saveConfig(cfg);
+    return { error: true, created: false, skipped: false, text: text };
+  }
+  const same = opts.sameVolumeFn ? !!opts.sameVolumeFn(root, dir) : sameVolume(root, dir);
+  if (same) {
+    const text = '拒绝: 备份目录与记忆库在同一卷，不执行每日备份。';
+    cfg.backup_last_attempt = nowIso;
+    cfg.backup_last_error = text;
+    saveConfig(cfg);
+    return { error: true, created: false, skipped: false, text: text };
+  }
+  const lockPath = opts.lockPath || path.join(path.dirname(configPath()), 'backup.lock');
+  const lock = acquireBackupLock(lockPath, now, opts.staleHours);
+  if (!lock.acquired) {
+    if (lock.error) {
+      const text = '备份锁创建失败: ' + lock.error.message;
+      cfg.backup_last_attempt = nowIso;
+      cfg.backup_last_error = text;
+      saveConfig(cfg);
+      return { error: true, created: false, skipped: false, text: text };
+    }
+    return { error: false, created: false, skipped: true, reason: 'already-running', text: '已有备份任务在运行；跳过本次 ensure-daily。' };
+  }
+  try {
+    const listed = backupListCore({ dir: dir });
+    if (listed.error) throw new Error(listed.text);
+    const todayKey = localDateKey(now);
+    const latest = latestBackupByCreated(listed.backups);
+    if (latest && latest.created && localDateKey(latest.created) === todayKey) {
+      cfg.backup_last_check = nowIso;
+      cfg.backup_last_success = latest.created;
+      cfg.backup_last_backup_id = latest.id;
+      delete cfg.backup_last_error;
+      saveConfig(cfg);
+      return { error: false, created: false, skipped: true, reason: 'already-backed-up', id: latest.id, text: '今天已有备份 ' + latest.id + '；跳过。' };
+    }
+    const created = backupCreateCore({
+      root: root,
+      dir: dir,
+      now: nowIso,
+      allowSameVolume: !!opts.allowSameVolume,
+    });
+    if (created.error) throw new Error(created.text);
+    cfg.backup_last_attempt = nowIso;
+    cfg.backup_last_check = nowIso;
+    cfg.backup_last_success = created.manifest.created;
+    cfg.backup_last_backup_id = created.id;
+    delete cfg.backup_last_error;
+    saveConfig(cfg);
+    return { error: false, created: true, skipped: false, id: created.id, path: created.path, text: '每日备份完成: ' + created.id };
+  } catch (error) {
+    cfg.backup_last_attempt = nowIso;
+    cfg.backup_last_check = nowIso;
+    cfg.backup_last_error = error.message;
+    saveConfig(cfg);
+    return { error: true, created: false, skipped: false, text: '每日备份失败: ' + error.message };
+  } finally {
+    releaseBackupLock(lockPath);
+  }
+}
+function backupHealthCore(opts) {
+  opts = opts || {};
+  const cfg = loadConfig();
+  if (!cfg.backup_dir && cfg.backup_setup_choice !== 'manual') {
+    return {
+      level: 'warning',
+      needsSetup: true,
+      text: '尚未配置独立盘备份。AI 应先运行 yotta-memory backup volumes，只展示当前实际存在的可写异卷；由用户确认目录后，再运行 backup setup 启用每日自动备份。',
+    };
+  }
+  if (cfg.backup_setup_choice === 'manual') return { level: 'none', needsSetup: false, text: '' };
+  const status = backupStatusCore(opts);
+  const maxAge = Number(cfg.backup_max_age_hours) || 36;
+  if (cfg.backup_last_error) return { level: 'warning', needsSetup: false, text: '最近一次备份失败: ' + cfg.backup_last_error };
+  if (cfg.backup_scheduler_error) return { level: 'warning', needsSetup: false, text: '每日备份调度注册异常: ' + cfg.backup_scheduler_error };
+  if (!status.latest) return { level: 'warning', needsSetup: true, text: '自动备份已启用，但还没有成功备份。请检查 backup 目录与调度器。' };
+  if (status.ageHours !== null && status.ageHours > maxAge) {
+    return { level: 'warning', needsSetup: false, text: '最近备份已过期（' + status.ageHours.toFixed(1) + ' 小时，超过 ' + maxAge + ' 小时）；请检查备份盘与每日调度。' };
+  }
+  return { level: 'none', needsSetup: false, text: '' };
+}
 function sha256File(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
@@ -1172,7 +1824,8 @@ function backupCreateCore(opts) {
   if (!opts.allowSameVolume && sameVolume(root, destBase)) {
     return { error: true, text: '拒绝: 备份目录与记忆库在同一卷。请把备份放到独立盘或独立卷。' };
   }
-  const id = os.hostname() + '-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' + crypto.randomBytes(3).toString('hex');
+  const createdAt = new Date(opts.now || Date.now()).toISOString();
+  const id = os.hostname() + '-' + createdAt.replace(/[:.]/g, '-') + '-' + crypto.randomBytes(3).toString('hex');
   const target = path.join(destBase, id);
   try {
     fs.mkdirSync(destBase, { recursive: true });
@@ -1189,7 +1842,7 @@ function backupCreateCore(opts) {
     const manifest = {
       id: id,
       version: VERSION,
-      created: new Date().toISOString(),
+      created: createdAt,
       source: root,
       files: files,
     };
@@ -1278,6 +1931,119 @@ function backupRestoreCore(id, opts) {
   } catch (error) {
     return { error: true, text: '恢复失败: ' + error.message };
   }
+}
+function findFirstEncryptedPrivateFile(root) {
+  const pdir = path.join(root, PRIVATE_DIR);
+  if (!fs.existsSync(pdir)) return null;
+  const owners = fs.readdirSync(pdir);
+  for (const owner of owners) {
+    const ownerDir = path.join(pdir, owner);
+    if (!fs.statSync(ownerDir).isDirectory()) continue;
+    for (const type of PRIVATE_LEAF) {
+      const dir = path.join(ownerDir, type);
+      if (!fs.existsSync(dir)) continue;
+      for (const name of fs.readdirSync(dir)) {
+        if (!name.endsWith('.md' + ENC_SUFFIX)) continue;
+        const fp = path.join(dir, name);
+        if (fs.statSync(fp).isFile()) return { fp: fp, owner: owner, rel: relOf(root, fp) };
+      }
+    }
+  }
+  return null;
+}
+function backupDrillCore(opts) {
+  opts = opts || {};
+  const destBase = backupDestination(opts);
+  if (!destBase) return { error: true, ok: false, text: '未配置备份目录。请用 --dir <目录> 或 config set backup_dir <目录>。' };
+  const listed = backupListCore({ dir: destBase });
+  if (listed.error) return { error: true, ok: false, text: listed.text };
+  const id = opts.id || (listed.backups[0] && listed.backups[0].id);
+  if (!id) return { error: true, ok: false, text: '没有可演练的备份。' };
+  let target = opts.to ? path.resolve(String(opts.to)) : '';
+  let tempParent = '';
+  if (!target) {
+    tempParent = fs.mkdtempSync(path.join(os.tmpdir(), 'ytm-drill-'));
+    target = path.join(tempParent, 'restored');
+  }
+  function fail(text, checks) {
+    if (tempParent) {
+      try { fs.rmSync(tempParent, { recursive: true, force: true }); } catch (_) {}
+    }
+    return { error: true, ok: false, text: text, checks: checks || {} };
+  }
+  const verified = backupDoctorCore({ dir: destBase, id: id });
+  if (!verified.ok) return fail('恢复演练失败: 备份 manifest 校验未通过。\n' + verified.text, { manifest: false });
+  const restored = backupRestoreCore(id, { dir: destBase, to: target });
+  if (restored.error) return fail(restored.text, { manifest: true, index: false });
+  let indexOk = false;
+  let indexError = '';
+  try {
+    buildIndex(target);
+    indexOk = true;
+  } catch (error) {
+    indexError = error.message;
+  }
+  if (!indexOk) return fail('恢复演练失败: 恢复副本无法重建索引: ' + indexError, { manifest: true, index: false });
+  const privateFile = findFirstEncryptedPrivateFile(target);
+  let privateCheck = { checked: false, decrypted: true, source: 'no-private-entry' };
+  if (privateFile) {
+    let ownerKey = null;
+    let source = '';
+    try {
+      if (opts.recoveryKey) {
+        ownerKey = unwrapOwnerKeyRecovery(target, privateFile.owner, Buffer.from(String(opts.recoveryKey), 'base64'));
+        source = 'recovery-key';
+      } else if (opts.password) {
+        const salt = loadSalt(target);
+        if (!salt) throw new Error('恢复副本缺少 keys/salt');
+        ownerKey = unwrapOwnerKey(target, privateFile.owner, deriveUmk(opts.password, salt));
+        source = 'password';
+      } else {
+        const ownerKeyFile = opts.ownerKeyFile || path.join(opts.sourceRoot || userRoot(), 'keys', 'cache', privateFile.owner + '.key');
+        if (fs.existsSync(ownerKeyFile)) {
+          ownerKey = fs.readFileSync(ownerKeyFile);
+          source = 'owner-cache';
+        }
+      }
+    } catch (error) {
+      ownerKey = null;
+    }
+    if (!ownerKey) {
+      return fail('恢复演练失败: 已恢复文件结构，但无法解密测试私密记忆。请提供 --recovery-key 或 --password，或确认本机 keys/cache 中有 ' + privateFile.owner + ' 的授权缓存。', {
+        manifest: true,
+        index: true,
+        private: { checked: true, decrypted: false, source: '', file: privateFile.rel },
+      });
+    }
+    try {
+      decryptMemoryText(fs.readFileSync(privateFile.fp), ownerKey);
+      privateCheck = { checked: true, decrypted: true, source: source, file: privateFile.rel, owner: privateFile.owner };
+    } catch (error) {
+      return fail('恢复演练失败: 测试私密记忆解密失败（' + error.message + '）。', {
+        manifest: true,
+        index: true,
+        private: { checked: true, decrypted: false, source: source, file: privateFile.rel },
+      });
+    }
+  }
+  if (tempParent) {
+    try { fs.rmSync(tempParent, { recursive: true, force: true }); } catch (_) {}
+  }
+  const checks = { manifest: true, index: true, private: privateCheck };
+  const lines = [
+    '恢复演练通过: ' + id,
+    '- manifest / SHA-256: 通过',
+    '- 恢复副本索引: 通过',
+    '- 测试私密解密: ' + (privateCheck.checked ? ('通过（' + privateCheck.source + '，' + privateCheck.file + '）') : '跳过（备份中没有加密私密条目）'),
+  ];
+  return {
+    error: false,
+    ok: true,
+    id: id,
+    restoredTo: tempParent ? '(临时副本已清理)' : target,
+    checks: checks,
+    text: lines.join('\n'),
+  };
 }
 function rememberCore(type, subject, statement, opts) {
   opts = opts || {};
@@ -2462,6 +3228,40 @@ function cmdBackupCreate(opts) {
   console.log(r.text);
   if (r.error) process.exit(2);
 }
+function cmdBackupVolumes(opts) {
+  const r = listBackupVolumesCore(opts);
+  if (opts.json) console.log(JSON.stringify({ root: userRoot(), volumes: r.volumes }, null, 2));
+  else console.log(r.text);
+  if (r.error) process.exit(2);
+}
+function cmdBackupSetup(opts) {
+  const r = backupSetupCore(opts);
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+function cmdBackupStatus(opts) {
+  const r = backupStatusCore(opts);
+  if (opts.json) console.log(JSON.stringify(r, null, 2));
+  else console.log(r.text);
+  if (r.error) process.exit(2);
+}
+function cmdBackupEnsureDaily(opts) {
+  const r = backupEnsureDailyCore(opts);
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+function cmdBackupSchedule(action, opts) {
+  let r;
+  if (action === 'enable') r = backupScheduleEnableCore(opts);
+  else if (action === 'disable') r = backupScheduleDisableCore(opts);
+  else if (action === 'status') r = backupScheduleStatusCore(opts);
+  else {
+    console.error('backup schedule 子命令: enable [--time HH:MM] / disable / status');
+    process.exit(2);
+  }
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
 function cmdBackupList(opts) {
   const r = backupListCore(opts);
   console.log(r.text);
@@ -2474,6 +3274,11 @@ function cmdBackupDoctor(opts) {
 }
 function cmdBackupRestore(id, opts) {
   const r = backupRestoreCore(id, opts);
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+function cmdBackupDrill(id, opts) {
+  const r = backupDrillCore(Object.assign({}, opts, { id: id || opts.id }));
   console.log(r.text);
   if (r.error) process.exit(2);
 }
@@ -2998,6 +3803,13 @@ function contextCore(opts) {
     if (!trace.length) lines.push('（无选择记录）');
     for (const t of trace) lines.push(t);
   }
+  const backupHealth = backupHealthCore({ root: root });
+  if (backupHealth.level === 'warning') {
+    lines.push('');
+    lines.push('## 可靠性提醒');
+    lines.push('');
+    lines.push('- ' + backupHealth.text);
+  }
   return { error: false, exitCode: 0, text: lines.join('\n') };
 }
 function cmdContext(opts) {
@@ -3008,14 +3820,16 @@ function cmdContext(opts) {
 
 // ---- config 命令 ----
 // v0.10.0：maintain_* / consolidate_* 数值键纳入 config set/get（此前只支持 3 个键但文档已写可调）
-function isNumericConfigKey(key) { return /^(maintain_|consolidate_)/.test(key); }
+function isNumericConfigKey(key) { return /^(maintain_|consolidate_|backup_max_age_hours$)/.test(key); }
 function cmdConfigSet(key, value) {
-  const known = ['memory_home', 'embedding_cmd', 'embedding_timeout', 'backup_dir', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'];
+  const known = ['memory_home', 'embedding_cmd', 'embedding_timeout', 'backup_dir', 'backup_enabled', 'backup_schedule', 'backup_time', 'backup_max_age_hours', 'backup_setup_choice', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'];
   if (known.indexOf(key) === -1) { console.error('未知配置项: ' + key + '（可用: memory_home / backup_dir / embedding_cmd / embedding_timeout / maintain_* / consolidate_*）'); process.exit(2); }
   if (value === undefined || value === null || value === '') { console.error('缺少值: config set ' + key + ' <值>'); process.exit(2); }
   const cfg = loadConfig();
   if (key === 'memory_home') cfg.memory_home = value;
   else if (key === 'backup_dir') cfg.backup_dir = value;
+  else if (key === 'backup_enabled') cfg.backup_enabled = value !== 'false' && value !== '0';
+  else if (key === 'backup_schedule' || key === 'backup_time' || key === 'backup_setup_choice') cfg[key] = value;
   else if (key === 'embedding_cmd') cfg.embedding_cmd = value;
   else if (key === 'embedding_timeout') cfg.embedding_timeout = parseInt(value, 10) || 3000;
   else if (isNumericConfigKey(key)) {
@@ -3030,11 +3844,14 @@ function cmdConfigGet() {
   const cfg = loadConfig();
   console.log('memory_home: ' + (cfg.memory_home || '(未设置，默认 ~/.yottamemory)'));
   console.log('backup_dir: ' + (cfg.backup_dir || '(未设置)'));
+  console.log('backup_enabled: ' + (cfg.backup_enabled === undefined ? '(未设置)' : cfg.backup_enabled));
+  console.log('backup_schedule: ' + (cfg.backup_schedule || '(未设置)'));
+  console.log('backup_time: ' + (cfg.backup_time || '(未设置)'));
   console.log('embedding_cmd: ' + (cfg.embedding_cmd || '(未设置)'));
   console.log('embedding_timeout: ' + (cfg.embedding_timeout || 3000));
-  const keys = ['memory_home', 'backup_dir', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'];
+  const keys = ['memory_home', 'backup_dir', 'backup_enabled', 'backup_schedule', 'backup_time', 'backup_max_age_hours', 'backup_setup_choice', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'];
   for (const k of keys) {
-    if (k === 'memory_home' || k === 'backup_dir' || k === 'embedding_cmd' || k === 'embedding_timeout') continue;
+    if (k === 'memory_home' || k === 'backup_dir' || k === 'backup_enabled' || k === 'backup_schedule' || k === 'backup_time' || k === 'embedding_cmd' || k === 'embedding_timeout') continue;
     if (cfg[k] !== undefined) console.log(k + ': ' + cfg[k]);
   }
   console.log('当前生效用户级位置: ' + userRoot());
@@ -3311,6 +4128,7 @@ function cmdServe(opts) {
     if (noAuth) console.log('鉴权: 已关闭（--no-auth，仅限可信内网）');
     else console.log('鉴权: Bearer token + X-Agent-Id（yotta-memory token new --agent <id> 生成）');
     console.log('按 Ctrl+C 停止');
+    startBackupFallback();
   });
 }
 // ---- stdio 本地零进程模式（客户端按需拉起 CLI）----
@@ -4266,7 +5084,7 @@ function usage() {
       ['recall', '检索记忆（--type/--limit/--agent/--owner/--all/--unsafe）'],
       ['forget', '删除一条记忆'],
       ['archive', '归档（--days/--threshold 盖棺分+年龄）'],
-      ['backup', '备份记忆库（create / list / doctor / restore <id> --to <目录>）'],
+      ['backup', '备份记忆库（volumes / setup / status / ensure-daily / schedule / create / list / doctor / restore <id> --to <目录> / drill）'],
       ['maintain', '记忆自组织（归档/遗忘候选/去重/合并；默认 dry-run；--dedup 查重+置信度，--dedup --apply 自动合并高置信组）'],
       ['consolidate', '周期摘要压缩（默认 dry-run；--apply 执行；--undo <batch> 回滚；--batches 查批次；候选=超龄+闲置+低效用，immutable/BOUND 豁免）'],
       ['distill', '心理日志蒸馏（统计摘要/主题画像/知识地图；--model 可选外部模型）'],
@@ -4316,7 +5134,7 @@ async function main() {
   if (!args.length) { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time']);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--version' || a === '-v') { console.log(VERSION); return; }
@@ -4334,6 +5152,9 @@ async function main() {
     else if (a === '--no-hint') opts.noHint = true;
     else if (a === '--encrypt') opts.encrypt = true;
     else if (a === '--no-encrypt') opts.noEncrypt = true;
+    else if (a === '--json') opts.json = true;
+    else if (a === '--manual') opts.manual = true;
+    else if (a === '--skip-schedule') opts.skipSchedule = true;
     else if (a === '--useful') opts.useful = true;
     else if (a === '--useless') opts.useless = true;
     else if (a === '--undo') opts.undo = true;
@@ -4380,6 +5201,7 @@ async function main() {
       else if (a === '--period') opts.period = parseInt(v, 10) || 0;
       else if (a === '--to') opts.to = v;
       else if (a === '--id') opts.id = v;
+      else if (a === '--time') opts.time = v;
     } else if (a.startsWith('--')) {
       console.error('未知选项: ' + a);
       process.exit(2);
@@ -4412,11 +5234,17 @@ async function main() {
     case 'archive': cmdArchive(opts); break;
     case 'backup': {
       const sub = rest[0];
-      if (sub === 'create') cmdBackupCreate(opts);
+      if (sub === 'volumes') cmdBackupVolumes(opts);
+      else if (sub === 'setup') cmdBackupSetup(opts);
+      else if (sub === 'status') cmdBackupStatus(opts);
+      else if (sub === 'ensure-daily') cmdBackupEnsureDaily(opts);
+      else if (sub === 'schedule') cmdBackupSchedule(rest[1], opts);
+      else if (sub === 'create') cmdBackupCreate(opts);
       else if (sub === 'list') cmdBackupList(opts);
       else if (sub === 'doctor') cmdBackupDoctor(opts);
       else if (sub === 'restore') cmdBackupRestore(rest[1] || opts.id, opts);
-      else { console.error('backup 子命令: create / list / doctor / restore <id> --to <目录>'); process.exit(2); }
+      else if (sub === 'drill') cmdBackupDrill(rest[1] || opts.id, opts);
+      else { console.error('backup 子命令: volumes / setup / status / ensure-daily / schedule / create / list / doctor / restore <id> --to <目录> / drill'); process.exit(2); }
       break;
     }
     case 'reindex': cmdReindex(); break;
@@ -4589,9 +5417,24 @@ module.exports = {
   promptPassword: promptPassword,
   initCore: initCore,
   backupCreateCore: backupCreateCore,
+  listBackupVolumesCore: listBackupVolumesCore,
+  backupSetupCore: backupSetupCore,
+  backupStatusCore: backupStatusCore,
+  backupEnsureDailyCore: backupEnsureDailyCore,
+  backupHealthCore: backupHealthCore,
+  backupWindowsTaskXml: backupWindowsTaskXml,
+  backupSystemdServiceContent: backupSystemdServiceContent,
+  backupSystemdTimerContent: backupSystemdTimerContent,
+  backupCronLine: backupCronLine,
+  backupLaunchdPlist: backupLaunchdPlist,
+  backupScheduleEnableCore: backupScheduleEnableCore,
+  backupScheduleDisableCore: backupScheduleDisableCore,
+  backupScheduleStatusCore: backupScheduleStatusCore,
+  backupFallbackCommand: backupFallbackCommand,
   backupListCore: backupListCore,
   backupDoctorCore: backupDoctorCore,
   backupRestoreCore: backupRestoreCore,
+  backupDrillCore: backupDrillCore,
   viewServerCore: viewServerCore,
 
 };

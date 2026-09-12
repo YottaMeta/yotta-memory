@@ -32,7 +32,7 @@
 - **便携记忆盘**：记忆装在固定主机上，本机与局域网其它主机共享同一份记忆（见第 4 / 5 篇）。
 - **越用越懂（v0.6.0）**：AI 按「记忆守则」主动捕获信号，`profile` 聚合画像、`context` 开工注入——用得越久越懂你。
 - **自我学习 / 自我进化 / 自我提升（v0.8.0 + v0.9.0）**：`recall` 语义检索（同义词 / 拼音 / 字段加权 / 模糊，v0.9.0 可选本地 embedding 插件）+ `feedback` 使用反馈闭环 + `maintain` 规则层自组织 + `distill` 心理日志蒸馏——记忆系统会自己整理、提炼、演化。
-- **可靠性基线（v0.12.0）**：`init` 对已有库拒绝覆盖；`forget` 进回收区；`backup create/list/doctor/restore` 做独立盘备份、校验和恢复。
+- **可靠性基线（v0.12.0）**：`init` 对已有库拒绝覆盖；`forget` 进回收区；`backup volumes/setup/status/ensure-daily/schedule/drill` 在用户确认真实独立卷后默认每日自动备份，并提供校验、恢复与恢复演练。
 
 ## 2. 安装（CLI + 技能）
 
@@ -211,12 +211,15 @@ statement: 本周完成发布
 - **用户查看平台分页**：yotta-memory view 启动的网页端记忆卡片改为服务端分页——记忆多时不再一次性加载渲染全部，页面显示「共 N 条」「第 x / y 页」，支持上一页 / 下一页。
 - **recall 候选预过滤**：语义检索前先用索引 token 粗筛候选集（精确 / 同义 / 拼音 / 子串 / 模糊长度门槛），命中集与 v0.8.0 一致，记忆量大时显著减少逐条语义 / 模糊 / 编辑距离开销。
 
-## 3.8 可靠性基线：防覆盖、回收区与备份（v0.12.0）
+## 3.8 可靠性基线：防覆盖、回收区、每日自动备份（v0.12.0）
 
 - 已有记忆库存在时，`yotta-memory init` 默认拒绝覆盖；接入现有库使用 `yotta-memory init --attach`。
 - `yotta-memory forget <文件>` 不再物理删除，记忆会移动到 `.trash/<时间>/...`，并写入 `.trash/audit-<日期>.jsonl` 审计。
 - `yotta-memory backup create --dir <独立盘目录>` 创建整库备份（facts / private / keys / agents.json / index.json / .archive），生成 `manifest.json` 与 SHA-256 清单。
 - `yotta-memory backup list` 查看备份；`backup doctor` 校验文件哈希；`backup restore <id> --to <新目录>` 恢复到新目录，不覆盖正在使用的记忆库。
+- `yotta-memory backup volumes` 只列出当前机器实际存在、可写、与记忆库异卷的路径；用户确认一次位置后，`backup setup --dir <目录>` 创建首份备份并默认启用每日自动备份（默认 03:30）。
+- Windows 使用 Task Scheduler，Linux 使用 systemd user timer（不可用时降级 cron），macOS 使用 LaunchAgent；`serve` 启动后与每 6 小时调用幂等 `backup ensure-daily` 补跑。
+- `yotta-memory backup status` 查看目录、计划、上次成功、最近失败与调度状态；`backup drill` 恢复到隔离副本，校验 manifest / 索引并解密一条测试私密。
 - 备份目录与记忆库同卷时默认拒绝；这是一条防线，不替代独立盘备份。
 
 ## 4. 便携记忆盘 · 记忆引擎主机篇
