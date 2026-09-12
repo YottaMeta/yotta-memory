@@ -2,11 +2,11 @@
 /**
  * yotta-memory 跨平台安装器
  * 用法:
- *   npx -y @yottameta/yotta-memory --agent <name>  # 按智能体默认用户级目录安装（推荐）
- *   npx -y @yottameta/yotta-memory --dir PATH      # 装到指定目录（用户改了目录的智能体）
- *   npx -y @yottameta/yotta-memory -g              # 安装到全部已知智能体用户级目录
- *   npx -y @yottameta/yotta-memory                 # 安装到检测到的项目级目录
- *   npx -y @yottameta/yotta-memory --list          # 列出智能体 -> 默认目录
+ *   npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>  # 按智能体默认用户级目录安装（推荐）
+ *   npx -y --package @yottameta/yotta-memory yotta-memory-install --dir PATH      # 装到指定目录（用户改了目录的智能体）
+ *   npx -y --package @yottameta/yotta-memory yotta-memory-install -g              # 安装到全部已知智能体用户级目录
+ *   npx -y --package @yottameta/yotta-memory yotta-memory-install                 # 安装到检测到的项目级目录
+ *   npx -y --package @yottameta/yotta-memory yotta-memory-install --list          # 列出智能体 -> 默认目录
  */
 'use strict';
 const fs = require('fs');

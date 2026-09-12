@@ -58,7 +58,13 @@
 
 > CLI 与技能分工不同：CLI 让命令行能读写记忆；技能让 AI 知道「开工 recall 恢复上下文、重要信息 remember 落盘、收工归档」。只装 CLI 不装技能，AI 不会自动使用这套工作流。
 
-**更新：** `npm i -g @yottameta/yotta-memory` 升级 CLI（不带版本号即最新版），再把技能文件夹重新装进智能体（重复执行上面的技能安装命令即可）。
+**更新：**
+
+- 升级 CLI：`npm i -g @yottameta/yotta-memory`（不带版本号即最新版）。
+- 升级技能：`npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>`；如果你用 `--dir` 安装，把同一个目录再传一次。
+- 全局安装时：`npm i -g @yottameta/yotta-memory` 会同时升级引擎和安装器，之后可运行 `yotta-memory-install --agent <name>`。
+
+> `npx -y @yottameta/yotta-memory` 只是临时运行引擎 CLI，不会安装技能；技能安装器必须使用上面的 `--package ... yotta-memory-install` 形式，或全局安装后的 `yotta-memory-install` 命令。
 
 **卸载：** `npm rm -g @yottameta/yotta-memory`，并从智能体的 skills 目录删除整个 `yotta-memory` 文件夹。
 

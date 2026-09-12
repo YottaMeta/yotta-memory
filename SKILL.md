@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
 description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删
-version: 0.12.0
+version: 0.12.1
 license: MIT
 ---
 
@@ -20,6 +20,13 @@ license: MIT
 - **召回质量与上下文选择（v0.9.0）**：`recall` 支持可选本地 embedding 插件（`--embedding <command>` / `config set embedding_cmd <command>`）；`context --focus <关键词>` 生成任务感知上下文；`--explain` 输出选择 trace，无插件时自动降级为词法检索。
 - **压缩遗忘（v0.10.0）**：记忆库长期可用不膨胀——`consolidate` 周期摘要压缩（把超龄 + 低效用 + 长期闲置的同主题旧记忆归纳成**带溯源**的摘要，原文整体进 `.archive/`，`--undo` 一键回滚）；`maintain --dedup` 近重复**自动合并**（置信度分档，`--apply` 批量执行高置信组）；效用分时效改为**分类型衰减**（FACT 慢 / PREF 中 / COMMIT 任务类快 / BOUND 不衰减）；`consolidate --batches` 批次审计可查。
 - **可靠性基线（v0.12.0）**：`init` 对非空记忆库默认拒绝覆盖（`--attach` 接入现有库）；`forget` 先移入 `.trash/` 并写审计；新增 `backup volumes / setup / status / ensure-daily / schedule / drill`（用户确认真实独立卷后默认每日自动备份）与 `backup create / list / doctor / restore`。
+
+## 安装 / 更新（两个 bin）
+
+- `yotta-memory`：引擎 CLI，负责读写记忆库。`npx -y @yottameta/yotta-memory` 只是临时运行引擎，不会安装技能。
+- `yotta-memory-install`：技能安装器。安装或更新技能使用 `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>`（或 `--dir <技能目录>`）。
+
+AI 更新流程：先运行 `yotta-memory --version` 记录当前引擎版本；升级 CLI 用 `npm i -g @yottameta/yotta-memory`；升级技能用 `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>`（或原安装时使用的 `--dir` / `install.sh`）；完成后回读 `yotta-memory --version` 与已安装 `SKILL.md` 的 `version:`，两者不一致时不得声称更新成功。
 
 ## 何时使用（触发）
 

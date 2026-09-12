@@ -23,6 +23,8 @@
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
 
+> 🆕 **v0.12.1**: installation and update docs now distinguish the engine CLI (`yotta-memory`) from the skill installer (`yotta-memory-install`), with copy-ready upgrade commands.
+
 > 🆕 **v0.12.0**: reliability baseline — `init` refuses to overwrite an existing store (`--attach` to attach); `forget` moves entries into `.trash/`; `backup create / list / doctor / restore` provides independent-volume backups with SHA-256 manifests.
 
 > 🆕 **v0.10.0**: compression & forgetting — `consolidate` turns old low-use memories on the same topic into one **provenance-carrying periodic summary** that stays searchable (originals archived; `consolidate --undo <batch>` restores everything); near-duplicate **auto-merge with confidence** (`maintain --dedup --apply`); **per-type decay curves** (FACT slow / PREF medium / COMMIT task-like fast / BOUND never decays); batch audit via `consolidate --batches`.
@@ -176,6 +178,13 @@ bash install.sh --dir <path>     # install to the given directory
 bash install.sh --list           # list agents -> default directories
 ```
 
+### Two commands, two jobs
+
+This package exposes two separate commands:
+
+- `yotta-memory` — the engine CLI that reads and writes the memory store. `npx -y @yottameta/yotta-memory` temporarily runs only this CLI; it does **not** install the skill.
+- `yotta-memory-install` — the skill installer. Install or update the skill with `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <agent-name>` (or `--dir <skills-dir>`).
+
 > Method 1 uses the npm registry (npmmirror / npmjs) and does not depend on GitHub; Methods 2/3 use GitHub and may fail without a proxy in China.
 ## Example outputs
 
@@ -222,7 +231,17 @@ Two upgrade paths match the two install paths:
 npm i -g @yottameta/yotta-memory
 ```
 
-**Upgrade the skill**: rerun your install command from the `## Install` section (e.g. `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>` or `bash install.sh --agent <name>`) to overwrite the old skill folder.
+**Upgrade the skill**: rerun the command that matches the way you installed it:
+
+```text
+npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <agent-name>
+npx -y --package @yottameta/yotta-memory yotta-memory-install --dir <skills-dir>
+bash install.sh --agent <agent-name>
+```
+
+If you installed the CLI globally, `npm i -g @yottameta/yotta-memory` updates both the engine and the `yotta-memory-install` command; then run `yotta-memory-install --agent <agent-name>` to refresh the skill.
+
+After updating, verify `yotta-memory --version` and the installed `yotta-memory/SKILL.md` frontmatter `version:`.
 
 **v0.10.0 upgrade notes** — upgrading touches no data: no migration, no reindex, no re-init needed. v0.10.0 does not change the memory file format, the `facts/` / `private/<owner>/<type>/` layout, or the index version, so existing stores open as-is.
 

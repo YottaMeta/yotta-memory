@@ -1,3 +1,11 @@
+## v0.12.1 (2026-09-12)
+
+安装与更新文档修复（无功能变更）：
+
+- 明确区分两个 bin：`yotta-memory` 是引擎 CLI，`yotta-memory-install` 是技能安装器；`npx -y @yottameta/yotta-memory` 只临时运行引擎，不安装技能。
+- README 中英版、USER_GUIDE、SKILL、FAQ 补全安装 / 更新命令：更新技能统一使用 `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>`（或 `--dir <技能目录>`）；全局安装后可运行 `yotta-memory-install`。
+- 修正 `bin/install.js` 头部注释中的错误示例，并新增 `test/docs-install-update.test.js` 防止两个 bin 的文档再次漂移。
+
 ## v0.12.0 (2026-09-12)
 
 **可靠性基线（误删事故整改）**：

@@ -23,6 +23,8 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
+> 🆕 **v0.12.1**：安装与更新文档明确区分引擎 CLI（`yotta-memory`）和技能安装器（`yotta-memory-install`），并补齐可直接复制的升级命令。
+
 > 🆕 **v0.12.0**：可靠性基线——`init` 对已有记忆库默认拒绝覆盖（用 `--attach` 接入）；`forget` 先移入 `.trash/` 并留审计；`backup create / list / doctor / restore` 支持独立盘备份、SHA-256 清单校验和只恢复到新目录。
 
 > 🆕 **v0.10.0**：压缩遗忘——`consolidate` 周期摘要压缩（同主题旧记忆 → 带溯源摘要 + 原文归档，`--undo <batch>` 一键回滚）；近重复自动合并（`maintain --dedup` 置信度分档，`--apply` 批量执行）；分类型衰减（FACT 慢 / PREF 中 / COMMIT 任务类快 / BOUND 不衰减）；`consolidate --batches` 批次审计可查。
@@ -216,6 +218,13 @@ bash install.sh --dir <path>     # 装到指定目录
 bash install.sh --list           # 列出智能体 -> 默认目录
 ```
 
+### 两个命令，各管一件事
+
+这个包提供两个不同的命令：
+
+- `yotta-memory`：读写记忆库的引擎 CLI。`npx -y @yottameta/yotta-memory` 只是临时运行这个 CLI，**不会**安装技能。
+- `yotta-memory-install`：技能安装器。安装或更新技能必须使用 `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <智能体名称>`（或 `--dir <智能体技能目录>`）。
+
 > 方式一走 npm 源（npmmirror / npmjs），不依赖 GitHub；方式二 / 三走 GitHub，国内无代理可能失败。
 ## 命令输出样例
 
@@ -262,7 +271,17 @@ bash install.sh --list           # 列出智能体 -> 默认目录
 npm i -g @yottameta/yotta-memory
 ```
 
-**升级技能**：重跑「安装」节中的命令（如 `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>` 或 `bash install.sh --agent <name>`），覆盖旧版技能文件夹。
+**升级技能**：按你当初的安装方式重跑对应命令，覆盖旧版技能文件夹：
+
+```text
+npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <智能体名称>
+npx -y --package @yottameta/yotta-memory yotta-memory-install --dir <智能体技能目录>
+bash install.sh --agent <智能体名称>
+```
+
+如果你全局安装了 CLI，`npm i -g @yottameta/yotta-memory` 会同时升级引擎和 `yotta-memory-install` 命令；之后运行 `yotta-memory-install --agent <智能体名称>` 即可刷新技能。
+
+升级后请核对 `yotta-memory --version` 和已安装的 `yotta-memory/SKILL.md` frontmatter 中的 `version:`。
 
 **v0.10.0 升级提示**——升级不碰数据：无需迁移 / reindex / 重新 init。v0.10.0 没有改记忆文件格式、`facts/` 与 `private/<owner>/<type>/` 布局，也没有改索引版本，旧库打开即用。
 

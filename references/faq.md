@@ -46,3 +46,10 @@
 
 ## 14. 半衰期 / 归档阈值怎么调？
 `yotta-memory config set maintain_decay_halflife_FACT 1000`（FACT 慢衰减，单位天）、`maintain_decay_halflife_PREF` / `maintain_decay_halflife_COMMIT` 同理；BOUND 固定不衰减。归档阈值：`config set maintain_archived_utility 0.3`、`maintain_archived_age 180`；consolidate 参数 `consolidate_min_age` / `consolidate_min_idle` / `consolidate_max_utility` / `consolidate_min_group` / `consolidate_period`。改完 `config get` 可复查；单次运行也可用 CLI 参数（如 `consolidate --min-age 90`）临时覆盖。
+
+## 15. 两个命令有什么区别？怎么更新？
+
+- `yotta-memory` 是引擎 CLI，负责读写记忆库；`npx -y @yottameta/yotta-memory` 只是临时运行引擎，**不会安装技能**。
+- `yotta-memory-install` 是技能安装器。安装或更新技能用 `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>`；用 `--dir` 安装时传入同一个技能目录。
+- 更新 CLI：`npm i -g @yottameta/yotta-memory`。更新技能：重跑上面的 `--package ... yotta-memory-install` 命令，或全局安装后运行 `yotta-memory-install --agent <name>`。
+- 为什么在 `npx -y @yottameta/yotta-memory` 后面加 `--agent <name>` 没有安装技能？因为 npm 默认运行的是包内同名的 `yotta-memory` 引擎 bin，而不是 `yotta-memory-install`；必须用 `--package` 显式指定安装器 bin。
