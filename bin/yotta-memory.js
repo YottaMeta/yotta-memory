@@ -1815,6 +1815,15 @@ function listBackupFiles(dir, baseDir) {
   walk(dir);
   return out;
 }
+function isAllowedBackupPath(rel) {
+  const normalized = String(rel || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!normalized) return true;
+  const top = normalized.split('/')[0];
+  if (top === 'facts' || top === 'private' || top === '.archive') return true;
+  if (top === 'agents.json' || top === 'index.json' || /^index-\d{4}\.json$/.test(top)) return true;
+  if (top === 'keys') return normalized !== 'keys/cache' && normalized.indexOf('keys/cache/') !== 0;
+  return false;
+}
 function backupCreateCore(opts) {
   opts = opts || {};
   const root = path.resolve(opts.root || userRoot());
@@ -1835,7 +1844,7 @@ function backupCreateCore(opts) {
       errorOnExist: true,
       filter: function (src) {
         const rel = path.relative(root, src).replace(/\\/g, '/');
-        return rel !== 'keys/cache' && rel.indexOf('keys/cache/') !== 0;
+        return isAllowedBackupPath(rel);
       },
     });
     const files = listBackupFiles(target, target);

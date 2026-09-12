@@ -15,7 +15,11 @@ function makeStore() {
   fs.mkdirSync(path.join(root, 'facts'), { recursive: true });
   fs.mkdirSync(path.join(root, 'private', 'codex', 'prefs'), { recursive: true });
   fs.mkdirSync(path.join(root, 'keys', 'cache'), { recursive: true });
+  fs.mkdirSync(path.join(root, '.server'), { recursive: true });
+  fs.mkdirSync(path.join(root, '.trash', '2026-09-12'), { recursive: true });
   fs.writeFileSync(path.join(root, 'keys', 'cache', 'codex.key'), 'owner-key-cache\n', 'utf8');
+  fs.writeFileSync(path.join(root, '.server', 'tokens.json'), '{"tokens":{"codex":{"token":"secret"}}}\n', 'utf8');
+  fs.writeFileSync(path.join(root, '.trash', '2026-09-12', 'old.md'), 'deleted-private\n', 'utf8');
   fs.writeFileSync(path.join(root, 'facts', 'fact.md'), 'fact\n', 'utf8');
   fs.writeFileSync(path.join(root, 'private', 'codex', 'prefs', 'pref.md'), 'pref\n', 'utf8');
   fs.writeFileSync(path.join(root, 'agents.json'), '{"agents":{"codex":{}}}\n', 'utf8');
@@ -31,6 +35,8 @@ test('backup create writes a manifest and doctor verifies it', () => {
   assert.ok(fs.existsSync(path.join(created.path, 'manifest.json')));
   assert.ok(fs.existsSync(path.join(created.path, 'facts', 'fact.md')));
   assert.strictEqual(fs.existsSync(path.join(created.path, 'keys', 'cache', 'codex.key')), false);
+  assert.strictEqual(fs.existsSync(path.join(created.path, '.server', 'tokens.json')), false);
+  assert.strictEqual(fs.existsSync(path.join(created.path, '.trash', '2026-09-12', 'old.md')), false);
 
   const listed = memory.backupListCore({ dir: backupDir });
   assert.strictEqual(listed.error, false);
