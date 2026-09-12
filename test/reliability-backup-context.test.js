@@ -28,6 +28,7 @@ function makeStore() {
     version: 4,
     entries: [{ file: 'facts/2026-09-12-0001.md', type: 'FACT', subject: '测试记忆', statement: '元忆备份提醒测试' }],
   }), 'utf8');
+  fs.writeFileSync(path.join(root, 'agents.json'), '{"agents":{"codex":{}}}\n', 'utf8');
   return root;
 }
 
@@ -96,5 +97,18 @@ test('context warns when the latest backup is older than the configured limit', 
     assert.strictEqual(result.error, false);
     assert.match(result.text, /可靠性提醒/);
     assert.match(result.text, /过期|超过|36/);
+  });
+});
+
+test('context surfaces a critical doctor block', () => {
+  withConfigDir(() => {
+    const root = makeStore();
+    fs.mkdirSync(path.join(root, 'keys'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'keys', 'salt'), 'salt\n', 'utf8');
+    process.env.YOTTA_MEMORY_HOME = root;
+    const result = memory.contextCore({ selfAgent: 'codex' });
+    assert.strictEqual(result.error, false);
+    assert.match(result.text, /可靠性提醒/);
+    assert.match(result.text, /破坏性写入已锁定/);
   });
 });

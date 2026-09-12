@@ -1,3 +1,14 @@
+## v0.12.2 (2026-09-12)
+
+**可靠性收口：开工 doctor + 破坏性操作前事务快照**
+
+- 新增 `yotta-memory doctor [--json]`：只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份；严重异常返回非零退出码，并锁定破坏性写入。
+- 新增 MCP `doctor` 工具；`context` 的开工可靠性提醒改为直接使用 doctor 结果，critical 时明确提示“破坏性写入已锁定”。
+- `maintain --apply`（含 `--dedup --apply`）、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在写入前自动创建新的整库事务快照；未配置独立备份目录、doctor critical 或快照失败时拒绝写入，原记忆保持不变。
+- `--allow-same-volume` 仍只用于 `backup create` 的显式临时备份，不会绕过破坏性写入门；不存在 CLI 级跳过快照开关。
+- 每次事务快照写入 `.archive/audit-<日期>.jsonl`（transaction / operation / snapshot 记录）；`forget` 继续只进 `.trash/`，不重复做整库快照。
+- 新增 `test/reliability-doctor.test.js` 与 `test/reliability-destructive-guard.test.js`；既有 consolidate / maintain 回归补齐临时快照目录。
+
 ## v0.12.1 (2026-09-12)
 
 安装与更新文档修复（无功能变更）：

@@ -23,6 +23,8 @@
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
 
+> 🆕 **v0.12.2**: reliability closure — `yotta-memory doctor` checks the store, key material, index, identity registry and latest backup; `maintain --apply`, `consolidate --apply`, `merge`, `archive` and `--purge` create a transaction snapshot before writing and refuse to proceed if the snapshot fails.
+
 > 🆕 **v0.12.1**: installation and update docs now distinguish the engine CLI (`yotta-memory`) from the skill installer (`yotta-memory-install`), with copy-ready upgrade commands.
 
 > 🆕 **v0.12.0**: reliability baseline — `init` refuses to overwrite an existing store (`--attach` to attach); `forget` moves entries into `.trash/`; `backup create / list / doctor / restore` provides independent-volume backups with SHA-256 manifests.
@@ -43,7 +45,7 @@ Most memory solutions treat "remembering" as a black box: data goes into a datab
 - **Grows smarter (v0.6.0)** — `profile` aggregates a user profile (the engine infers nothing; it only groups verbatim text) + `context` generates a one-shot start-of-work package (identity + profile + recent memory + boundaries + commitments); the SKILL "memory discipline" injects rule layers (type red lines / trigger signals / know the user / bottom lines / host isolation) — rules and mechanisms only, no personality data; zero data out of the box.
 - **Self-learning / self-evolving / self-improving (v0.8.0)** — `recall` semantic search (synonyms / pinyin full + initials / field weighting / fuzzy match, zero-dependency) with utility-score blended ranking; `feedback` explicit usage feedback loop (useful / useless adjusts weight / confidence / feedback_net); `maintain` rule-layer self-organization (unified utility score + age-based auto-archive / forget candidates / dedup, dry-run by default, immutable / BOUND exempt); `distill` psychological-log distillation (statistical summary / topic profile / knowledge map, optional `--model` external model enhancement).
 - **Compression & forgetting (v0.10.0) — memory that never bloats** — `consolidate` summarizes old, low-use memories on the same topic into one **provenance-carrying periodic summary** that stays in active memory (every original file is listed as provenance; originals move to `.archive/`; `--undo <batch>` restores everything); `maintain --dedup` scores near-duplicates and `--apply` auto-merges high-confidence groups; the utility recency component now decays **per type** (FACT slow / PREF medium / COMMIT task-like fast / BOUND never) so durable facts are not wiped by time and stale commitments step aside quickly; every batch is auditable via `consolidate --batches`.
-- **Reliability baseline (v0.12.0)** — `init` refuses to overwrite an existing store and `--attach` attaches instead; `forget` moves entries to `.trash/` with an audit record; `backup create / list / doctor / restore` backs up the store to an independent volume with a SHA-256 manifest and restores only to a new directory.
+- **Reliability baseline (v0.12.0 / v0.12.2)** — `init` refuses to overwrite an existing store and `--attach` attaches instead; `forget` moves entries to `.trash/` with an audit record; `backup create / list / doctor / restore` backs up the store to an independent volume with a SHA-256 manifest and restores only to a new directory; `yotta-memory doctor` checks the store, key material, index, identity registry and latest backup, and destructive writes take a transaction snapshot first.
 - **Private-zone encryption (v0.7.0)** — private files AES-256-GCM envelope encrypted (passphrase-derived master key + recovery key + per-owner encrypted index); `yotta-memory view` user review platform (unlock with passphrase to see all AI memory).
 
 ### Memory types
@@ -267,6 +269,7 @@ Optional post-upgrade self-check: `yotta-memory config get` (confirm `memory_hom
 | `yotta-memory profile [--owner <id>]` | Generate a user profile (aggregates `private/<owner>` verbatim, zero inference, writes `profile.md`; cross-owner denied by default) |
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <text>] [--explain] [--embedding <cmd>]` | Generate the start-of-work package (identity + multi-agent rules + profile + task-focused memory + recent memory + boundaries + commitments; --budget caps chars, --focus adds task relevance, --explain shows included/dropped) |
 | `yotta-memory forget <file>` | Delete a memory (by type-dir path or file name) |
+| `yotta-memory doctor [--json]` | Start-of-work reliability check (store / key material / index / identity / latest backup; critical issues lock destructive writes) |
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | Archive old memory (decay-blended utility + age; immutable / BOUND exempt; private to `.archive/private/<owner>/<type>/`) |
 | `yotta-memory reindex` | Rebuild the index (after manually editing .md) |
 | `yotta-memory export [--out f.json]` / `import <f.json>` | Export / import |
@@ -348,7 +351,7 @@ Register the connection in the agent's MCP config (`url` + two headers):
 }
 ```
 
-Once connected, MCP tools (remember / recall / search / context / forget / archive / reindex / export / import / agent_info) read/write memory and confirm identity; management actions (init / config / token / lan / serve) are not exposed via MCP, and token management is never exposed remotely. MCP `export` / `import` paths are restricted inside the memory root, MCP `distill` does not support `--model`, and MCP never accepts a raw embedding command from remote callers — the local embedding plugin must be configured on the engine host with `config set embedding_cmd`. `X-Agent-Id` must match the token's registered agent; read-partition rules are the same as the CLI (FACT public-readable, PREF / BOUND / COMMIT private).
+Once connected, MCP tools (remember / recall / search / context / doctor / forget / archive / reindex / export / import / agent_info) read/write memory and confirm identity; management actions (init / config / token / lan / serve) are not exposed via MCP, and token management is never exposed remotely. MCP `export` / `import` paths are restricted inside the memory root, MCP `distill` does not support `--model`, and MCP never accepts a raw embedding command from remote callers — the local embedding plugin must be configured on the engine host with `config set embedding_cmd`. `X-Agent-Id` must match the token's registered agent; read-partition rules are the same as the CLI (FACT public-readable, PREF / BOUND / COMMIT private).
 
 ### Location persistence
 

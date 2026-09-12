@@ -11,6 +11,7 @@
 3.6 自我学习 / 自我进化 / 自我提升（v0.8.0）
 3.7 查看平台分页与检索优化（v0.8.1）
 3.8 可靠性基线：防覆盖、回收区与备份（v0.12.0）
+3.9 开工 doctor 与事务快照（v0.12.2）
 4. 便携记忆盘 · 记忆引擎主机篇（Linux / Windows）
 5. 智能体接入篇（本机 / 局域网其它主机）
 6. CLI 命令速查
@@ -32,7 +33,7 @@
 - **便携记忆盘**：记忆装在固定主机上，本机与局域网其它主机共享同一份记忆（见第 4 / 5 篇）。
 - **越用越懂（v0.6.0）**：AI 按「记忆守则」主动捕获信号，`profile` 聚合画像、`context` 开工注入——用得越久越懂你。
 - **自我学习 / 自我进化 / 自我提升（v0.8.0 + v0.9.0）**：`recall` 语义检索（同义词 / 拼音 / 字段加权 / 模糊，v0.9.0 可选本地 embedding 插件）+ `feedback` 使用反馈闭环 + `maintain` 规则层自组织 + `distill` 心理日志蒸馏——记忆系统会自己整理、提炼、演化。
-- **可靠性基线（v0.12.0）**：`init` 对已有库拒绝覆盖；`forget` 进回收区；`backup volumes/setup/status/ensure-daily/schedule/drill` 在用户确认真实独立卷后默认每日自动备份，并提供校验、恢复与恢复演练。
+- **可靠性基线（v0.12.0 / v0.12.2）**：`init` 对已有库拒绝覆盖；`forget` 进回收区；`backup volumes/setup/status/ensure-daily/schedule/drill` 在用户确认真实独立卷后默认每日自动备份，并提供校验、恢复与恢复演练；`doctor` 开工检查风险，破坏性操作写入前自动创建事务快照。
 
 ## 2. 安装（CLI + 技能）
 
@@ -228,6 +229,13 @@ statement: 本周完成发布
 - `yotta-memory backup status` 查看目录、计划、上次成功、最近失败与调度状态；`backup drill` 恢复到隔离副本，校验 manifest / 索引并解密一条测试私密。
 - 备份目录与记忆库同卷时默认拒绝；这是一条防线，不替代独立盘备份。
 
+## 3.9 开工 doctor 与事务快照（v0.12.2）
+
+- `yotta-memory doctor`：只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份；加 `--json` 可输出机器可读结果。
+- 严重异常（根目录缺失、密钥库缺文件、备份目录同卷）会返回非零退出码；此时 `context` 也会显示“破坏性写入已锁定”。
+- `maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在写入前自动创建新的整库事务快照，并在 `.archive/audit-<日期>.jsonl` 记录 transaction / operation / snapshot。
+- 未配置独立备份目录、doctor critical 或快照失败时，命令直接拒绝执行，原记忆保持不变；`forget` 仍只移入 `.trash/`，不重复创建整库快照。
+
 ## 4. 便携记忆盘 · 记忆引擎主机篇
 
 场景：记忆放在一台主机上（Linux / Windows 均可），本机直接 CLI 读写；局域网内其它主机上的 AI 智能体经 MCP 远程接入。引擎主机只需装 CLI，不需要装任何 AI 智能体。
@@ -365,6 +373,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（零推断，写 `profile.md`）|
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 开工上下文包（身份+铁律+画像+任务相关记忆+近期记忆+边界+承诺；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆 |
+| `yotta-memory doctor [--json]` | 开工可靠性检查（v0.12.2：根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；私密入 `.archive/private/<owner>/<type>/`）|
 | `yotta-memory reindex` | 重建索引 |
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |

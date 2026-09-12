@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
-description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删
-version: 0.12.1
+description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照
+version: 0.12.2
 license: MIT
 ---
 
@@ -20,6 +20,7 @@ license: MIT
 - **召回质量与上下文选择（v0.9.0）**：`recall` 支持可选本地 embedding 插件（`--embedding <command>` / `config set embedding_cmd <command>`）；`context --focus <关键词>` 生成任务感知上下文；`--explain` 输出选择 trace，无插件时自动降级为词法检索。
 - **压缩遗忘（v0.10.0）**：记忆库长期可用不膨胀——`consolidate` 周期摘要压缩（把超龄 + 低效用 + 长期闲置的同主题旧记忆归纳成**带溯源**的摘要，原文整体进 `.archive/`，`--undo` 一键回滚）；`maintain --dedup` 近重复**自动合并**（置信度分档，`--apply` 批量执行高置信组）；效用分时效改为**分类型衰减**（FACT 慢 / PREF 中 / COMMIT 任务类快 / BOUND 不衰减）；`consolidate --batches` 批次审计可查。
 - **可靠性基线（v0.12.0）**：`init` 对非空记忆库默认拒绝覆盖（`--attach` 接入现有库）；`forget` 先移入 `.trash/` 并写审计；新增 `backup volumes / setup / status / ensure-daily / schedule / drill`（用户确认真实独立卷后默认每日自动备份）与 `backup create / list / doctor / restore`。
+- **可靠性收口（v0.12.2）**：新增 `yotta-memory doctor` 开工检查（根目录 / 密钥库 / 索引 / 身份 / 最近备份）；`maintain --apply`、`consolidate --apply`、`merge`、`archive`、`--purge` 在写入前自动创建事务快照，快照失败或严重检查异常时拒绝写入。
 
 ## 安装 / 更新（两个 bin）
 
@@ -42,7 +43,7 @@ AI 更新流程：先运行 `yotta-memory --version` 记录当前引擎版本；
 3. **收工归档**：写会话小结（COMMIT / 笔记）；旧记录定期 `yotta-memory maintain --apply`（单条低效用归档）+ 记忆多了周期 `yotta-memory consolidate --apply`（同主题压缩成带溯源摘要，`--undo` 可回滚）。
 4. **多智能体纪律**：FACT 写入公共区，PREF / BOUND / COMMIT 只写本智能体私密区；不读取其他智能体私密区。**一切读写一律走 `yotta-memory` CLI / MCP 工具**——禁止用 shell（`Get-ChildItem` / `Get-Content` / `cat` / `ls` / `type` 等）直接读或改记忆库目录下的 `.md` / `index.json` / `tokens.json` / `agents.json` / `grants.json` 等文件，否则会绕过权限边界、读到别的智能体私密内容。
 
-## 可靠性基线（v0.12.0）
+## 可靠性基线（v0.12.0 / v0.12.2）
 
 **目的**：防止初始化覆盖、删除不可逆、备份缺失再次造成记忆库丢失。
 
@@ -110,6 +111,23 @@ yotta-memory backup drill [<备份ID>]
 - 备份目录与记忆库同卷时默认拒绝；同卷只能作为临时测试，不视为可用备份。
 - 恢复目标非空时拒绝覆盖；恢复后先校验，再决定是否替换正式记忆库。
 - 备份是可靠性基线的一部分；没有备份时，不得执行永久删除或覆盖初始化。
+
+### 5. 开工 doctor 与事务快照
+
+```bash
+# 开工检查：只读，不修改记忆库
+yotta-memory doctor
+
+# 机器可读输出
+yotta-memory doctor --json
+```
+
+- `doctor` 检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份。
+- 严重异常（根目录缺失、密钥库缺文件、备份目录同卷）会返回非零退出码，并锁定破坏性写入。
+- `maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在执行前自动创建事务快照；未配置独立备份目录或快照失败时拒绝写入，原记忆保持不变。
+- 不提供 CLI 跳过快照的开关；`--allow-same-volume` 只用于 `backup create` 的显式临时备份，不会绕过破坏性写入门。
+- `context` 会展示 doctor 的 warning / critical；critical 时明确提示“破坏性写入已锁定”。
+- `forget` 仍只移入 `.trash/`，不重复创建整库快照。
 
 
 ## 记忆守则（Memory Doctrine，v0.6.0）
@@ -245,6 +263,7 @@ yotta-memory backup drill [<备份ID>]
 | `yotta-memory forget <文件>` | 移入 `.trash/<时间>/` 回收区并写审计（v0.12.0；不再物理删除）|
 | `yotta-memory backup volumes / setup --dir <目录> / status / ensure-daily / schedule enable|disable|status` | 每日自动备份（v0.12.0；只展示实际枚举的异卷、用户确认一次位置后默认每日执行，Windows Task Scheduler / systemd timer / launchd 调度，`serve` 补跑）|
 | `yotta-memory backup create / list / doctor / restore <ID> --to <目录> / drill [<ID>]` | 备份、恢复与恢复演练（v0.12.0；独立盘校验、SHA-256 清单、排除 `keys/cache`、恢复默认只写新目录；drill 验证 manifest / 索引 / 测试私密解密）|
+| `yotta-memory doctor [--json]` | 开工可靠性检查（v0.12.2；根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）|
 | `yotta-memory archive [--days 180] [--threshold 0.35]` | 归档旧记忆（v0.8.0 统一效用分 + v0.10.0 分类型衰减；immutable / BOUND 豁免；私密归档入 `.archive/private/<owner>/<type>/`；阈值默认读 config `maintain_archived_utility`）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |

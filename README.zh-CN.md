@@ -23,6 +23,8 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
+> 🆕 **v0.12.2**：可靠性收口——新增 `yotta-memory doctor` 开工检查；`maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在写入前自动创建事务快照，快照失败或严重异常时拒绝写入。
+
 > 🆕 **v0.12.1**：安装与更新文档明确区分引擎 CLI（`yotta-memory`）和技能安装器（`yotta-memory-install`），并补齐可直接复制的升级命令。
 
 > 🆕 **v0.12.0**：可靠性基线——`init` 对已有记忆库默认拒绝覆盖（用 `--attach` 接入）；`forget` 先移入 `.trash/` 并留审计；`backup create / list / doctor / restore` 支持独立盘备份、SHA-256 清单校验和只恢复到新目录。
@@ -47,7 +49,7 @@
 - **越用越懂（v0.6.0）**：`profile` 聚合用户画像（引擎零推断，只归组原文）+ `context` 一键生成开工上下文包（身份 + 画像 + 近期记忆 + 边界 + 承诺）；SKILL「记忆守则」注入规则层（类型红线 / 触发信号 / 了解用户 / 底线 / 宿主隔离），只注入规则与机制、不注入人格数据，出厂零数据。
 - **自我学习 / 自我进化 / 自我提升（v0.8.0）**：`recall` 语义检索（同义词 / 拼音全拼+首字母 / 字段加权 / 模糊匹配，零依赖）+ 效用分融合排序；`feedback` 显式使用反馈闭环（useful / useless 调整 weight / confidence / feedback_net，越用越懂）；`maintain` 规则层自组织（统一效用分 + 年龄自动归档 / 遗忘候选 / 去重，默认 dry-run，immutable / BOUND 豁免）；`distill` 心理日志蒸馏（统计摘要 / 主题画像 / 知识地图，可选 `--model` 外部模型增强）。
 - **压缩遗忘（v0.10.0）——记忆越用越精简**：`consolidate` 周期摘要压缩——把超龄 + 长期闲置 + 低效用的同主题旧记忆归纳成 **1 条带溯源的摘要**（每条原文路径都写在正文里）留在活跃区，原文整体进 `.archive/`，`--undo <batch>` 一键回滚；`maintain --dedup` 给近重复打分（≥0.85 高置信自动合并 / 0.65–0.85 建议手动），`--apply` 批量合并同归属重复组；时效分量改**分类型衰减**（FACT 慢 / PREF 中 / COMMIT 任务类快 / BOUND 永不衰减）——持久事实不被时间抹掉，过期承诺快速让位；每一步写批次审计（`--batches` 可查）。
-- **可靠性基线（v0.12.0）**：`init` 遇到已有记忆库默认拒绝覆盖（`--attach` 用于接入）；`forget` 先移入 `.trash/` 并写删除审计；`backup create / list / doctor / restore` 支持独立盘备份、SHA-256 清单校验、恢复默认只写新目录，避免二次覆盖。
+- **可靠性基线（v0.12.0 / v0.12.2）**：`init` 遇到已有记忆库默认拒绝覆盖（`--attach` 用于接入）；`forget` 先移入 `.trash/` 并写删除审计；`backup create / list / doctor / restore` 支持独立盘备份、SHA-256 清单校验、恢复默认只写新目录；`yotta-memory doctor` 检查根目录 / 密钥库 / 索引 / 身份 / 最近备份，破坏性操作在写入前自动创建事务快照。
 - **私密区加密（v0.7.0）**：私密区文件 AES-256-GCM 信封加密（口令派生主密钥 + 恢复钥匙 + 每 owner 加密索引）；`yotta-memory view` 用户查看平台（口令解锁看全部 AI 记忆）；`migrate` 明文→密文迁移；`--no-encrypt` 可降级。跨 AI 私密从「纪律层隔离」升级为「机制层不可解」。
 - **便携记忆盘**：记忆库本身就是记忆引擎——装在硬盘或主机上随盘走，局域网内其它主机上的智能体可远程读写；本地零进程与局域网常驻两种模式可并存，插上硬盘即恢复全部记忆。
 
@@ -309,6 +311,7 @@ bash install.sh --agent <智能体名称>
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 生成开工上下文包（身份 + 多智能体铁律 + 画像 + 任务相关记忆 + 近期记忆 + 边界 + 承诺；--budget 字符预算；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆（按类型目录路径或文件名）|
+| `yotta-memory doctor [--json]` | 开工可靠性检查（根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；私密入 `.archive/private/<owner>/<type>/`）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
@@ -390,7 +393,7 @@ yotta-memory recall --type FACT --limit 10
 }
 ```
 
-连接后可通过 MCP tools（remember / recall / search / context / forget / archive / reindex / export / import / agent_info）读写记忆与确认身份；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露；MCP export/import 路径限记忆库内、distill 不支持 `--model`，MCP 也不接受远端传入 embedding 命令——embedding 插件只能由引擎主机本地 `config set embedding_cmd` 配置。`X-Agent-Id` 必须与 token 登记的智能体一致；读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
+连接后可通过 MCP tools（remember / recall / search / context / doctor / forget / archive / reindex / export / import / agent_info）读写记忆与确认身份；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露；MCP export/import 路径限记忆库内、distill 不支持 `--model`，MCP 也不接受远端传入 embedding 命令——embedding 插件只能由引擎主机本地 `config set embedding_cmd` 配置。`X-Agent-Id` 必须与 token 登记的智能体一致；读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
 
 ### 位置持久化
 

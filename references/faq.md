@@ -30,13 +30,13 @@
 开工运行 `yotta-memory context`（身份 + 画像 + 近期记忆 + 边界 + 承诺），需要细节再 `recall <关键词>`。
 
 ## 10. 备份与迁移？
-优先使用 `backup create --dir <独立盘目录>` 创建整库备份；`backup list` 查看，`backup doctor` 校验 SHA-256，`backup restore <id> --to <新目录>` 恢复到新目录。备份默认拒绝与记忆库同卷。`export --out 文件.json` 仍可用于跨工具迁移；公共 FACT 是明文文件也可直接 git 备份。
+优先使用 `backup create --dir <独立盘目录>` 创建整库备份；`backup list` 查看，`backup doctor` 校验 SHA-256，`backup restore <id> --to <新目录>` 恢复到新目录。备份默认拒绝与记忆库同卷。`export --out 文件.json` 仍可用于跨工具迁移；公共 FACT 是明文文件也可直接 git 备份。v0.12.2 起，破坏性操作也会在写入前自动创建事务快照。
 
 ## 13. init 会不会覆盖已有记忆？
 不会。v0.12.0 起 `init` 遇到已有记忆库默认拒绝；接入现有库用 `init --attach`。`--force` 在完整备份机制通过前也会明确拒绝，防止再次清空记忆。
 
 ## 11. 记忆太多 / 越来越膨胀怎么办？
-两步走：`yotta-memory maintain --apply` 归档单条低效用旧记忆；同主题积累了很多「又老又不常用」的旧条目时，用 `yotta-memory consolidate`（先预览）→ `consolidate --apply` 把它们归纳成 1 条带溯源的周期摘要并归档原文。也可以先 `config set maintain_decay_halflife_COMMIT 90` 等让任务类承诺更快让位。
+两步走：`yotta-memory maintain --apply` 归档单条低效用旧记忆；同主题积累了很多「又老又不常用」的旧条目时，用 `yotta-memory consolidate`（先预览）→ `consolidate --apply` 把它们归纳成 1 条带溯源的周期摘要并归档原文。v0.12.2 起这些写操作要求先通过 doctor，并会自动创建事务快照；没有独立备份目录时会拒绝执行。也可以先 `config set maintain_decay_halflife_COMMIT 90` 等让任务类承诺更快让位。
 
 ## 12. consolidate 和 distill 有什么区别？
 `distill` 是全库当前快照的统计报告（不淘汰任何记忆，产物是报告）；`consolidate` 是生命周期压缩——只针对超龄 + 长期闲置 + 低效用的旧记忆，生成可检索的周期摘要、把原文归档，让记忆库变小且主题不丢。两者互补：想「看看我记了什么」用 distill；想「给记忆库瘦身」用 consolidate。
@@ -53,3 +53,6 @@
 - `yotta-memory-install` 是技能安装器。安装或更新技能用 `npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <name>`；用 `--dir` 安装时传入同一个技能目录。
 - 更新 CLI：`npm i -g @yottameta/yotta-memory`。更新技能：重跑上面的 `--package ... yotta-memory-install` 命令，或全局安装后运行 `yotta-memory-install --agent <name>`。
 - 为什么在 `npx -y @yottameta/yotta-memory` 后面加 `--agent <name>` 没有安装技能？因为 npm 默认运行的是包内同名的 `yotta-memory` 引擎 bin，而不是 `yotta-memory-install`；必须用 `--package` 显式指定安装器 bin。
+
+## 16. 开工时怎么知道记忆库是否可靠？
+运行 `yotta-memory doctor`。它只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份；`--json` 可输出机器可读结果。严重异常时会锁定 `maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 等破坏性写入，`context` 也会在开工提醒中显示“破坏性写入已锁定”。先按 doctor 提示修复，再继续写操作。
