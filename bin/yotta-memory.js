@@ -22,7 +22,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.11.0';
+const VERSION = '0.12.0';
 // MCP 协议（2026-07-28 无状态 + 2025-11-25 legacy 握手，dual-era）
 const MCP_PROTOCOL_MODERN = '2026-07-28';
 const MCP_PROTOCOL_LEGACY = '2025-11-25';
@@ -1102,10 +1102,25 @@ function verifyWrittenReadable(root, rel, subj, agent) {
 }
 
 // ---- 命令 core（CLI 与 MCP 共用；返回 { error, exitCode, text }，不 process.exit）----
+function isExistingStore(root) {
+  return ['facts', 'private', 'keys', 'agents.json', 'index.json'].some(function (name) {
+    return fs.existsSync(path.join(root, name));
+  });
+}
 function initCore(opts) {
   opts = opts || {};
   const root = opts.dir ? path.resolve(String(opts.dir)) : (opts.project ? projectRoot() : userRoot());
-  const fresh = !fs.existsSync(path.join(root, PUBLIC_DIR)) && !fs.existsSync(path.join(root, PRIVATE_DIR)) && !fs.existsSync(path.join(root, INDEX_FILE));
+  const existing = isExistingStore(root);
+  if (existing && opts.attach) {
+    return { error: false, text: '已接入现有记忆库: ' + root };
+  }
+  if (existing && opts.force) {
+    return { error: true, text: '拒绝: --force 重新初始化必须先做完整备份；当前版本尚未实现 backup，不能覆盖现有记忆库。请保留现场并先完成备份机制。' };
+  }
+  if (existing) {
+    return { error: true, text: '拒绝: 目标已是现有记忆库: ' + root + '。如只是接入，请使用 init --attach；不要执行覆盖初始化。' };
+  }
+  const fresh = true;
   ensureInit(root);
   const wantEncrypt = opts.encrypt || (!opts.noEncrypt && fresh);
   if (wantEncrypt) {
@@ -1117,6 +1132,152 @@ function initCore(opts) {
     return { error: false, text: '已初始化加密记忆库: ' + root + '\n[恢复钥匙]（务必离线保存，仅此一次，泄露=可解全部私密）: ' + r.rk.toString('base64') };
   }
   return { error: false, text: '已初始化记忆库: ' + root + (isEncrypted(root) ? '（已启用加密）' : '（明文；建议 init --encrypt 或 migrate 启用加密）') };
+}
+
+function backupDestination(opts) {
+  opts = opts || {};
+  const configured = opts.dir || process.env.YOTTA_MEMORY_BACKUP_DIR || loadConfig().backup_dir || '';
+  return configured ? path.resolve(String(configured)) : null;
+}
+function sameVolume(left, right) {
+  return path.parse(path.resolve(left)).root.toLowerCase() === path.parse(path.resolve(right)).root.toLowerCase();
+}
+function sha256File(file) {
+  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
+function listBackupFiles(dir, baseDir) {
+  const out = [];
+  const walk = function (current) {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile()) {
+        out.push({
+          path: path.relative(baseDir, full).replace(/\\/g, '/'),
+          size: fs.statSync(full).size,
+          sha256: sha256File(full),
+        });
+      }
+    }
+  };
+  walk(dir);
+  return out;
+}
+function backupCreateCore(opts) {
+  opts = opts || {};
+  const root = path.resolve(opts.root || userRoot());
+  if (!isExistingStore(root)) return { error: true, text: '记忆库不存在或未初始化: ' + root };
+  const destBase = backupDestination(opts);
+  if (!destBase) return { error: true, text: '未配置备份目录。请用 --dir <目录>、YOTTA_MEMORY_BACKUP_DIR 或 config set backup_dir <目录>。' };
+  if (!opts.allowSameVolume && sameVolume(root, destBase)) {
+    return { error: true, text: '拒绝: 备份目录与记忆库在同一卷。请把备份放到独立盘或独立卷。' };
+  }
+  const id = os.hostname() + '-' + new Date().toISOString().replace(/[:.]/g, '-') + '-' + crypto.randomBytes(3).toString('hex');
+  const target = path.join(destBase, id);
+  try {
+    fs.mkdirSync(destBase, { recursive: true });
+    fs.cpSync(root, target, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      filter: function (src) {
+        const rel = path.relative(root, src).replace(/\\/g, '/');
+        return rel !== 'keys/cache' && rel.indexOf('keys/cache/') !== 0;
+      },
+    });
+    const files = listBackupFiles(target, target);
+    const manifest = {
+      id: id,
+      version: VERSION,
+      created: new Date().toISOString(),
+      source: root,
+      files: files,
+    };
+    fs.writeFileSync(path.join(target, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+    return { error: false, id: id, path: target, manifest: manifest, text: '已创建备份: ' + target + '（' + files.length + ' 文件）' };
+  } catch (error) {
+    return { error: true, text: '备份失败: ' + error.message };
+  }
+}
+function backupListCore(opts) {
+  opts = opts || {};
+  const destBase = backupDestination(opts);
+  if (!destBase) return { error: true, backups: [], text: '未配置备份目录。请用 --dir <目录>、YOTTA_MEMORY_BACKUP_DIR 或 config set backup_dir <目录>。' };
+  if (!fs.existsSync(destBase)) return { error: false, backups: [], text: '（无备份）' };
+  const backups = [];
+  for (const entry of fs.readdirSync(destBase, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const full = path.join(destBase, entry.name);
+    let manifest = null;
+    try { manifest = JSON.parse(fs.readFileSync(path.join(full, 'manifest.json'), 'utf8')); } catch (_) {}
+    backups.push({
+      id: entry.name,
+      path: full,
+      created: manifest && manifest.created ? manifest.created : '',
+      files: manifest && Array.isArray(manifest.files) ? manifest.files.length : null,
+      manifest: manifest,
+    });
+  }
+  backups.sort(function (a, b) { return String(b.id).localeCompare(String(a.id)); });
+  const lines = backups.length
+    ? backups.map(function (b) { return '- ' + b.id + '  ' + (b.created || '?') + '  ' + (b.files === null ? 'manifest 缺失' : b.files + ' 文件'); })
+    : ['（无备份）'];
+  return { error: false, backups: backups, text: lines.join('\n') };
+}
+function backupDoctorCore(opts) {
+  opts = opts || {};
+  const listed = backupListCore(opts);
+  if (listed.error) return { error: true, ok: false, text: listed.text };
+  const id = opts.id || (listed.backups[0] && listed.backups[0].id);
+  if (!id) return { error: false, ok: false, text: '没有可检查的备份。' };
+  const backup = listed.backups.find(function (item) { return item.id === id; });
+  if (!backup) return { error: true, ok: false, text: '未找到备份: ' + id };
+  if (!backup.manifest || !Array.isArray(backup.manifest.files)) {
+    return { error: false, ok: false, text: '备份 manifest 缺失或损坏: ' + id };
+  }
+  const bad = [];
+  for (const file of backup.manifest.files) {
+    if (!isSafeRelativePathForBackup(file.path)) { bad.push(file.path + '（路径不安全）'); continue; }
+    const full = path.join(backup.path, file.path);
+    if (!fs.existsSync(full)) { bad.push(file.path + '（缺失）'); continue; }
+    const stat = fs.statSync(full);
+    if (stat.size !== file.size) { bad.push(file.path + '（大小不符）'); continue; }
+    if (sha256File(full) !== file.sha256) bad.push(file.path + '（哈希不符）');
+  }
+  return {
+    error: false,
+    ok: bad.length === 0,
+    text: bad.length ? '备份体检失败: ' + id + '\n' + bad.join('\n') : '备份体检通过: ' + id + '（' + backup.manifest.files.length + ' 文件）',
+  };
+}
+function isSafeRelativePathForBackup(value) {
+  if (typeof value !== 'string' || value === '' || path.isAbsolute(value)) return false;
+  return !value.split(/[\\/]+/).includes('..');
+}
+function backupRestoreCore(id, opts) {
+  opts = opts || {};
+  if (!id) return { error: true, text: '请指定备份 ID: yotta-memory backup restore <id> --to <目录>' };
+  const destBase = backupDestination(opts);
+  if (!destBase) return { error: true, text: '未配置备份目录。请用 --dir <目录> 或 config set backup_dir <目录>。' };
+  const source = path.join(destBase, id);
+  if (!fs.existsSync(path.join(source, 'manifest.json'))) return { error: true, text: '备份不存在或 manifest 缺失: ' + id };
+  if (!opts.to) return { error: true, text: '拒绝恢复到未指定位置。请使用 --to <新目录>；默认不覆盖正在使用的记忆库。' };
+  const target = path.resolve(String(opts.to));
+  if (fs.existsSync(target) && fs.readdirSync(target).length > 0) {
+    return { error: true, text: '恢复目标非空，拒绝覆盖: ' + target };
+  }
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.cpSync(source, target, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      filter: function (src) { return path.basename(src) !== 'manifest.json'; },
+    });
+    return { error: false, path: target, text: '已恢复到: ' + target };
+  } catch (error) {
+    return { error: true, text: '恢复失败: ' + error.message };
+  }
 }
 function rememberCore(type, subject, statement, opts) {
   opts = opts || {};
@@ -1400,6 +1561,11 @@ function resolveMemoryFile(root, ref) {
   return null;
 }
 function relOf(root, fp) { return path.relative(root, fp).replace(/\\/g, '/'); }
+function appendTrashAudit(root, record) {
+  const dir = path.join(root, '.trash');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.appendFileSync(path.join(dir, 'audit-' + today() + '.jsonl'), JSON.stringify(record) + '\n', 'utf8');
+}
 function forgetCore(fileRef, opts) {
   opts = opts || {};
   const selfAgent = opts.selfAgent || currentAgent();
@@ -1418,9 +1584,30 @@ function forgetCore(fileRef, opts) {
       return { error: true, text: '拒绝: 不能删除其它智能体 ' + owner + ' 的私密记忆（当前身份 ' + (selfAgent || '未声明') + '）。请用 YOTTA_AGENT_ID 声明自己的身份，或加 --unsafe（用户显式授权）。' };
     }
   }
-  fs.unlinkSync(target);
+  const trashFile = path.join(
+    targetRoot,
+    '.trash',
+    new Date().toISOString().replace(/[:.]/g, '-'),
+    targetRel,
+  );
+  try {
+    fs.mkdirSync(path.dirname(trashFile), { recursive: true });
+    fs.renameSync(target, trashFile);
+  } catch (error) {
+    return { error: true, text: '召回区写入失败，原记忆未删除: ' + error.message };
+  }
   if (targetRoot) removeIndexEntry(targetRoot, targetRel);
-  return { error: false, text: '已删除: ' + target };
+  if (targetRoot) {
+    appendTrashAudit(targetRoot, {
+      ts: new Date().toISOString(),
+      action: 'forget',
+      file: targetRel,
+      trash: relOf(targetRoot, trashFile),
+      owner: ownerFromPrivatePath(targetRoot, target),
+      selfAgent,
+    });
+  }
+  return { error: false, text: '已移入回收区: ' + trashFile };
 }
 function archiveCore(opts) {
   opts = opts || {};
@@ -2199,7 +2386,13 @@ const VIEW_HTML = "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\
 // ---- 命令包装（CLI 入口）----
 async function cmdInit(opts) {
   const root = opts.dir ? path.resolve(String(opts.dir)) : (opts.project ? projectRoot() : userRoot());
-  const fresh = !fs.existsSync(path.join(root, PUBLIC_DIR)) && !fs.existsSync(path.join(root, PRIVATE_DIR)) && !fs.existsSync(path.join(root, INDEX_FILE));
+  if (isExistingStore(root) && !opts.attach) {
+    const blocked = initCore(Object.assign({}, opts));
+    console.log(blocked.text);
+    if (blocked.error) process.exit(2);
+    return;
+  }
+  const fresh = !isExistingStore(root);
   const wantEncrypt = opts.encrypt || (!opts.noEncrypt && fresh);
   let o = Object.assign({}, opts);
   if (wantEncrypt && !o.password && !process.env.YOTTA_MEMORY_PASS) {
@@ -2263,6 +2456,26 @@ function cmdForget(fileRef) {
 function cmdArchive(opts) {
   const r = archiveCore(opts);
   console.log(r.text);
+}
+function cmdBackupCreate(opts) {
+  const r = backupCreateCore(opts);
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+function cmdBackupList(opts) {
+  const r = backupListCore(opts);
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+function cmdBackupDoctor(opts) {
+  const r = backupDoctorCore(opts);
+  console.log(r.text);
+  if (r.error || !r.ok) process.exit(2);
+}
+function cmdBackupRestore(id, opts) {
+  const r = backupRestoreCore(id, opts);
+  console.log(r.text);
+  if (r.error) process.exit(2);
 }
 function cmdReindex() {
   const roots = memoryRoots();
@@ -2797,11 +3010,12 @@ function cmdContext(opts) {
 // v0.10.0：maintain_* / consolidate_* 数值键纳入 config set/get（此前只支持 3 个键但文档已写可调）
 function isNumericConfigKey(key) { return /^(maintain_|consolidate_)/.test(key); }
 function cmdConfigSet(key, value) {
-  const known = ['memory_home', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'];
-  if (known.indexOf(key) === -1) { console.error('未知配置项: ' + key + '（可用: memory_home / embedding_cmd / embedding_timeout / maintain_* / consolidate_*）'); process.exit(2); }
+  const known = ['memory_home', 'embedding_cmd', 'embedding_timeout', 'backup_dir', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'];
+  if (known.indexOf(key) === -1) { console.error('未知配置项: ' + key + '（可用: memory_home / backup_dir / embedding_cmd / embedding_timeout / maintain_* / consolidate_*）'); process.exit(2); }
   if (value === undefined || value === null || value === '') { console.error('缺少值: config set ' + key + ' <值>'); process.exit(2); }
   const cfg = loadConfig();
   if (key === 'memory_home') cfg.memory_home = value;
+  else if (key === 'backup_dir') cfg.backup_dir = value;
   else if (key === 'embedding_cmd') cfg.embedding_cmd = value;
   else if (key === 'embedding_timeout') cfg.embedding_timeout = parseInt(value, 10) || 3000;
   else if (isNumericConfigKey(key)) {
@@ -2810,16 +3024,17 @@ function cmdConfigSet(key, value) {
     cfg[key] = n;
   }
   saveConfig(cfg);
-  console.log('已写入配置: ' + key + ' = ' + (key === 'memory_home' || key === 'embedding_cmd' ? value : cfg[key]));
+  console.log('已写入配置: ' + key + ' = ' + (key === 'memory_home' || key === 'backup_dir' || key === 'embedding_cmd' ? value : cfg[key]));
 }
 function cmdConfigGet() {
   const cfg = loadConfig();
   console.log('memory_home: ' + (cfg.memory_home || '(未设置，默认 ~/.yottamemory)'));
+  console.log('backup_dir: ' + (cfg.backup_dir || '(未设置)'));
   console.log('embedding_cmd: ' + (cfg.embedding_cmd || '(未设置)'));
   console.log('embedding_timeout: ' + (cfg.embedding_timeout || 3000));
-  const keys = ['memory_home', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'];
+  const keys = ['memory_home', 'backup_dir', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'];
   for (const k of keys) {
-    if (k === 'memory_home' || k === 'embedding_cmd' || k === 'embedding_timeout') continue;
+    if (k === 'memory_home' || k === 'backup_dir' || k === 'embedding_cmd' || k === 'embedding_timeout') continue;
     if (cfg[k] !== undefined) console.log(k + ': ' + cfg[k]);
   }
   console.log('当前生效用户级位置: ' + userRoot());
@@ -4046,11 +4261,12 @@ function usage() {
   const banner = 'yotta-memory v' + VERSION + ' — 元忆：有权限边界的文件式智能体记忆';
   const sections = [
     ['核心记忆', [
-      ['init', '初始化记忆库（新建默认加密：需主口令 + 恢复钥匙；--no-encrypt 降级明文）'],
+      ['init', '初始化记忆库（新建默认加密：需主口令 + 恢复钥匙；--attach 接入已有库；--no-encrypt 降级明文）'],
       ['remember', '写入记忆（--source 来源；--weight 权重；--verify 写后回读校验；--no-hint 关启发）'],
       ['recall', '检索记忆（--type/--limit/--agent/--owner/--all/--unsafe）'],
       ['forget', '删除一条记忆'],
       ['archive', '归档（--days/--threshold 盖棺分+年龄）'],
+      ['backup', '备份记忆库（create / list / doctor / restore <id> --to <目录>）'],
       ['maintain', '记忆自组织（归档/遗忘候选/去重/合并；默认 dry-run；--dedup 查重+置信度，--dedup --apply 自动合并高置信组）'],
       ['consolidate', '周期摘要压缩（默认 dry-run；--apply 执行；--undo <batch> 回滚；--batches 查批次；候选=超龄+闲置+低效用，immutable/BOUND 豁免）'],
       ['distill', '心理日志蒸馏（统计摘要/主题画像/知识地图；--model 可选外部模型）'],
@@ -4072,7 +4288,7 @@ function usage() {
       ['view', '启动用户查看平台（--port/--host；口令解锁浏览/授权/吊销 AI）'],
       ['reset-password', '重设主口令（忘口令用恢复钥匙）'],
       ['key', '管理 AI 私密读取授权缓存（list / authorize <id> / revoke <id>）'],
-      ['config', '查看/设置配置（get；set memory_home <目录> / embedding_cmd <命令> / embedding_timeout <毫秒> / maintain_* 阈值与半衰 / consolidate_* 参数）']
+      ['config', '查看/设置配置（get；set memory_home <目录> / backup_dir <目录> / embedding_cmd <命令> / embedding_timeout <毫秒> / maintain_* 阈值与半衰 / consolidate_* 参数）']
     ]],
     ['平台与服务', [
       ['serve', '启动 MCP 记忆引擎（streamable HTTP；--stdio 本地零进程）'],
@@ -4100,7 +4316,7 @@ async function main() {
   if (!args.length) { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id']);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--version' || a === '-v') { console.log(VERSION); return; }
@@ -4112,6 +4328,8 @@ async function main() {
     else if (a === '--stdio') opts.stdio = true;
     else if (a === '--onstart') opts.onstart = true;
     else if (a === '--force') opts.force = true;
+    else if (a === '--attach') opts.attach = true;
+    else if (a === '--allow-same-volume') opts.allowSameVolume = true;
     else if (a === '--verify') opts.verify = true;
     else if (a === '--no-hint') opts.noHint = true;
     else if (a === '--encrypt') opts.encrypt = true;
@@ -4160,6 +4378,8 @@ async function main() {
       else if (a === '--max-utility') opts.maxUtility = parseFloat(v);
       else if (a === '--min-group') opts.minGroup = parseInt(v, 10) || 0;
       else if (a === '--period') opts.period = parseInt(v, 10) || 0;
+      else if (a === '--to') opts.to = v;
+      else if (a === '--id') opts.id = v;
     } else if (a.startsWith('--')) {
       console.error('未知选项: ' + a);
       process.exit(2);
@@ -4190,6 +4410,15 @@ async function main() {
     case 'consolidate': if (opts.undo === true && rest.length) opts.undo = rest[0]; cmdConsolidate(opts); break;
     case 'forget': cmdForget(rest[0]); break;
     case 'archive': cmdArchive(opts); break;
+    case 'backup': {
+      const sub = rest[0];
+      if (sub === 'create') cmdBackupCreate(opts);
+      else if (sub === 'list') cmdBackupList(opts);
+      else if (sub === 'doctor') cmdBackupDoctor(opts);
+      else if (sub === 'restore') cmdBackupRestore(rest[1] || opts.id, opts);
+      else { console.error('backup 子命令: create / list / doctor / restore <id> --to <目录>'); process.exit(2); }
+      break;
+    }
     case 'reindex': cmdReindex(); break;
     case 'profile': cmdProfile(opts); break;
     case 'context': cmdContext(opts); break;
@@ -4359,6 +4588,10 @@ module.exports = {
   keyRevokeCore: keyRevokeCore,
   promptPassword: promptPassword,
   initCore: initCore,
+  backupCreateCore: backupCreateCore,
+  backupListCore: backupListCore,
+  backupDoctorCore: backupDoctorCore,
+  backupRestoreCore: backupRestoreCore,
   viewServerCore: viewServerCore,
 
 };

@@ -1,3 +1,13 @@
+## v0.12.0 (2026-09-12)
+
+**可靠性基线（误删事故整改）**：
+
+- `init` 对已有记忆库默认拒绝覆盖；新增 `--attach` 接入现有库；`--force` 在未完成备份前明确拒绝，防止初始化再次清空记忆。
+- `forget` 不再物理删除，改为移动到 `.trash/<timestamp>/<原相对路径>`，并写 `audit-<date>.jsonl` 审计记录。
+- 新增 `backup create / list / doctor / restore <id> --to <目录>`：备份 `facts/`、`private/`、`keys/`（排除 `keys/cache/` 授权缓存）、`agents.json`、`index.json`、`.archive/`，生成 SHA-256 清单；默认拒绝同卷备份；`restore` 默认只恢复到新目录，不覆盖正在使用的记忆库。
+- 新增 `test/reliability-init.test.js`、`test/reliability-forget.test.js`、`test/reliability-backup.test.js`；`npm test` 覆盖既有 4 组测试与新增可靠性测试。
+- 事故背景与后续约束见 YottaSkills 项目文档 `docs/元忆可靠性基线与误删事故复盘-2026-09-12.md`。
+
 ## v0.11.0 (2026-09-06)
 
 **MCP 协议对齐最新版 2026-07-28（无状态时代）**：yotta-memory MCP（stdio + serve streamable HTTP）升级 dual-era——modern 直连（server/discover 免握手、逐请求 _meta 版本声明、resultType、-32022 版本错误、HTTP header 校验 HeaderMismatch -32020）服务新客户端；legacy（initialize 握手，protocolVersion 2025-11-25）兼容旧客户端，旧形状响应零惊扰；HTTP+SSE GET 保留为 deprecated 兼容入口。SKILL 标注「基于 MCP 最新协议 2026-07-28（向后兼容 2025-11-25 及更早握手）」。新增 test/mcp-dualera.test.js（26/26：A 层 + HTTP 层），存量测试全绿。
