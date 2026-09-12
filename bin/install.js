@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * yotta-memory 跨平台安装器（YottaSkills）
+ * yotta-memory 跨平台安装器
  * 用法:
  *   npx -y @yottameta/yotta-memory --agent <name>  # 按智能体默认用户级目录安装（推荐）
  *   npx -y @yottameta/yotta-memory --dir PATH      # 装到指定目录（用户改了目录的智能体）

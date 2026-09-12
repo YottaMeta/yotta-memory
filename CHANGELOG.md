@@ -9,7 +9,6 @@
 - `context` 增加可靠性提醒：未配置、超过 36 小时或失败时提示；用户明确选择手动备份后不重复打扰。
 - 新增 `backup drill`：恢复到隔离副本，校验 manifest、重建索引并解密一条测试私密；默认使用本机 owner 授权缓存，裸恢复可显式传恢复钥匙。
 - 新增 `test/reliability-init.test.js`、`test/reliability-forget.test.js`、`test/reliability-backup.test.js`、`reliability-backup-volumes/setup/daily/schedule/context/drill`；`npm test` 覆盖既有与新增可靠性测试。
-- 事故背景与后续约束见 YottaSkills 项目文档 `docs/元忆可靠性基线与误删事故复盘-2026-09-12.md`。
 
 ## v0.11.0 (2026-09-06)
 
