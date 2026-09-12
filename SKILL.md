@@ -35,6 +35,47 @@ license: MIT
 3. **收工归档**：写会话小结（COMMIT / 笔记）；旧记录定期 `yotta-memory maintain --apply`（单条低效用归档）+ 记忆多了周期 `yotta-memory consolidate --apply`（同主题压缩成带溯源摘要，`--undo` 可回滚）。
 4. **多智能体纪律**：FACT 写入公共区，PREF / BOUND / COMMIT 只写本智能体私密区；不读取其他智能体私密区。**一切读写一律走 `yotta-memory` CLI / MCP 工具**——禁止用 shell（`Get-ChildItem` / `Get-Content` / `cat` / `ls` / `type` 等）直接读或改记忆库目录下的 `.md` / `index.json` / `tokens.json` / `agents.json` / `grants.json` 等文件，否则会绕过权限边界、读到别的智能体私密内容。
 
+## 可靠性基线（v0.12.0）
+
+**目的**：防止初始化覆盖、删除不可逆、备份缺失再次造成记忆库丢失。
+
+### 1. init 防覆盖
+
+- 目标已是记忆库时，`yotta-memory init` 默认拒绝覆盖。
+- 接入已有库：`yotta-memory init --attach`。
+- `--force` 在完整备份机制通过前明确拒绝；不得绕过。
+- 非 owner 智能体不得初始化、重建或清空记忆库。
+
+### 2. forget 回收区
+
+- `yotta-memory forget <文件>` 不物理删除，改为移动到 `.trash/<时间>/<原相对路径>`。
+- 审计写入 `.trash/audit-<日期>.jsonl`（记录时间、原路径、回收路径、owner、执行者）。
+- 永久删除和回收区清理属于后续管理动作，不能作为默认 `forget` 行为。
+
+### 3. backup 备份与恢复
+
+```bash
+# 建议先在配置里指定独立盘目录
+yotta-memory config set backup_dir <独立盘目录>
+
+# 创建整库备份（默认拒绝与记忆库同卷）
+yotta-memory backup create
+
+# 查看备份
+yotta-memory backup list
+
+# 校验指定备份（SHA-256 / 文件缺失 / 大小）
+yotta-memory backup doctor --id <备份ID>
+
+# 恢复到新目录；默认不覆盖正在使用的记忆库
+yotta-memory backup restore <备份ID> --to <新目录>
+```
+
+- 备份覆盖：`facts/`、`private/`、`keys/`（排除 `keys/cache/` 授权缓存）、`agents.json`、`index.json`、`.archive/`。
+- 备份目录与记忆库同卷时默认拒绝；同卷只能作为临时测试，不视为可用备份。
+- 恢复目标非空时拒绝覆盖；恢复后先校验，再决定是否替换正式记忆库。
+- 备份是可靠性基线的一部分；没有备份时，不得执行永久删除或覆盖初始化。
+
 
 ## 记忆守则（Memory Doctrine，v0.6.0）
 
@@ -157,7 +198,7 @@ license: MIT
 
 | 命令 | 作用 |
 |---|---|
-| `yotta-memory init [--project] [--dir <目录>] [--encrypt|--no-encrypt]` | 初始化（**新建默认加密**：设主口令 + 抄下恢复钥匙；`--no-encrypt` 降级明文；老明文库用 `migrate`）|
+| `yotta-memory init [--project] [--dir <目录>] [--attach] [--encrypt|--no-encrypt]` | 初始化（**新建默认加密**：设主口令 + 抄下恢复钥匙；已有库必须用 `--attach`，默认拒绝覆盖；`--no-encrypt` 降级明文；老明文库用 `migrate`）|
 | `yotta-memory migrate` | 明文私密区 → 密文迁移（需主口令；迁移后打印恢复钥匙；当前智能体自动获得授权缓存）|
 | `yotta-memory view [--port 8788] [--host 127.0.0.1]` | 用户查看平台（本机 Web：口令解锁浏览 / 搜索 / 导出全部 AI 记忆 + 授权 / 吊销 AI + 重设口令 + 显示恢复钥匙）|
 | `yotta-memory reset-password [--password <当前> | --recovery-key <钥匙>] [--new-password <新>]` | 重设主口令（忘口令用恢复钥匙）|
@@ -166,11 +207,12 @@ license: MIT
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain] [--semantic] [--embedding <command>] [--embedding-timeout N]` | 检索（v0.8.0 默认语义检索：同义词 / 拼音全拼+首字母 / 字段加权 / 模糊匹配 + 效用分融合排序；v0.9.0 支持可选本地 embedding 插件，失败自动降级；`--explain` 显示命中理由与效用分项；`--semantic` 显式开启；读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 只作身份声明/展示，不授予跨读——读他人私密同样要授权；项目级优先）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <command>]` | 生成开工上下文包（身份 + 多智能体铁律 + 画像 + 任务相关记忆 + 近期记忆 + 边界 + 承诺；--budget 字符预算，0=不限；--explain 输出 included / dropped 选择 trace）|
-| `yotta-memory forget <文件>` | 删除（按类型目录路径或文件名）|
+| `yotta-memory forget <文件>` | 移入 `.trash/<时间>/` 回收区并写审计（v0.12.0；不再物理删除）|
+| `yotta-memory backup create / list / doctor / restore <ID> --to <目录>` | 备份与恢复（v0.12.0；独立盘校验、SHA-256 清单、排除 `keys/cache`、恢复默认只写新目录）|
 | `yotta-memory archive [--days 180] [--threshold 0.35]` | 归档旧记忆（v0.8.0 统一效用分 + v0.10.0 分类型衰减；immutable / BOUND 豁免；私密归档入 `.archive/private/<owner>/<type>/`；阈值默认读 config `maintain_archived_utility`）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
-| `yotta-memory config set memory_home <目录>` / `config get` | 持久记住 / 查看记忆库位置（`~/.yottamemory/config.json`）|
+| `yotta-memory config set memory_home <目录>` / `config set backup_dir <目录>` / `config get` | 持久记住 / 查看记忆库位置与备份目录（`~/.yottamemory/config.json`）|
 | `yotta-memory whoami` | 查看当前智能体身份与登记状态（读 `YOTTA_AGENT_ID` / `X-Agent-Id`，不猜不默认）|
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 每智能体访问 token：生成 / 列出 / 吊销（登记 `<记忆库>/.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
