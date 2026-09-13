@@ -6,7 +6,7 @@ const memory = require('../bin/yotta-memory.js');
 
 test('backup volume listing keeps only existing writable volumes on a different volume', () => {
   const result = memory.listBackupVolumesCore({
-    root: 'D:\\AI_WorkDir\\.yottamemory',
+    root: 'D:\\yottamemory-test',
     platform: 'win32',
     candidates: ['Z:\\', 'C:\\', 'H:\\', 'D:\\'],
     existsFn: (candidate) => candidate !== 'Z:\\',
@@ -44,7 +44,7 @@ test('backup volume listing compares POSIX devices instead of the root path', ()
 
 test('backup volume listing reports no candidate instead of inventing a drive', () => {
   const result = memory.listBackupVolumesCore({
-    root: 'D:\\AI_WorkDir\\.yottamemory',
+    root: 'D:\\yottamemory-test',
     platform: 'win32',
     candidates: ['Z:\\'],
     existsFn: () => false,

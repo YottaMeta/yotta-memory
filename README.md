@@ -196,14 +196,14 @@ This package exposes two separate commands:
 **init**:
 
 ```text
-Memory store initialized: D:/.yottamemory
+Memory store initialized: ~/.yottamemory
 Master password set; recovery key: xxxx-xxxx-xxxx-xxxx (keep it safe)
 ```
 
 **remember** (with verify):
 
 ```text
-Recorded: D:/.yottamemory/facts/2026-09-01-0001.md
+Recorded: ~/.yottamemory/facts/2026-09-01-0001.md
 [verify] read-back OK: facts/2026-09-01-0001.md
 ```
 
@@ -211,7 +211,7 @@ Recorded: D:/.yottamemory/facts/2026-09-01-0001.md
 
 ```text
 3 memories (top 3):
-[FACT] subject: statement... (D:/.yottamemory/facts/xxx.md)
+[FACT] subject: statement... (~/.yottamemory/facts/xxx.md)
 ```
 
 **context**:

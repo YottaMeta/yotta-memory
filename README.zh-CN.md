@@ -235,14 +235,14 @@ bash install.sh --list           # 列出智能体 -> 默认目录
 **init（初始化记忆库）**：
 
 ```text
-初始化记忆库成功：D:\.yottamemory
+初始化记忆库成功：~/.yottamemory
 主口令已设置；恢复钥匙：xxxx-xxxx-xxxx-xxxx（请妥善保存）
 ```
 
 **remember（写入记忆，带 verify 回读）**：
 
 ```text
-已记录: D:\.yottamemory\facts\2026-09-01-0001.md
+已记录: ~/.yottamemory/facts/2026-09-01-0001.md
 [verify] 已写回读 OK: facts/2026-09-01-0001.md
 ```
 
@@ -250,7 +250,7 @@ bash install.sh --list           # 列出智能体 -> 默认目录
 
 ```text
 共 3 条记忆（前 3 条）：
-[FACT] 项目名: 描述……（D:\.yottamemory\facts\xxx.md）
+[FACT] 项目名: 描述……（~/.yottamemory/facts/xxx.md）
 ```
 
 **context（开工上下文包）**：
