@@ -2,6 +2,7 @@
 
 **可靠性收口：开工 doctor + 破坏性操作前事务快照**
 
+- 修正 `init --force` 的过期拒绝文案：明确已有记忆库的强制重建必须由完整备份与显式确认保护，当前版本不提供覆盖初始化路径。
 - 新增 `yotta-memory doctor [--json]`：只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份；严重异常返回非零退出码，并锁定破坏性写入。
 - 新增 MCP `doctor` 工具；`context` 的开工可靠性提醒改为直接使用 doctor 结果，critical 时明确提示“破坏性写入已锁定”。
 - `maintain --apply`（含 `--dedup --apply`）、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在写入前自动创建新的整库事务快照；未配置独立备份目录、doctor critical 或快照失败时拒绝写入，原记忆保持不变。
@@ -21,7 +22,7 @@
 
 **可靠性基线（误删事故整改）**：
 
-- `init` 对已有记忆库默认拒绝覆盖；新增 `--attach` 接入现有库；`--force` 在未完成备份前明确拒绝，防止初始化再次清空记忆。
+- `init` 对已有记忆库默认拒绝覆盖；新增 `--attach` 接入现有库；`--force` 也不能覆盖已有记忆库，防止初始化再次清空记忆。
 - `forget` 不再物理删除，改为移动到 `.trash/<timestamp>/<原相对路径>`，并写 `audit-<date>.jsonl` 审计记录。
 - 新增 `backup create / list / doctor / restore <id> --to <目录>`：备份 `facts/`、`private/`、`keys/`（排除 `keys/cache/` 授权缓存）、`agents.json`、`index.json`、`.archive/`，生成 SHA-256 清单；默认拒绝同卷备份；`restore` 默认只恢复到新目录，不覆盖正在使用的记忆库。
 - 新增每日自动备份闭环：`backup volumes` 只枚举当前机器实际存在、可写、与记忆库异卷的路径；用户确认一次位置后 `backup setup` 默认启用每日备份（默认 03:30），Windows Task Scheduler / Linux systemd user timer（cron 降级）/ macOS LaunchAgent 负责无人值守，`serve` 启动与每 6 小时用幂等 `backup ensure-daily` 补跑。

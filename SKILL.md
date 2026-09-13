@@ -51,7 +51,7 @@ AI 更新流程：先运行 `yotta-memory --version` 记录当前引擎版本；
 
 - 目标已是记忆库时，`yotta-memory init` 默认拒绝覆盖。
 - 接入已有库：`yotta-memory init --attach`。
-- `--force` 在完整备份机制通过前明确拒绝；不得绕过。
+- `--force` 不能覆盖已有记忆库；强制重建需要完整备份与显式确认保护，当前版本不提供覆盖初始化路径。
 - 非 owner 智能体不得初始化、重建或清空记忆库。
 
 ### 2. forget 回收区

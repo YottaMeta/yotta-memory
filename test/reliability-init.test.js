@@ -22,6 +22,28 @@ test('initCore refuses to initialize an existing store without attach', () => {
   assert.ok(fs.existsSync(path.join(root, 'facts', 'existing.md')));
 });
 
+test('initCore --force reports the protected rebuild policy without stale backup text', () => {
+  const root = tmpdir('ytm-init-force-');
+  fs.mkdirSync(path.join(root, 'facts'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'facts', 'existing.md'), 'existing\n', 'utf8');
+
+  const result = memory.initCore({ dir: root, force: true, noEncrypt: true });
+
+  assert.strictEqual(result.error, true);
+  assert.match(result.text, /完整备份/);
+  assert.match(result.text, /显式确认/);
+  assert.doesNotMatch(result.text, /尚未实现 backup|未完成备份|备份机制/);
+  assert.strictEqual(fs.readFileSync(path.join(root, 'facts', 'existing.md'), 'utf8'), 'existing\n');
+});
+
+test('user-facing init guidance describes the current rebuild policy', () => {
+  const root = path.join(__dirname, '..');
+  for (const relativePath of ['SKILL.md', 'references/faq.md', 'CHANGELOG.md']) {
+    const text = fs.readFileSync(path.join(root, relativePath), 'utf8');
+    assert.doesNotMatch(text, /尚未实现 backup|未完成备份|完整备份机制/);
+  }
+});
+
 test('initCore --attach accepts an existing store without recreating it', () => {
   const root = tmpdir('ytm-init-attach-');
   fs.mkdirSync(path.join(root, 'facts'), { recursive: true });

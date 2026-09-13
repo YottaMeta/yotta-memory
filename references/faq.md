@@ -33,7 +33,7 @@
 优先使用 `backup create --dir <独立盘目录>` 创建整库备份；`backup list` 查看，`backup doctor` 校验 SHA-256，`backup restore <id> --to <新目录>` 恢复到新目录。备份默认拒绝与记忆库同卷。`export --out 文件.json` 仍可用于跨工具迁移；公共 FACT 是明文文件也可直接 git 备份。v0.12.2 起，破坏性操作也会在写入前自动创建事务快照。
 
 ## 13. init 会不会覆盖已有记忆？
-不会。v0.12.0 起 `init` 遇到已有记忆库默认拒绝；接入现有库用 `init --attach`。`--force` 在完整备份机制通过前也会明确拒绝，防止再次清空记忆。
+不会。v0.12.0 起 `init` 遇到已有记忆库默认拒绝；接入现有库用 `init --attach`。`--force` 也不能覆盖已有记忆库；强制重建需要完整备份与显式确认保护，当前版本不提供覆盖初始化路径。
 
 ## 11. 记忆太多 / 越来越膨胀怎么办？
 两步走：`yotta-memory maintain --apply` 归档单条低效用旧记忆；同主题积累了很多「又老又不常用」的旧条目时，用 `yotta-memory consolidate`（先预览）→ `consolidate --apply` 把它们归纳成 1 条带溯源的周期摘要并归档原文。v0.12.2 起这些写操作要求先通过 doctor，并会自动创建事务快照；没有独立备份目录时会拒绝执行。也可以先 `config set maintain_decay_halflife_COMMIT 90` 等让任务类承诺更快让位。

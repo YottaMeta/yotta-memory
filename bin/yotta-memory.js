@@ -1124,7 +1124,7 @@ function initCore(opts) {
     return { error: false, text: '已接入现有记忆库: ' + root };
   }
   if (existing && opts.force) {
-    return { error: true, text: '拒绝: --force 重新初始化必须先做完整备份；当前版本尚未实现 backup，不能覆盖现有记忆库。请保留现场并先完成备份机制。' };
+    return { error: true, text: '拒绝: --force 不能覆盖现有记忆库；已有记忆库的强制重建必须由完整备份与显式确认保护，当前版本不提供覆盖初始化路径。如只是接入，请使用 init --attach。' };
   }
   if (existing) {
     return { error: true, text: '拒绝: 目标已是现有记忆库: ' + root + '。如只是接入，请使用 init --attach；不要执行覆盖初始化。' };
