@@ -23,7 +23,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.12.2';
+const VERSION = '0.13.0';
 // MCP 协议（2026-07-28 无状态 + 2025-11-25 legacy 握手，dual-era）
 const MCP_PROTOCOL_MODERN = '2026-07-28';
 const MCP_PROTOCOL_LEGACY = '2025-11-25';

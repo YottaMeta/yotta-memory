@@ -1,3 +1,11 @@
+## v0.13.0 (2026-09-13)
+
+**P0-4.6 元忆 after_milestone 试点**：
+
+- 新增 `skill-manifest.json`，声明 `after_milestone` / `remember_commit` / `fallback: explicit-unverified`。
+- 里程碑记忆必须有真实 `file_path` 证据才允许标记 verified；缺证据或写入失败时输出 `explicit-unverified` + 一次纠偏。
+- 元阁适配器回归覆盖成功与降级两条路径。
+
 ## v0.12.2 (2026-09-12)
 
 **可靠性收口：开工 doctor + 破坏性操作前事务快照**
