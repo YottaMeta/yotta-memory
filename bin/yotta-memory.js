@@ -3447,8 +3447,11 @@ function cmdDistill(opts) {
   console.log(r.text);
   if (r.error) process.exit(2);
 }
-function cmdForget(fileRef) {
-  const r = forgetCore(fileRef);
+function cmdForget(fileRef, opts) {
+  const r = forgetCore(fileRef, {
+    selfAgent: currentAgent(),
+    unsafe: !!(opts && opts.unsafe),
+  });
   console.log(r.text);
   if (r.error) process.exit(2);
 }
@@ -5488,7 +5491,7 @@ async function main() {
     case 'maintain': cmdMaintain(opts); break;
     case 'distill': cmdDistill(opts); break;
     case 'consolidate': if (opts.undo === true && rest.length) opts.undo = rest[0]; cmdConsolidate(opts); break;
-    case 'forget': cmdForget(rest[0]); break;
+    case 'forget': cmdForget(rest[0], opts); break;
     case 'archive': cmdArchive(opts); break;
     case 'backup': {
       const sub = rest[0];

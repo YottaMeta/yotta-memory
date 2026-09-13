@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const memory = require('../bin/yotta-memory.js');
 
 function tmpdir(prefix) {
@@ -58,6 +59,38 @@ test('forgetCore moves a memory into .trash instead of deleting it permanently',
   } finally {
     if (oldHome === undefined) delete process.env.YOTTA_MEMORY_HOME;
     else process.env.YOTTA_MEMORY_HOME = oldHome;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('forget CLI propagates --unsafe for explicitly authorized private cleanup', () => {
+  const root = tmpdir('ytm-forget-unsafe-');
+  const rel = 'private/gon-mimo/commits/2026-09-13-0004.md.enc';
+  const file = path.join(root, rel);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, 'test-private-entry', 'utf8');
+  fs.writeFileSync(path.join(root, 'index.json'), JSON.stringify({
+    version: 4,
+    entries: [{ file: rel, type: 'COMMIT', subject: 'misplaced test entry', statement: '' }],
+  }), 'utf8');
+
+  const oldHome = process.env.YOTTA_MEMORY_HOME;
+  const oldAgent = process.env.YOTTA_AGENT_ID;
+  process.env.YOTTA_MEMORY_HOME = root;
+  process.env.YOTTA_AGENT_ID = 'codex';
+  try {
+    const cli = path.join(__dirname, '..', 'bin', 'yotta-memory.js');
+    const result = spawnSync(process.execPath, [cli, 'forget', rel, '--unsafe'], {
+      encoding: 'utf8',
+      env: { ...process.env, YOTTA_MEMORY_HOME: root, YOTTA_AGENT_ID: 'codex' },
+    });
+    assert.strictEqual(result.status, 0, result.stderr + result.stdout);
+    assert.strictEqual(fs.existsSync(file), false);
+  } finally {
+    if (oldHome === undefined) delete process.env.YOTTA_MEMORY_HOME;
+    else process.env.YOTTA_MEMORY_HOME = oldHome;
+    if (oldAgent === undefined) delete process.env.YOTTA_AGENT_ID;
+    else process.env.YOTTA_AGENT_ID = oldAgent;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
