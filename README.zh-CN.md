@@ -23,6 +23,8 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
+> 🆕 **v0.13.2（安全）**：owner ID 不是认证凭证。私密读写必须持有 `agent_key`：由用户执行 `yotta-memory view` 授权（或自行运行 `yotta-memory key bind <id>`），再配置 MCP 注入 `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1`（CLI 用 `--agent <id> --agent-key <key>` 或 `--agent-key-file <文件>`）。授权同时写临时 `keys/pending/<id>.key`，AI 新会话用 `key status <id> --to <AI_HOME>` / `key claim <id> --to <AI_HOME>` 领取到 `<AI_HOME>/.yotta-memory-agent-key` 后删除 pending；弹窗 key 供用户单独备份。legacy `keys/cache/*.key` 不再加载。仍有 owner 需要重新绑定时，`key list` 与失败的私密操作会输出 `[YTM_MIGRATION_REQUIRED]` 并列出受影响 agent；AI 只提醒步骤，由用户在 `yotta-memory view` 逐个授权；平台一次性展示 `agent_key`，已有 binding 时需先「吊销」再重新授权，旧 key 随即校验失败。
+
 > 🆕 **v0.12.2**：可靠性收口——新增 `yotta-memory doctor` 开工检查；`maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在写入前自动创建事务快照，快照失败或严重异常时拒绝写入。
 
 > 🆕 **v0.12.1**：安装与更新文档明确区分引擎 CLI（`yotta-memory`）和技能安装器（`yotta-memory-install`），并补齐可直接复制的升级命令。
@@ -68,7 +70,7 @@
 | **越用越懂（v0.6.0）** | `profile` 画像聚合（零推断）+ `context` 开工上下文包（身份 / 画像 / 近期记忆 / 边界 / 承诺）+ SKILL「记忆守则」规则层，记忆随使用成长 |
 | **生态分发** | GitHub + npm 双源同步发布；npx / git clone / Download ZIP / install.sh 四种安装方式，覆盖 17+ 类智能体目录 |
 | **便携记忆盘（随盘走）** | 记忆库即引擎：装在硬盘 / 主机上，插上即恢复全部记忆；引擎主机只需装 CLI 当存放点，无需装任何 AI 智能体 |
-| **局域网共享与自启** | 每智能体独立 token（Bearer + X-Agent-Id）鉴权、可吊销；`lan enable` 注册开机自启（Windows：优先计划任务，非管理员自动降级用户级 Startup 静默自启；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）；MCP 工具集与 CLI 一致（8 个工具），管理动作不远程暴露 |
+| **局域网共享与自启** | 每智能体独立 token（Bearer + X-Agent-Id + X-Agent-Key）鉴权、可吊销；`lan enable` 注册开机自启（Windows：优先计划任务，非管理员自动降级用户级 Startup 静默自启；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）；MCP 工具集与 CLI 一致（8 个工具），管理动作不远程暴露 |
 | **本地 / 局域网双模式** | 本地 `serve --stdio` 零进程、按需拉起（无常驻）；局域网 streamable HTTP 常驻——两种模式可并存、按需选用 |
 
 ## 功能详解
@@ -94,7 +96,7 @@
 - **物理隔离目录**：私密记忆按 owner 存放于 `private/<owner>/<type>/`，不同智能体的私密文件物理分离；旧版根下平铺的 `prefs/` `bounds/` `commits/` 在 `reindex` 时自动迁移。
 - **三种授权入口（满足任一即可读他人私密）**：
   1. `grants.json` 显式授权：`{"<userAgent>": ["<ownerAgent>", ...]}`；
-  2. identity=user：`--agent user` / `--owner user` / 环境变量 `YOTTA_AGENT_ID=user`；
+  2. identity=user：`--agent user` / `--owner user`，调用方仍需持有匹配的 agent_key；
   3. 显式 `--unsafe`（用户显式授权）。
 - **默认静默、显式跨读才报错**：默认 recall 遇其它 agent 私密静默跳过（不泄露「存在 N 条私密不可见」）；仅当显式跨智能体读取（`--all` / `--owner <其它>`）且无授权命中时才报错 / 警告。
 - **`--agent <其它>` 不越界**：`--agent <其它agent>` 仅作身份声明 / 展示用，不授予读取他人私密；读其它智能体私密仍需 grant / identity=user / `--unsafe`。
@@ -103,12 +105,12 @@
 
 ### 智能体身份（唯一 ID + 自我档案）
 
-每个智能体有一个**全局唯一的 agent ID**：它是私密记忆（PREF / BOUND / COMMIT）的归属键，也是远端接入的身份声明（`X-Agent-Id`）。
+每个智能体有一个**全局唯一的 agent ID**：它是私密记忆（PREF / BOUND / COMMIT）的归属键，也是远端接入的身份声明（`X-Agent-Id`）；远端加密私密读写还需匹配的 `X-Agent-Key`。
 
 - **登记（必须唯一）**：`yotta-memory iam <id>` 写入记忆库根目录 `agents.json`，**强制唯一性**——ID 已被其它主机 / 来源（含远端 token 登记）占用时拒绝，确认是同一智能体才 `--force`。
-- **确认身份**：`yotta-memory whoami`（远端 MCP 工具 `agent_info`）读「当次声明身份」（本机 `YOTTA_AGENT_ID` / CLI `--agent`；远端 `X-Agent-Id`），不猜不默认。
+- **确认身份**：`yotta-memory whoami --agent <id>`（远端 MCP 工具 `agent_info`）；环境身份只在 MCP 信任标记下有效，不再接受用户级全局 `YOTTA_AGENT_ID`。
 - **自我档案（强制落盘）**：`iam` 自动写一条 PREF `subject=自我接入档案`（owner=自己），statement 为 `; ` 分隔的 key:value：`agent_id / host / memory_home / mcp_mode（stdio|http）/ engine_url（仅远端）/ token（仅远端；本机不存 token）`。开工先 `recall "自我接入档案"` 找回身份与接入信息。
-- **本机免 token**：本机 CLI / stdio 直连不经网络、不校验 token；身份经该智能体 MCP 配置的 `env.YOTTA_AGENT_ID` 声明。本机多个智能体各自声明唯一 ID，互不撞。
+- **本机免网络 token**：本机 CLI / stdio 不校验 HTTP token，但私密访问仍必须 `agent_id + agent_key`；MCP 通过独立进程 env 注入。
 - **私密记忆必须有 owner**：写 PREF / BOUND / COMMIT 时未声明身份会被拒绝（公共 FACT 不受影响），从机制上防止「抄别人的 ID」。
 
 ### 画像与开工上下文（v0.6.0 + v0.9.0）
@@ -161,7 +163,7 @@
 |---|---|
 | 类型选错？ | 只提示不阻止；forget 后重写；--no-hint 关提示 |
 | 私密区加密？ | init 默认加密（主口令+恢复钥匙）；明文库 migrate 升级 |
-| 多智能体权限？ | FACT 公共；PREF/BOUND/COMMIT 按 owner 隔离，需 key authorize / view 授权 |
+| 多智能体权限？ | FACT 公共；PREF/BOUND/COMMIT 按 owner 隔离并绑定 agent_key，由用户通过 `view`（或 `key bind`）授权 |
 | 记忆找不到？ | config get 查位置 → reindex 重建索引 → recall/search |
 | 忘记主口令？ | 用恢复钥匙 reset-password（无私密区锁定的预期行为） |
 | 局域网怎么连？ | 引擎 lan enable + token new；客户端配 url+token |
@@ -316,10 +318,10 @@ bash install.sh --agent <智能体名称>
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
 | `yotta-memory config set <键> <值>` / `config get` | 记忆库位置与引擎参数（`memory_home` / `embedding_cmd` / `embedding_timeout` / `maintain_archived_utility` / `maintain_decay_halflife_<TYPE>` / `consolidate_*` 等）|
-| `yotta-memory whoami` | 查看当前智能体身份与登记状态（读 `YOTTA_AGENT_ID` / `X-Agent-Id`，不猜不默认）|
+| `yotta-memory whoami --agent <id>` | 查看当前显式身份与登记状态；环境身份仅在 MCP 信任标记下有效 |
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 为智能体生成 / 列出 / 吊销访问 token（登记于记忆库 `.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
-| `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id 鉴权）|
+| `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id + X-Agent-Key 鉴权）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务，默认 ONLOGON、--onstart 开机即启需管理员，非管理员自动降级用户级 Startup 静默自启；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）|
 | `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--dedup --apply] [--merge A,B]` | 记忆自组织：归档 / 遗忘候选 / 置信度查重 / 自动合并高置信组；默认 dry-run；`--dedup` 与归档互斥 |
 | `yotta-memory consolidate [--min-age N] [--min-idle N] [--max-utility N] [--min-group N] [--period N] [--type T] [--model <cmd>] [--apply] [--undo <batch>] [--batches]` | 周期摘要压缩（v0.10.0）：同主题旧记忆 → 带溯源摘要 + 原文归档；默认 dry-run；`--undo <batch>` 回滚批次；`--batches` 查批次 |
@@ -341,7 +343,8 @@ yotta-memory recall --type FACT --limit 10
 
 环境变量：
 - `YOTTA_MEMORY_HOME`：覆盖用户级记忆库目录（默认 `~/.yottamemory/`）。
-- `YOTTA_AGENT_ID` / `AGENT_ID`：当前 agent 标识（本机声明身份用，参与读取分区判定；私密记忆必须有 owner，未声明会被拒绝）。
+- `YOTTA_AGENT_ID` / `AGENT_ID`：仅用于 MCP 进程身份，必须配合 `YOTTA_MEMORY_TRUST_ENV_AGENT=1`；禁止用户级全局 fallback。
+- `YOTTA_MEMORY_AGENT_KEY`：per-agent 32 字节 key，用于解开 `keys/bindings/<id>.key.agent`；加密私密读写必填。授权后先由 AI 执行 `key status` / `key claim` 领取到 `<AI_HOME>/.yotta-memory-agent-key`，MCP 宿主再从该文件注入。
 
 ## 智能体接入后怎么用
 
@@ -352,7 +355,7 @@ yotta-memory recall --type FACT --limit 10
 记忆库可以装在任何主机或硬盘上（= 记忆引擎），供局域网内其它主机上的智能体远程接入：
 
 - **本机直连**：CLI 直接读写，无需 token；
-- **远程接入**：引擎主机运行 `yotta-memory serve` 常驻（或 `lan enable` 注册开机自启），远程智能体通过 MCP 以 `url + token` 连接。
+- **远程接入**：引擎主机运行 `yotta-memory serve` 常驻（或 `lan enable` 注册开机自启），远程智能体通过 MCP 以 `url + token + agent_key` 连接；同机 / 共享文件系统用 `key claim` 领取，跨机不共享文件系统时由用户安全传输宿主 key 文件。
 - **本地零进程**：本机 MCP 客户端可用 `serve --stdio` 按需拉起 CLI（无常驻进程）。
 
 ### 引擎侧（记忆所在主机）
@@ -365,7 +368,7 @@ yotta-memory recall --type FACT --limit 10
    yotta-memory token revoke --agent <智能体ID>   # 吊销
    ```
    > 新生成的 token 即时生效，无需重启服务。
-3. 启动服务（默认监听 0.0.0.0:8787，Bearer token + X-Agent-Id 鉴权）——临时运行或注册开机自启二选一：
+3. 启动服务（默认监听 0.0.0.0:8787，Bearer token + X-Agent-Id + X-Agent-Key 鉴权）——临时运行或注册开机自启二选一：
    ```bash
    yotta-memory serve                          # 临时前台运行
    yotta-memory lan enable                     # 注册开机自启（Windows：计划任务/用户级 Startup；Linux：systemd 用户单元/用户 crontab）
@@ -377,7 +380,14 @@ yotta-memory recall --type FACT --limit 10
 
 ### 客户端侧（远程智能体）
 
-在智能体 MCP 配置中登记连接（`url` + 两个请求头）：
+在智能体 MCP 配置中登记连接前，先确认该 AI 已领取 agent_key：
+
+```bash
+yotta-memory key status <智能体ID> --to <AI_HOME>
+yotta-memory key claim <智能体ID> --to <AI_HOME>
+```
+
+如果引擎与 AI 不在同一文件系统，`key claim` 不能在远端直接读取 pending，需要用户用密码管理器或安全文件传输把 key 放到目标宿主目录。然后再登记连接（`url` + 三个请求头）：
 
 ```json
 {
@@ -386,14 +396,15 @@ yotta-memory recall --type FACT --limit 10
       "url": "http://<引擎主机IP>:8787/mcp",
       "headers": {
         "Authorization": "Bearer <TOKEN>",
-        "X-Agent-Id": "<本智能体ID>"
+        "X-Agent-Id": "<本智能体ID>",
+        "X-Agent-Key": "<本智能体宿主 key 文件中的 agent_key>"
       }
     }
   }
 }
 ```
 
-连接后可通过 MCP tools（remember / recall / search / context / doctor / forget / archive / reindex / export / import / agent_info）读写记忆与确认身份；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露；MCP export/import 路径限记忆库内、distill 不支持 `--model`，MCP 也不接受远端传入 embedding 命令——embedding 插件只能由引擎主机本地 `config set embedding_cmd` 配置。`X-Agent-Id` 必须与 token 登记的智能体一致；读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
+连接后可通过 MCP tools（remember / recall / search / context / doctor / forget / archive / reindex / export / import / agent_info）读写记忆与确认身份；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露；MCP export/import 路径限记忆库内、distill 不支持 `--model`，MCP 也不接受远端传入 embedding 命令——embedding 插件只能由引擎主机本地 `config set embedding_cmd` 配置。`X-Agent-Id` 必须与 token 登记的智能体一致；加密私密读写还必须携带匹配的 `X-Agent-Key`。读取分区规则与 CLI 相同（FACT 公共可读，PREF / BOUND / COMMIT 私密隔离）。
 
 ### 位置持久化
 

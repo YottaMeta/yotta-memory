@@ -1,0 +1,71 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>元忆 · 用户查看平台</title><style>
+body{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1f2328;background:#fafafa}
+h1{font-size:22px} .card{background:#fff;border:1px solid #e2e2e2;border-radius:10px;padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+button{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;margin:2px;font-size:14px}
+button.danger{background:#dc2626} button.ghost{background:#e5e7eb;color:#1f2328}
+input,select{padding:8px;border:1px solid #c9c9c9;border-radius:6px;margin:2px;font-size:14px;box-sizing:border-box}
+table{border-collapse:collapse;width:100%;font-size:13px} td,th{border:1px solid #ececec;padding:6px 8px;text-align:left;vertical-align:top}
+.owner{display:inline-flex;align-items:center;gap:6px;border:1px solid #ddd;border-radius:8px;padding:5px 10px;margin:4px 6px 4px 0;background:#f6f8fa}
+.entry{border-bottom:1px solid #eee;padding:8px 0} .meta{color:#8a8a8a;font-size:12px}
+.err{color:#dc2626;margin-top:8px} .ok{color:#16a34a;margin-top:8px}
+#app{display:none} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:12px}
+</style></head><body>
+<h1>元忆 · 用户查看平台 <span id="ver" style="font-size:14px;color:#888"></span></h1>
+<div id="lock" class="card">
+  <p><b>输入主口令解锁</b>（口令只在本地内存派生，不落盘、不发送远端）。忘口令可在 CLI 用恢复钥匙重设：<code>yotta-memory reset-password --recovery-key &lt;钥匙&gt;</code></p>
+  <input type="password" id="pw" placeholder="主口令" style="width:260px">
+  <button onclick="unlock()">解锁</button>
+  <div class="err" id="lockerr"></div>
+</div>
+<div id="app">
+  <div class="card">
+    <b>AI 列表</b>（✅=已授权可读自己私密，🔒=未授权）
+    <div class="meta" style="margin-top:6px">「授权」由你（用户）操作：确认后生成只显示一次的 agent_key，请立即单独保存；服务端同时写临时待领取文件 <code>keys/pending/&lt;agent_id&gt;.key</code>，供该 AI 新会话领取，领取成功后自动删除。</div>
+    <div id="owners" style="margin-top:8px"></div>
+  </div>
+  <div class="card">
+    <b>记忆</b>
+    <input id="q" placeholder="搜索关键词" style="width:220px" onkeydown="if(event.key==='Enter'){off=0;load()}">
+    <button onclick="off=0;load()">搜索</button>
+    <button class="ghost" onclick="doExport()">导出 JSON</button>
+    <button class="ghost" onclick="showRk()">显示恢复钥匙</button>
+    <span id="rkout" style="font-size:12px;color:#888;margin-left:8px"></span>
+    <div id="meta" style="margin-top:10px;font-size:12px;color:#666"></div>
+    <div id="entries" style="margin-top:6px"></div>
+    <div id="pager" style="margin-top:10px">
+      <button class="ghost" id="prevb" onclick="prevPage()">上一页</button>
+      <span id="pageinfo" style="font-size:12px;color:#888;margin:0 8px"></span>
+      <button class="ghost" id="nextb" onclick="nextPage()">下一页</button>
+    </div>
+  </div>
+  <div class="card">
+    <b>重设口令</b><br>
+    <input type="password" id="cur" placeholder="当前口令">
+    <input type="password" id="np1" placeholder="新口令">
+    <input type="password" id="np2" placeholder="确认新口令">
+    <button onclick="resetPw()">重设</button>
+    <span id="pwout"></span>
+  </div>
+</div>
+<script>
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+async function api(p,b){try{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return await r.json();}catch(e){return{error:String(e)};}}
+async function boot(){const s=await api('/api/status');document.getElementById('ver').textContent='v'+(s.version||'');if(s.unlocked){showApp();}}
+function showApp(){document.getElementById('lock').style.display='none';document.getElementById('app').style.display='block';loadOwners();load();}
+async function unlock(){const d=await api('/api/unlock',{password:document.getElementById('pw').value});if(d.error){document.getElementById('lockerr').textContent=d.error;return;}showApp();}
+async function loadOwners(){const d=await api('/api/owners');const box=document.getElementById('owners');box.innerHTML='';if(!d.owners||!d.owners.length){box.innerHTML='（无 owner）';return;}
+  for(const o of d.owners){const c=document.createElement('span');c.className='owner';c.innerHTML=esc(o.owner)+(o.authorized?' ✅':' 🔒')+' <button class="ghost" data-a="'+esc(o.owner)+'">授权</button><button class="danger" data-r="'+esc(o.owner)+'">吊销</button>';box.appendChild(c);}
+  box.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){var owner=b.getAttribute('data-a');if(!confirm('确认由你为用户授权 '+owner+' 读取其私密记忆？授权后将生成只显示一次的 agent_key，请立即保存；同时写入待领取文件供该 AI 新会话领取。AI 不应代为执行该授权操作。'))return;b.disabled=true;api('/api/authorize',{owner:owner}).then(function(d){b.disabled=false;if(!d||d.error){alert((d&&d.error)||'授权失败');loadOwners();return;}if(d.agentKey){showKey(d.agentKey);}loadOwners();});};});
+  box.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){if(!confirm('确认吊销 '+b.getAttribute('data-r')+' 的 agent_key？吊销后该智能体立即失去私密读写能力。'))return;api('/api/revoke',{owner:b.getAttribute('data-r')}).then(function(){loadOwners();});};});
+function showKey(k){var ov=document.createElement('div');ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99';var box=document.createElement('div');box.className='card';box.style.cssText='max-width:640px;word-break:break-all';var t=document.createElement('div');t.innerHTML='<b>agent_key（只显示一次）</b>';var hint=document.createElement('div');hint.className='meta';hint.textContent='请用户立即单独保存。AI 新会话执行 yotta-memory key claim <agent_id> --to <AI_HOME> 领取，写入 <AI_HOME>/.yotta-memory-agent-key 后删除待领取文件。若 key 丢失，可吊销后重新授权；旧 key 会立即校验失败。';var ta=document.createElement('textarea');ta.readOnly=true;ta.value=k;ta.style.cssText='width:100%;height:72px;margin-top:8px;font-family:monospace;font-size:12px';var close=document.createElement('button');close.textContent='我已保存，关闭';close.onclick=function(){ov.remove();};box.appendChild(t);box.appendChild(hint);box.appendChild(ta);box.appendChild(close);ov.appendChild(box);document.body.appendChild(ov);ta.focus();ta.select();}
+}
+let off=0,PS=50;
+async function load(){const d=await api('/api/entries',{query:document.getElementById('q').value,offset:off,limit:PS});const meta=document.getElementById('meta');const pg=document.getElementById('pageinfo');if(meta)meta.textContent='共 '+d.count+' 条';const lim=d.limit||PS;const totalPg=Math.max(1,Math.ceil(d.count/lim));const curPg=Math.floor((d.offset||0)/lim)+1;if(pg)pg.textContent='第 '+curPg+' / '+totalPg+' 页';const box=document.getElementById('entries');box.innerHTML='';if(d.entries)for(const e of d.entries){const div=document.createElement('div');div.className='entry';div.innerHTML='<b>['+esc(e.type)+'] '+esc(e.subject)+'</b><div>'+esc(e.statement)+'</div><div class="meta">'+esc(e.file)+' · owner='+esc(e.owner||'-')+' · '+esc(e.updated||e.created||'')+'</div>';box.appendChild(div);}const pb=document.getElementById('prevb'),nb=document.getElementById('nextb');if(pb)pb.disabled=(d.offset||0)<=0;if(nb)nb.disabled=!d.hasMore;}
+function prevPage(){if(off>=PS){off-=PS;load();}}
+function nextPage(){off+=PS;load();}
+async function doExport(){const d=await api('/api/export');if(d.error){alert(d.error);return;}const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='yottamemory-view-export.json';a.click();}
+async function showRk(){const d=await api('/api/recovery-key');document.getElementById('rkout').textContent=d.recoveryKey?('恢复钥匙: '+d.recoveryKey):(d.error||'');}
+async function resetPw(){const np1=document.getElementById('np1').value,np2=document.getElementById('np2').value;if(np1!==np2){document.getElementById('pwout').innerHTML='<span class="err">两次新口令不一致</span>';return;}
+  const d=await api('/api/reset-password',{currentPassword:document.getElementById('cur').value,newPassword:np1});document.getElementById('pwout').innerHTML=d.error?('<span class="err">'+esc(d.error)+'</span>'):('<span class="ok">'+esc(d.text||'ok')+'</span>');}
+boot();
+</script></body></html>

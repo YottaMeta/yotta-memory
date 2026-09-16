@@ -129,18 +129,19 @@ statement: 本周完成发布
 
 **用户查看平台（看所有 AI 的记忆）**
 
-`yotta-memory view` → 浏览器打开 http://127.0.0.1:8788 → 输入主口令解锁 → 浏览 / 搜索 / 导出全部记忆（含各 AI 私密）；也可在此**授权 / 吊销**某 AI 读取其私密、**重设口令**、**查看恢复钥匙**。口令只在本地内存派生，不落盘、不发远端；默认仅本机，远程需 `--host` 显式开启。
+`yotta-memory view` → 浏览器打开 http://127.0.0.1:8788 → 输入主口令解锁 → 浏览 / 搜索 / 导出全部记忆（含各 AI 私密）；也可在此**授权 / 吊销**某 AI 读取其私密、**重设口令**、**查看恢复钥匙**。点击「授权」后会弹窗展示只显示一次的 `agent_key`，请立即单独保存；引擎同时写临时 `keys/pending/<id>.key`，该 AI 新会话用 `key claim` 领取到自己的宿主目录，领取成功后 pending 删除。已绑定的 agent 需先「吊销」再授权，旧 key 随即校验失败。口令只在本地内存派生，不落盘、不发远端；默认仅本机，远程需 `--host` 显式开启。
 
 **AI 接入加密库**
 
-1. 该 AI 声明身份（`iam` / MCP 配置 `YOTTA_AGENT_ID`）。
-2. 用户在平台对其点一次「授权」→ 平台把该 AI 的 owner key 写入授权缓存（`keys/cache/<id>.key`，600 权限）。
-3. 之后该 AI 正常 `remember / recall / profile / context`，读写自动加解密；未授权时写私密会提示「需在用户平台授权」，公共 FACT 不受影响。
+1. 该 AI 登记身份（`iam` / MCP 配置 `YOTTA_AGENT_ID`）。
+2. 由用户执行一次 `yotta-memory view` → 在平台点「授权」→ 生成只展示一次的 `agent_key`，写入 `keys/bindings/<id>.key.agent` 和临时 `keys/pending/<id>.key`；不再写明文 owner key cache。高级用户也可自行执行 `yotta-memory key bind <id>`；AI 只负责提醒，不代执行。
+3. 该 AI 新会话执行 `yotta-memory key status <id> --to <AI_HOME>`；有 pending 就执行 `yotta-memory key claim <id> --to <AI_HOME>`，落到 `<AI_HOME>/.yotta-memory-agent-key`。之后 MCP 配置注入 `YOTTA_MEMORY_AGENT_KEY`，CLI 用 `--agent-key-file <AI_HOME>/.yotta-memory-agent-key`。
+4. 之后该 AI 正常 `remember / recall / profile / context`，读写自动加解密；未绑定 / key 缺失时会出现 `[YTM_MIGRATION_REQUIRED]` 迁移提示，公共 FACT 不受影响。
 
 **口令管理**
 
 - 重设口令：`yotta-memory reset-password`（输入当前口令），或忘口令时 `--recovery-key <恢复钥匙>`。
-- 吊销某 AI：`yotta-memory key revoke <id>`（立即失效）。
+- 吊销某 AI：`yotta-memory key revoke <id>`（立即失效，并清理 pending；旧 key 后续读取会校验失败）。
 - 注意：**口令即主密钥**，忘口令且丢失恢复钥匙 = 密文私密不可恢复（公共 FACT 仍在）。
 
 ## 3.6 自我学习 / 自我进化 / 自我提升（v0.8.0）
@@ -287,7 +288,7 @@ yotta-memory token new --agent 我的智能体ID
 
 - 引擎地址：`http://<本机IP>:8787/mcp`
 - 该智能体的 token：`ytm_...`
-- 智能体 ID（对应 X-Agent-Id 请求头）
+- 智能体 ID（对应 X-Agent-Id 请求头）与该智能体的 agent_key（对应 X-Agent-Key 请求头）
 
 查本机 IP：Linux 运行 `hostname -I`（或 `ip a`）；Windows 运行 `ipconfig` 找「IPv4 地址」。防火墙：Linux 若启用了 ufw，执行 `sudo ufw allow 8787/tcp`；Windows 首次监听时允许放行。否则局域网其它主机连不进来。
 
@@ -311,7 +312,14 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 
 智能体装上技能后（`SKILL.md`）会自动学会这套工作流，无需任何 MCP 配置。
 
-**方式二：stdio MCP（零常驻进程，智能体按需拉起 CLI）。** 在智能体 MCP 配置里加：
+**方式二：stdio MCP（零常驻进程，智能体按需拉起 CLI）。** 先让 AI 领取 agent_key：
+
+```bash
+yotta-memory key status <本智能体ID> --to <AI_HOME>
+yotta-memory key claim <本智能体ID> --to <AI_HOME>
+```
+
+领取成功后宿主目录出现 `<AI_HOME>/.yotta-memory-agent-key`；再由 MCP 宿主读取该文件并注入环境变量。然后在智能体 MCP 配置里加：
 
 ```json
 {
@@ -319,13 +327,17 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
     "yotta-memory": {
       "command": "yotta-memory",
       "args": ["serve", "--stdio"],
-      "env": { "YOTTA_AGENT_ID": "<该智能体唯一ID>" }
+      "env": {
+        "YOTTA_AGENT_ID": "<该智能体唯一ID>",
+        "YOTTA_MEMORY_AGENT_KEY": "<AI_HOME>/.yotta-memory-agent-key 的内容",
+        "YOTTA_MEMORY_TRUST_ENV_AGENT": "1"
+      }
     }
   }
 }
 ```
 
-本机接入不需要 token，也不需要启动 HTTP 服务；但**必须在配置里声明唯一的 `YOTTA_AGENT_ID`**（见下），否则写私密记忆会被拒。
+本机接入不需要网络 token，也不需要启动 HTTP 服务；但**必须同时声明唯一的 `YOTTA_AGENT_ID` 与 `YOTTA_MEMORY_AGENT_KEY`，并设置 `YOTTA_MEMORY_TRUST_ENV_AGENT=1`**，否则私密读写会被拒。
 
 **本机智能体装好技能后如何获取记忆存放位置？** 按优先级：`YOTTA_MEMORY_HOME` 环境变量 > `config set memory_home` 持久化的 `~/.yottamemory/config.json` > 默认 `~/.yottamemory`。AI 开工执行 `yotta-memory config get` 查看当前生效位置；记忆库移动后执行一次 `config set memory_home <新目录>` 即可。
 
@@ -333,13 +345,13 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 
 1. 开工先 `yotta-memory whoami` 确认「我是谁」。
 2. 未登记 → 向用户确认一个**全局唯一** ID（建议 `<主机名>-<角色>`，别用 `dashu` / `codex` 这类易撞名），执行 `yotta-memory iam <id>`：引擎**强制唯一性**（被其它主机 / 来源占用会拒绝），并自动落一条「自我接入档案」PREF（owner=自己）。
-3. 本机多个 AI 智能体共用引擎时，**每个都要在它自己的 MCP 配置里声明唯一 `YOTTA_AGENT_ID`**（CLI 直连则每次带 `--agent <id>`），各自 `whoami` 各回各的、互不撞。
+3. 本机多个 AI 智能体共用引擎时，**每个都要在它自己的 MCP 配置里声明唯一 `YOTTA_AGENT_ID` + 自己的 `YOTTA_MEMORY_AGENT_KEY`**；CLI 直连每次带 `--agent <id> --agent-key <key>` 或 `--agent-key-file <文件>`。owner ID 单独存在时不构成认证。
 4. **禁止**从记忆里读到别人的 ID 就当自己的（比如看到「Kali 智能体 ID 为 dashu」就把自己当 dashu）；不确定先 `whoami` 再问用户，**禁止猜**。
 5. **不设则 owner 为空**：写私密记忆会被引擎拒绝（公共 FACT 不受影响），避免私密隔离退化。
 
 ### 5.2 局域网其它主机的 AI 智能体
 
-**第 1 步：向记忆引擎主机获取**：引擎 IP、端口（默认 8787）、本智能体的 token、智能体 ID。
+**第 1 步：向记忆引擎主机获取**：引擎 IP、端口（默认 8787）、本智能体的 token 与智能体 ID。若还没有 agent_key，由用户在引擎主机执行 `yotta-memory view` 授权；同机 / 共享文件系统时 AI 用 `key status` / `key claim` 领取到 `<AI_HOME>/.yotta-memory-agent-key`，不共享文件系统时由用户通过密码管理器或安全文件传输放到目标宿主目录。
 
 **第 2 步：配置 MCP**（可以让 AI 按 `SKILL.md` 引导自动完成；也可以手动在你的智能体 MCP 配置里加这段）：
 
@@ -350,7 +362,8 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
       "url": "http://<引擎主机IP>:8787/mcp",
       "headers": {
         "Authorization": "Bearer <TOKEN>",
-        "X-Agent-Id": "<本智能体ID>"
+        "X-Agent-Id": "<本智能体ID>",
+        "X-Agent-Key": "<本智能体宿主 key 文件中的 agent_key>"
       }
     }
   }
@@ -378,7 +391,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 | `yotta-memory reindex` | 重建索引 |
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |
 | `yotta-memory config set <键> <值>` / `config get` | 记忆库位置与引擎参数（`memory_home` / `embedding_cmd` / `embedding_timeout` / `maintain_archived_utility` / `maintain_decay_halflife_<TYPE>` / `consolidate_*` 等）|
-| `yotta-memory whoami` | 查看当前智能体身份与登记状态（读 `YOTTA_AGENT_ID` / `X-Agent-Id`，不猜不默认）|
+| `yotta-memory whoami --agent <id>` | 查看当前显式身份与登记状态；环境身份仅在 MCP 信任标记下有效 |
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 访问 token（同 ID 已被其它来源占用需 `--force` 覆盖）|
 | `yotta-memory serve [--port 8787] [--stdio] [--no-auth]` | 启动记忆引擎（--no-auth 关闭鉴权，仅限可信内网）|
@@ -427,7 +440,7 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 **确实需要读取其它智能体的私密记忆时（三种授权方式，满足任一即可）：**
 
 1. 显式授权 `grants.json`：在记忆库根目录写 `{"<你的agentID>": ["<对方agentID>"]}`；
-2. identity=user：以 `--agent user` / `--owner user` / 环境变量 `YOTTA_AGENT_ID=user` 读取；
+2. identity=user：以 `--agent user` / `--owner user` 读取，调用方仍需持有匹配的 agent_key；
 3. 显式放行 `--unsafe`：用户明确同意时使用。
 
 **协作纪律**：FACT 写入公共区共享；PREF / BOUND / COMMIT 只写自己的私密区；不主动读取其它智能体的私密记忆。

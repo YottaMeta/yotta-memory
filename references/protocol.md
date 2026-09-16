@@ -29,7 +29,7 @@
 │   ├── facts/                # 公共 FACT 归档
 │   └── private/<owner>/<type>/  # 私密归档（PREF/BOUND/COMMIT，带 owner 防撞名）
 ├── index.json              # 公共 FACT 索引 + TF 打分（加密库只含公共条目）
-├── keys/                   # 加密库密钥库（v0.7）：salt / <owner>.key.enc(UMK 包裹) / <owner>.key.recovery(恢复钥匙包裹) / recovery.key.enc / cache/<id>.key(授权缓存 600)
+├── keys/                   # 加密库密钥库：salt / <owner>.key.enc(UMK 包裹) / <owner>.key.recovery(恢复钥匙包裹) / recovery.key.enc / bindings/<id>.key.agent；legacy cache/<id>.key 不再加载
 ├── agents.json             # 智能体身份登记表（iam 写入，唯一性强制）
 └── README.md               # 记忆库说明
 ```
@@ -41,7 +41,7 @@
 ## 2.5 智能体身份（谁在写 / 谁在读）
 
 - **agent ID 必须全局唯一**：`iam <id>` 写入 `agents.json`（记忆库根目录），唯一性强制——ID 已被其它主机 / 来源（含远端 token 登记）占用则拒绝，确认是同一智能体才 `--force`。
-- **当次身份声明**：`whoami` / MCP `agent_info` 读「当次声明身份」——本机 `YOTTA_AGENT_ID`（stdio 由 MCP 配置 `env` 注入，CLI 用 `--agent`/环境变量）；远端 `X-Agent-Id` 请求头（经 token 绑定校验）。不猜不默认。
+- **当次身份声明**：`whoami` / MCP `agent_info` 读「当次显式身份」——CLI 用 `--agent`，MCP 用 per-process `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1`；远端用 `X-Agent-Id` + `X-Agent-Key` 请求头（经 token 绑定校验）。不接受用户级全局 fallback。
 - **自我档案**：`iam` 自动写一条 PREF `subject=自我接入档案`（owner=自己），statement 为 `; ` 分隔的 key:value——`agent_id / host / memory_home / mcp_mode(stdio|http) / engine_url(仅远端) / token(仅远端；本机不存 token)`，可含 `agent_name / user_name / relationship`（`iam --name/--user/--relationship` 写入）。
 - **私密记忆必须有 owner**：PREF / BOUND / COMMIT 写入时未声明身份（owner 空）直接拒绝（公共 FACT 不受影响），从机制上防止「抄别人的 ID」。
 
@@ -92,7 +92,7 @@ immutable: false
 - **UMK（用户主密钥）**：主口令 PBKDF2-SHA256（600000 次迭代 + 随机 16B 盐，盐存 `keys/salt`）派生，永不落盘明文。
 - **Owner Key**：每 owner 随机 32B；被 UMK 包裹存 `keys/<owner>.key.enc`（头 `YTMKEY1`，AAD=`owner:<id>`），被恢复钥匙包裹存 `keys/<owner>.key.recovery`。
 - **恢复钥匙（RK）**：随机 32B；被 UMK 包裹存 `keys/recovery.key.enc`（AAD=`recovery`），初始化/迁移时向用户打印一次（base64）。忘口令时用户提供 RK → 解开 `*.key.recovery` → 重设口令。
-- **授权缓存**：平台授权后把 owner key 明文写 `keys/cache/<id>.key`（文件权限 0600，仅属主可读写）；AI 侧只持有自己这把缓存 key，UMK 永不接触 AI。`key revoke` = 删除缓存文件。
+- **agent_key 绑定**：由用户执行 `key bind <id>` 或在 `view` 平台授权，生成 32 字节 agent_key，只展示一次；owner key 由 agent_key 包裹写入 `keys/bindings/<id>.key.agent`（AES-256-GCM），同时写临时待领取文件 `keys/pending/<id>.key`。AI 新会话用 `key status <id> --to <AI_HOME>` / `key claim <id> --to <AI_HOME>` 领取到 `<AI_HOME>/.yotta-memory-agent-key`，claim 成功后删除 pending。本机 MCP 用 `YOTTA_MEMORY_AGENT_KEY`，远程 MCP 用 `X-Agent-Key`，CLI 用 `--agent-key/--agent-key-file`；调用方必须提供 `agent_id + agent_key` 才能解出 owner key；UMK 永不接触 AI。`key revoke` 删除 binding 与 pending，旧 key 随即校验失败。`key list` 与私密操作失败时输出 `[YTM_MIGRATION_REQUIRED]`，AI 只负责把迁移步骤转达给用户。
 
 ### 密文记忆文件（`.md.enc`，头 `YTMENC1`）
 ```
@@ -110,10 +110,10 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 
 ### 命令扩展
 - `init [--encrypt|--no-encrypt]`：新建默认加密（需主口令，打印恢复钥匙）；`--no-encrypt` 明文降级。
-- `migrate`：明文私密区 → 密文（需主口令；打印恢复钥匙；当前智能体自动授权缓存）。
-- `view [--port 8788] [--host 127.0.0.1]`：用户查看平台（本机 Web；口令解锁 → 浏览/搜索/导出全部；授权/吊销 AI；重设口令；显示恢复钥匙）。
+- `migrate`：明文私密区 → 密文（由用户执行；需主口令；打印恢复钥匙；不写明文授权缓存，重新授权由用户在 `view` 平台逐个完成）。
+- `view [--port 8788] [--host 127.0.0.1]`：用户查看平台（本机 Web；口令解锁 → 浏览/搜索/导出全部；授权/吊销 AI；授权时展示一次性 key 并写 pending；重设口令；显示恢复钥匙）。
 - `reset-password [--password <当前> | --recovery-key <钥匙>] [--new-password <新>]`：重设主口令并重新包裹全部 owner 密钥。
-- `key list | authorize <id> | revoke <id>`：授权缓存管理（authorize 需主口令）。
+- `key list | bind <id> | rotate <id> | claim <id> --to <AI_HOME> | status <id> | revoke <id>`：agent binding 管理（bind/rotate 由用户执行，需主口令或恢复钥匙；claim/status 由 AI 读取 pending 并落到宿主目录；`authorize` 保留为 bind 的兼容别名）。`view` 的授权按钮只对未绑定 agent 生成一次性 key 和 pending，已绑定需先吊销。
 
 ## 4. 类型体系
 
@@ -139,7 +139,7 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 |---|---|
 | 公共 FACT | 始终可读 |
 | 当前 agent 自己的 private | 始终可读 |
-| 其它 agent 的 private | 默认拒绝（不返回内容）；需满足任一授权：① `grants.json` 显式授权记录 ② identity=user（`--agent user` / `--owner user` / `YOTTA_AGENT_ID=user`）③ 显式 `--unsafe` |
+| 其它 agent 的 private | 默认拒绝（不返回内容）；需满足任一授权：① `grants.json` 显式授权记录 ② identity=user（`--agent user` / `--owner user`）③ 显式 `--unsafe`；调用方仍须持有对应 agent_key |
 
 > **默认隔离行为（recall）**：不带 `--all` / `--owner <其它agent>` 时（即默认 recall），遇其它 agent 私密记忆**静默跳过**，不输出任何「有私密被拒」提示、也不报错（exit 0），不泄露私密存在性；仅当**显式跨智能体读取**（`--all` 或 `--owner <其它agent>`，且非 user/自身）且无授权命中时，才报错/警告：无可读命中 → 「检测到 N 条越界访问已被拒绝」+ exit 3；有可读命中 → 正常展示 + 追加警告。
 

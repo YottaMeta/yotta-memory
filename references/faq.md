@@ -6,10 +6,10 @@
 类型只在写入时提示、不阻止（FACT=公共 / PREF、BOUND、COMMIT=私密）。写错不影响已写入内容；想改类型可 `forget` 后按正确类型重写。不需要提示可用 `--no-hint`。
 
 ## 2. 私密区加密怎么用？
-`init` 默认初始化加密库（需主口令 + 恢复钥匙，请妥善保存）；明文库可用 `migrate` 升级为加密。私密区文件为 `.md.enc`，可 git 版本化。查看/授权用 `yotta-memory view`（口令解锁，浏览/授权/吊销 AI）。
+`init` 默认初始化加密库（需主口令 + 恢复钥匙，请妥善保存）；明文库可用 `migrate` 升级为加密。私密区文件为 `.md.enc`，可 git 版本化。查看/授权用 `yotta-memory view`（口令解锁，浏览/授权/吊销 AI）；授权时一次性展示的 `agent_key` 请立即保存，服务端同时写 `keys/pending/<id>.key` 供该 AI 新会话用 `key claim` 领取。出现 `[YTM_MIGRATION_REQUIRED]` 说明还有 agent 未绑定，请由你在 `view` 平台逐个点「授权」完成重新授权（AI 只提醒、不代执行）。
 
 ## 3. 多智能体权限怎么隔离？
-公共 FACT 所有智能体可读；PREF / BOUND / COMMIT 按 owner 物理隔离，其他智能体需显式授权（`key authorize <id>` 或 `view` 平台授权）。不授权读不到，也不会被别的智能体读到。
+公共 FACT 所有智能体可读；PREF / BOUND / COMMIT 按 owner 物理隔离，调用方必须持有匹配的 `agent_key`（用户执行 `key bind <id>`，或在 `view` 平台授权获得）。owner ID 单独存在不构成认证，不授权 / 无 key 读不到。私密操作缺 key 时会输出 `[YTM_MIGRATION_REQUIRED]`；授权完成后该标记消失。AI 新会话用 `key status <id> --to <AI_HOME>` 检查，pending 存在则 `key claim <id> --to <AI_HOME>` 落到 `<AI_HOME>/.yotta-memory-agent-key`；吊销后旧 key 立即校验失败，需重新授权。
 
 ## 4. 记忆找不到了？
 先 `config get` 确认 `memory_home` 指向的库；再 `reindex` 重建索引（升级后索引版本变化会自动重建）；最后 `recall <关键词>` / `search <词>` 语义检索。跨项目记忆在项目级 `.yottamemory`。
@@ -18,10 +18,10 @@
 用初始化时保存的**恢复钥匙**：`yotta-memory reset-password`。没有恢复钥匙则私密区无法解锁（这是加密的预期行为），公共 FACT 不受影响。
 
 ## 6. 局域网（便携记忆盘）怎么连？
-引擎主机 `lan enable` 注册开机自启（Windows 计划任务 / Linux systemd）→ `token new --agent <id>` 生成 token；客户端配 `url: http://<主机IP>:8787/mcp` + `Authorization: Bearer <token>` + `X-Agent-Id: <id>`。`lan status` 查状态。
+引擎主机 `lan enable` 注册开机自启（Windows 计划任务 / Linux systemd）→ `token new --agent <id>` 生成 token；客户端配 `url: http://<主机IP>:8787/mcp` + `Authorization: Bearer <token>` + `X-Agent-Id: <id>` + `X-Agent-Key: <agent_key>`。同机 / 共享文件系统由 AI 用 `key status` / `key claim` 领取宿主 key；跨机不共享文件系统由用户通过密码管理器或安全文件传输放置，不走聊天明文。`lan status` 查状态。
 
 ## 7. MCP 工具没加载？
-检查客户端 `mcpServers` 已配置 yotta-memory（url + token）；改配置后重启/重载会话。本机直连可不配 MCP，直接用 CLI。
+检查客户端 `mcpServers` 已配置 yotta-memory（url + token + agent_key）；agent_key 应来自 `<AI_HOME>/.yotta-memory-agent-key` 或 MCP secret 注入，不把明文 key 写进对话。改配置后重启/重载会话。本机直连可不配 MCP，直接用 CLI。
 
 ## 8. 记忆库在哪个目录？
 `yotta-memory config get` 查看；`config set memory_home <目录>` 改位置。项目级记忆用 `init --project`（存 `.yottamemory/` 随项目共享）。

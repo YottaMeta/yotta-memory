@@ -10,6 +10,7 @@ const SNAPSHOT_OPTS = { snapshotDir: path.join(tmpRoot, 'snapshots'), allowSameV
 process.env.USERPROFILE = tmpRoot;
 if (process.platform !== 'win32') process.env.HOME = tmpRoot;
 process.env.YOTTA_AGENT_ID = 'codex';
+process.env.YOTTA_MEMORY_TRUST_ENV_AGENT = '1';
 process.env.YOTTA_MEMORY_HOME = path.join(tmpRoot, 'lib-main');
 const engine = require(path.join(process.cwd(), 'bin/yotta-memory.js'));
 

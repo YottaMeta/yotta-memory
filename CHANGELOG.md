@@ -1,3 +1,27 @@
+## v0.13.2 (2026-09-16)
+
+**安全修复：调用者认证 + agent_key 绑定**
+
+- 私密操作不再把 owner ID 当身份：`whoami` / `context` / `profile` / `remember` / `recall` 需要显式 `--agent <id>` 或受信任的 MCP 环境身份。
+- 新增 `agent_key` capability：`key bind <id>` 生成并只展示一次 agent_key；owner key 由 `keys/bindings/<id>.key.agent` 使用 agent_key 包裹。
+- 删除对 `keys/cache/<id>.key` 明文 owner key 缓存的加载路径；legacy cache 只提示，不参与解密。
+- MCP 必须同时配置 `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1`；普通 shell 的 `YOTTA_AGENT_ID` 默认不可信。
+- 新增身份冲突、无 agent_key、错误 agent_key、冒充他人 ID、legacy cache 不加载等对抗性回归。
+- `key list` 与失败的私密操作输出 `[YTM_MIGRATION_REQUIRED]`：列出仍有私密数据且未绑定的 agent 与原因，供 AI 主动引导用户完成绑定迁移；`doctor` 同步给出提醒。仅存在 legacy cache、没有可迁移私密数据的 owner 单独提示，不进入迁移清单；授权决策仍由用户逐个确认。
+- 修复明文库 `migrate` 在身份解析处的崩溃，迁移后明确提示逐 agent `key bind`（不再写明文授权缓存）。
+- `view` 平台授权会一次性弹出并展示 `agent_key`，页面可复制保存；已有 binding 时返回 409 并提示先吊销，防止误换 key 打断在用的智能体。授权 / 吊销入口新增 owner ID 路径穿越校验。
+- `view` / `key bind` 授权后新增临时待领取文件 `keys/pending/<id>.key`；新增 `key status <id> --to <AI_HOME>` 与 `key claim <id> --to <AI_HOME>`，AI 可将 key 原子写入 `<AI_HOME>/.yotta-memory-agent-key`，回读校验后删除 pending。pending 不入 backup / export，避免备份包夹带明文 key。
+- `key revoke` 现在同时删除 binding 与 pending；私密读取不再跨操作缓存 owner key，长驻 MCP 进程在吊销后继续使用旧 key 会立即校验失败，必须由用户重新授权生成新 key。
+- 授权写入改为事务式：binding 写入后若 pending 交接文件写入失败，会回滚刚写入的 binding，避免产生“已绑定但用户拿不到 key”的孤儿授权。
+- 修复 MCP stdio 私密读写未使用宿主注入的 `YOTTA_MEMORY_AGENT_KEY` 的缺陷；远程 MCP 新增 `X-Agent-Key` 请求头，token 只负责连接鉴权，加密私密读写仍必须持有匹配的 agent_key。
+- `key bind` / `key revoke` / `token new` / `token revoke` / MCP `callTool` 统一拒绝非法 agent ID，阻止 `..` 或路径分隔符在密钥、token 与记忆路径入口被利用。
+- MCP `import` 在写入前校验私密条目 `owner`，拒绝路径穿越；`view` 平台校验 Host / Origin，并对页面与 API 响应关闭缓存、补安全响应头，阻止 DNS rebinding / 跨站请求面。
+- `key bind` 与 `view` 授权在 owner key 文件缺失时会先从 `keys/<owner>.key.recovery` 恢复原 key；原 key 与恢复文件都不可用且仍有密文时拒绝新建，避免旧数据被静默变成不可解密。
+- 恢复演练不再读取 legacy `keys/cache/*.key` 明文缓存；解密必须提供恢复钥匙或主口令。
+- 迁移边界：重新授权由用户在 `yotta-memory view` 平台逐个完成，AI 只转达 `[YTM_MIGRATION_REQUIRED]` 与操作步骤，不代替用户执行 `migrate` / `key bind`；`view` 授权确认框同步说明该操作属于用户侧。
+- 查看平台 HTML 移出内嵌字符串，改存 `assets/view.html`。
+- 发布前必须通过 security review；现有加密库需执行一次 `key bind` 迁移，明文库需先迁移加密。
+
 ## v0.13.1 (2026-09-13)
 
 - 清理发布文档与测试夹具中的本机专属盘符 / 路径示例，统一改为 `~/.yottamemory` 或占位路径。

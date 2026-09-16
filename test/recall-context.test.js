@@ -4,6 +4,8 @@ const fs = require('fs');
 const home = path.join(os.tmpdir(), 'yottamem-v09-' + Date.now());
 fs.mkdirSync(home, { recursive: true });
 process.env.YOTTA_MEMORY_HOME = home;
+process.env.YOTTA_AGENT_ID = 'codex';
+process.env.YOTTA_MEMORY_TRUST_ENV_AGENT = '1';
 const engine = require(path.join(process.cwd(), 'bin/yotta-memory.js'));
 
 if (typeof engine.runEmbeddingPlugin !== 'function') {

@@ -23,6 +23,8 @@
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
 
+> 🆕 **v0.13.2 (security)**: owner ID is not an authentication credential. Private reads/writes now require an explicit `agent_key`; the user creates it through `yotta-memory view` (or by running `yotta-memory key bind <id>`), then configures MCP with `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1` (or CLI `--agent <id> --agent-key <key>` / `--agent-key-file <file>`). Authorization also writes a temporary `keys/pending/<id>.key`; a new AI session runs `key status <id> --to <AI_HOME>` / `key claim <id> --to <AI_HOME>` to store it at `<AI_HOME>/.yotta-memory-agent-key` and delete pending, while the popup key is the user's separate backup. Legacy `keys/cache/*.key` is no longer loaded. When an owner still needs rebinding, `key list` and failed private operations print `[YTM_MIGRATION_REQUIRED]` with the affected agent IDs; the AI relays the steps and the user re-authorizes in `yotta-memory view`, which shows the one-time `agent_key` and refuses to overwrite an existing binding until it is revoked; the old key then fails validation.
+
 > 🆕 **v0.12.2**: reliability closure — `yotta-memory doctor` checks the store, key material, index, identity registry and latest backup; `maintain --apply`, `consolidate --apply`, `merge`, `archive` and `--purge` create a transaction snapshot before writing and refuse to proceed if the snapshot fails.
 
 > 🆕 **v0.12.1**: installation and update docs now distinguish the engine CLI (`yotta-memory`) from the skill installer (`yotta-memory-install`), with copy-ready upgrade commands.
@@ -68,7 +70,7 @@ Memory is classified into four types; the type decides visibility:
 
 - **Three read states**: public FACT always readable; own private always readable; other agents' private is denied by default (content not returned).
 - **Physically isolated directories**: private memory lives at `private/<owner>/<type>/`; different agents' private files are physically separated; legacy flat `prefs/` `bounds/` `commits/` auto-migrate on `reindex`.
-- **Three authorization gates** (any one grants reading another's private): 1. explicit grant in `grants.json`; 2. identity=user (`--agent user` / `--owner user` / `YOTTA_AGENT_ID=user`); 3. explicit `--unsafe` (user explicitly authorized).
+- **Three authorization gates** (any one grants reading another's private): 1. explicit grant in `grants.json`; 2. identity=user (`--agent user` / `--owner user`); 3. explicit `--unsafe` (user explicitly authorized). The caller must still present the matching `agent_key`.
 - **Silent by default, explicit cross-read errors**: default recall silently skips other agents' private (no "there are N invisible private entries" leak); only explicit cross-agent reads (`--all` / `--owner <other>`) without authorization error / warn.
 - **`--agent <other>` does not cross**: it only declares identity for display; reading other agents' private still needs grant / identity=user / `--unsafe`.
 - **Isolation positioning**: scope: private guarantees semantic isolation between AIs; since v0.7 the private zone is mechanism-level confidentiality — files are AES-256-GCM envelope encrypted, so an AI without the owner key cannot decrypt them even if it reads the ciphertext; data sovereignty remains with the user, who can use `yotta-memory view` to unlock and view / export any memory file.
@@ -81,7 +83,7 @@ Each agent has a globally unique agent ID: it is the ownership key for private m
 - **Register (must be unique)**: `yotta-memory iam <id>` writes `agents.json` at the memory root, **enforcing uniqueness** — denied if the ID is already used by another host / source (including remote token registration); `--force` only when you confirm it is the same agent.
 - **Confirm identity**: `yotta-memory whoami` (remote MCP tool `agent_info`) reads the "declared identity of this session" — it never guesses or assumes.
 - **Self profile (forced to disk)**: `iam` auto-writes a PREF `subject=自我接入档案` (owner=self) with `; `-separated key:value: `agent_id / host / memory_home / mcp_mode / engine_url / token` (token not stored locally). Start work with `recall "自我接入档案"` to recover identity and connection info.
-- **No token locally**: local CLI / stdio direct connection bypasses the network and does not validate tokens; identity is declared via the agent's MCP `env.YOTTA_AGENT_ID`.
+- **No network token locally**: local CLI / stdio bypasses HTTP tokens, but private access still requires `agent_id + agent_key`; MCP declares the key through per-process `YOTTA_MEMORY_AGENT_KEY` and `YOTTA_MEMORY_TRUST_ENV_AGENT=1`.
 - **Private memory requires an owner**: writing PREF / BOUND / COMMIT without declaring identity is rejected (public FACT is unaffected), mechanically preventing ID spoofing.
 
 ### Profile & start-of-work context (v0.6.0 + v0.9.0)
@@ -122,7 +124,7 @@ Each agent has a globally unique agent ID: it is the ownership key for private m
 |---|---|
 | Wrong memory type? | Hint only; forget and rewrite; --no-hint to disable |
 | Private encryption? | init encrypts by default (master password + recovery key); migrate to encrypt a plaintext store |
-| Multi-agent isolation? | FACT public; PREF/BOUND/COMMIT per-owner, grant via key authorize / view |
+| Multi-agent isolation? | FACT public; PREF/BOUND/COMMIT per-owner + per-agent `agent_key`; the user binds once via `view` (or `key bind`) |
 | Memory not found? | config get -> reindex -> recall/search |
 | Lost master password? | reset-password with recovery key |
 | LAN connect? | lan enable + token new; client url+token |
@@ -278,7 +280,7 @@ Optional post-upgrade self-check: `yotta-memory config get` (confirm `memory_hom
 | `yotta-memory whoami` | Show the current agent identity and registration status |
 | `yotta-memory iam <id> [--name <name>] [--user <user>] [--relationship <rel>] [--force]` | Register this agent's unique identity and auto-write the self profile (`agents.json`, ID must be unique) |
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | Create / list / revoke access tokens for agents (registered at `.server/tokens.json`) |
-| `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | Start the MCP memory engine (streamable HTTP LAN / --stdio local zero-process mode; Bearer token + X-Agent-Id auth) |
+| `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | Start the MCP memory engine (streamable HTTP LAN / --stdio local zero-process mode; Bearer token + X-Agent-Id + X-Agent-Key auth) |
 | `yotta-memory lan enable [--onstart] / disable / status` | Autostart management (Windows: scheduled task, default ONLOGON, --onstart needs admin, non-admin auto-degrades to user-level Startup; Linux: systemd user unit, falls back to user crontab @reboot) |
 | `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--dedup --apply] [--merge A,B]` | Self-organization: archive / forget candidates / confidence-scored dedup / auto-merge high-confidence groups; dry-run by default; `--dedup` is mutually exclusive with archiving |
 | `yotta-memory consolidate [--min-age N] [--min-idle N] [--max-utility N] [--min-group N] [--period N] [--type T] [--model <cmd>] [--apply] [--undo <batch>] [--batches]` | Periodic-summary compression (v0.10.0): group old idle low-value memories into one traceable summary and archive the originals; dry-run by default; `--undo <batch>` rolls a batch back; `--batches` lists batches |
@@ -300,7 +302,8 @@ yotta-memory recall --type FACT --limit 10
 
 Environment variables:
 - `YOTTA_MEMORY_HOME`: overrides the user-level store directory (default `~/.yottamemory/`).
-- `YOTTA_AGENT_ID` / `AGENT_ID`: current agent ID (local identity declaration; participates in read-partition decisions; private memory requires an owner, undeclared is rejected).
+- `YOTTA_AGENT_ID` / `AGENT_ID`: per-process MCP identity only; trusted only with `YOTTA_MEMORY_TRUST_ENV_AGENT=1`, never as a user-level global fallback.
+- `YOTTA_MEMORY_AGENT_KEY`: per-agent 32-byte key used to unwrap `keys/bindings/<id>.key.agent`; required for encrypted private reads/writes. After authorization, the AI runs `key status` / `key claim` to store it at `<AI_HOME>/.yotta-memory-agent-key`, and the MCP host injects it from that file.
 
 ## After the agent is wired up
 
@@ -311,7 +314,7 @@ Once the skill is installed into an agent, SKILL.md teaches it the workflow auto
 The store can live on any host or disk (= the memory engine) and be reached by agents on other LAN hosts:
 
 - **Local direct**: CLI reads/writes directly, no token;
-- **Remote**: the engine host runs `yotta-memory serve` (or registers `lan enable` autostart); remote agents connect via MCP with `url + token`.
+- **Remote**: the engine host runs `yotta-memory serve` (or registers `lan enable` autostart); remote agents connect via MCP with `url + token + agent_key`. Same-host / shared-filesystem agents use `key claim`; cross-host setups without a shared filesystem require the user to transfer the host key securely.
 - **Local zero-process**: local MCP clients can use `serve --stdio` to launch the CLI on demand (no resident process).
 
 ### Engine side (the host where memory lives)
@@ -324,7 +327,7 @@ The store can live on any host or disk (= the memory engine) and be reached by a
    yotta-memory token revoke --agent <agent-id>   # revoke
    ```
    > New tokens take effect immediately; no service restart needed.
-3. Start the service (default listens on 0.0.0.0:8787, Bearer token + X-Agent-Id auth) — temporary run or register autostart:
+3. Start the service (default listens on 0.0.0.0:8787, Bearer token + X-Agent-Id + X-Agent-Key auth) — temporary run or register autostart:
    ```bash
    yotta-memory serve                          # temporary foreground
    yotta-memory lan enable                     # register autostart (Windows: scheduled task / user-level Startup; Linux: systemd user unit / user crontab)
@@ -336,7 +339,14 @@ The store can live on any host or disk (= the memory engine) and be reached by a
 
 ### Client side (remote agent)
 
-Register the connection in the agent's MCP config (`url` + two headers):
+Before registering the connection, confirm the agent has claimed its key:
+
+```bash
+yotta-memory key status <agent-id> --to <AI_HOME>
+yotta-memory key claim <agent-id> --to <AI_HOME>
+```
+
+If the engine and the agent do not share a filesystem, `key claim` cannot read the remote pending file directly; the user must transport the key through a password manager or a secure file transfer into the agent host directory. Then register the connection (`url` + three headers):
 
 ```json
 {
@@ -345,14 +355,15 @@ Register the connection in the agent's MCP config (`url` + two headers):
       "url": "http://<engine-host-ip>:8787/mcp",
       "headers": {
         "Authorization": "Bearer <TOKEN>",
-        "X-Agent-Id": "<this-agent-id>"
+        "X-Agent-Id": "<this-agent-id>",
+        "X-Agent-Key": "<agent_key from this agent's host key file>"
       }
     }
   }
 }
 ```
 
-Once connected, MCP tools (remember / recall / search / context / doctor / forget / archive / reindex / export / import / agent_info) read/write memory and confirm identity; management actions (init / config / token / lan / serve) are not exposed via MCP, and token management is never exposed remotely. MCP `export` / `import` paths are restricted inside the memory root, MCP `distill` does not support `--model`, and MCP never accepts a raw embedding command from remote callers — the local embedding plugin must be configured on the engine host with `config set embedding_cmd`. `X-Agent-Id` must match the token's registered agent; read-partition rules are the same as the CLI (FACT public-readable, PREF / BOUND / COMMIT private).
+Once connected, MCP tools (remember / recall / search / context / doctor / forget / archive / reindex / export / import / agent_info) read/write memory and confirm identity; management actions (init / config / token / lan / serve) are not exposed via MCP, and token management is never exposed remotely. MCP `export` / `import` paths are restricted inside the memory root, MCP `distill` does not support `--model`, and MCP never accepts a raw embedding command from remote callers — the local embedding plugin must be configured on the engine host with `config set embedding_cmd`. `X-Agent-Id` must match the token's registered agent, and encrypted private reads/writes additionally require the matching `X-Agent-Key`; read-partition rules are the same as the CLI (FACT public-readable, PREF / BOUND / COMMIT private).
 
 ### Location persistence
 
