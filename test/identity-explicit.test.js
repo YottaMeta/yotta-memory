@@ -13,6 +13,7 @@ function cleanEnv(home, extra) {
   delete env.YOTTA_AGENT_ID;
   delete env.AGENT_ID;
   delete env.YOTTA_MEMORY_TRUST_ENV_AGENT;
+  delete env.YOTTA_MEMORY_AGENT_KEY;
   env.YOTTA_MEMORY_HOME = home;
   return Object.assign(env, extra || {});
 }
@@ -35,12 +36,14 @@ function initPlain(home) {
   assert.strictEqual(r.status, 0, r.stderr || r.stdout);
 }
 
-test('untrusted ambient YOTTA_AGENT_ID is rejected for context', (t) => {
+test('untrusted ambient YOTTA_AGENT_ID is ignored rather than becoming an identity', (t) => {
   const home = tmpHome(t);
   initPlain(home);
   const r = run(['context'], home, { YOTTA_AGENT_ID: 'gon-mimo' });
   assert.strictEqual(r.status, 3);
-  assert.match(r.stdout, /未受信任的环境身份/);
+  assert.match(r.stdout, /必须先声明身份/);
+  assert.doesNotMatch(r.stdout, /未受信任的环境身份/);
+  assert.doesNotMatch(r.stdout, /gon-mimo/);
   assert.doesNotMatch(r.stdout, /用户画像（gon-mimo）/);
 });
 
@@ -63,11 +66,24 @@ test('trusted MCP env is accepted for whoami', (t) => {
   assert.match(r.stdout, /当前智能体身份: win-opencode-a1/);
 });
 
-test('explicit identity and environment identity conflict is rejected', (t) => {
+test('explicit identity wins over an untrusted ambient environment identity', (t) => {
   const home = tmpHome(t);
   initPlain(home);
   const r = run(['whoami', '--agent', 'codex'], home, {
     YOTTA_AGENT_ID: 'gon-mimo',
+  });
+  assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+  assert.match(r.stdout, /当前智能体身份: codex/);
+  assert.doesNotMatch(r.stdout, /身份冲突/);
+  assert.doesNotMatch(r.stdout, /gon-mimo/);
+});
+
+test('trusted environment identity conflicting with explicit identity is rejected', (t) => {
+  const home = tmpHome(t);
+  initPlain(home);
+  const r = run(['whoami', '--agent', 'codex'], home, {
+    YOTTA_AGENT_ID: 'gon-mimo',
+    YOTTA_MEMORY_TRUST_ENV_AGENT: '1',
   });
   assert.strictEqual(r.status, 2);
   assert.match(r.stdout, /身份冲突/);

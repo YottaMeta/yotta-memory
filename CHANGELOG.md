@@ -1,3 +1,13 @@
+## v0.13.3 (2026-09-17)
+
+**CLI 身份解析与宿主路径诊断修复**
+
+- 非受信 ambient `YOTTA_AGENT_ID` 不再参与身份冲突判定：显式 `--agent` 优先；只有 `YOTTA_MEMORY_TRUST_ENV_AGENT=1` 时才接受环境身份。受信环境身份与显式身份冲突仍拒绝。
+- `key status` / `key claim` 统一 AI_HOME 解析：显式 `--to` / `--agent-key-file` > `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE` > 宿主默认（Codex `$CODEX_HOME` 或 `~/.codex`；OpenCode `$XDG_CONFIG_HOME/opencode`；通用 `~/.<agent_id>`）> 文件名 `.yotta-memory-agent-key`。
+- `key status` 不带 `--to` / `--agent-key-file` 时也输出 `checked` 与实际发现规则；`key claim` 可直接使用同一默认位置。
+- 顶层 usage 明确 `remember <type> <subject> <statement>` 与 `recall [关键词]`；`--query`、remember `--type` 等位置参数误用给出专门提示。
+- 新增 `test/cli-diagnostics.test.js`，并保持身份 / 加密 / 权限边界回归全绿。
+
 ## v0.13.2 (2026-09-16)
 
 **安全修复：调用者认证 + agent_key 绑定**

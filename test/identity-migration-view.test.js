@@ -332,7 +332,8 @@ test('skill docs state that migration and binding are user-side view operations'
   assert.match(skill, /由用户自己执行 `yotta-memory view`/);
   assert.match(skill, /不得代替用户执行 `migrate` \/ `key bind`/);
   assert.match(skill, /升级后首次调用元忆/);
-  assert.match(skill, /key claim <agent_id> --to <AI_HOME>/);
+  assert.match(skill, /key claim <agent_id>/);
+  assert.match(skill, /YOTTA_MEMORY_AGENT_HOME/);
   assert.match(skill, /\.yotta-memory-agent-key/);
   assert.match(skill, /旧 key 立即校验失败/);
 });
