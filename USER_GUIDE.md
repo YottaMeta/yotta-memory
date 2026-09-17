@@ -31,7 +31,7 @@
 - **多智能体共享**：FACT 进公共区共享，PREF / BOUND / COMMIT 各自私密隔离。
 - **交接与团队协作**：项目级 `.yottamemory` 随仓库走，交接即恢复。
 - **便携记忆盘**：记忆装在固定主机上，本机与局域网其它主机共享同一份记忆（见第 4 / 5 篇）。
-- **越用越懂（v0.6.0）**：AI 按「记忆守则」主动捕获信号，`profile` 聚合画像、`context` 开工注入——用得越久越懂你。
+- **越用越懂（v0.14.0）**：AI 按「记忆守则」主动捕获信号，`context` 开工注入长期摘要、画像、近期走廊、边界、承诺与会话闭环契约——用得越久越懂你。
 - **自我学习 / 自我进化 / 自我提升（v0.8.0 + v0.9.0）**：`recall` 语义检索（同义词 / 拼音 / 字段加权 / 模糊，v0.9.0 可选本地 embedding 插件）+ `feedback` 使用反馈闭环 + `maintain` 规则层自组织 + `distill` 心理日志蒸馏——记忆系统会自己整理、提炼、演化。
 - **可靠性基线（v0.12.0 / v0.12.2）**：`init` 对已有库拒绝覆盖；`forget` 进回收区；`backup volumes/setup/status/ensure-daily/schedule/drill` 在用户确认真实独立卷后默认每日自动备份，并提供校验、恢复与恢复演练；`doctor` 开工检查风险，破坏性操作写入前自动创建事务快照。
 
@@ -81,16 +81,16 @@ yotta-memory config get                              # 查看记忆库位置
 - 想换记忆位置：`yotta-memory config set memory_home <目录>`，之后所有命令自动用新位置。
 - 项目级记忆：在项目目录里 `yotta-memory init --project`，该项目的智能体优先读项目级记忆。
 
-### 画像与开工上下文（v0.6.0）
+### 画像与开工上下文（v0.6.0 + v0.9.0 + v0.14.0）
 
 ```bash
 yotta-memory profile                          # 生成用户画像（写 private/<owner>/profile.md）
-yotta-memory context --limit 10 --budget 1800 # 生成开工上下文包（身份+铁律+画像+近期记忆+边界+承诺，预算控 token）
+yotta-memory context --limit 10 --budget 1800 # 生成开工上下文包（身份+铁律+画像+长期摘要+近期走廊+高价值补位+边界+承诺+闭环契约，预算控 token）
 yotta-memory iam <id> --name 元忆 --user 用户 --relationship 伙伴   # 自我档案扩展显示名/用户/关系
 ```
 
 - `profile` 引擎零推断：只按类型 / 主题 / 标签归组呈现原文，画像结论由 AI 内部形成，不当面贴标签。
-- `context` 是每次会话开工的主注入，替代裸 `recall`；无画像时自动生成一次或降级，不报错；`--budget` 控制近期记忆字符预算（token 恒定）。
+- `context` 是每次会话开工的主注入，替代裸 `recall`；长期摘要优先、近期走廊按时间取样、近期高价值补位按文件去重；无画像时自动生成一次或降级，不报错；`--budget` 控制动态记忆字符预算，长期摘要 / 身份 / 铁律 / 画像 / 边界 / 承诺 / 闭环契约必保（token 恒定）。
 - `remember --verify` 写后回读校验；`remember --no-hint` 关闭「疑似偏好，建议 PREF」的提示。
 
 ### 记忆库位置：本机智能体如何找到记忆
@@ -384,7 +384,7 @@ yotta-memory key claim <本智能体ID> --to <AI_HOME>
 | `yotta-memory remember <类型> <主题> <内容> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入记忆（--source 来源；--weight 重要性权重；--verify 写后回读；--no-hint 关闭类型提示）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain] [--semantic] [--embedding <命令>] [--embedding-timeout N]` | 检索记忆（语义 + 效用分排序；可选本地 embedding 插件；读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（零推断，写 `profile.md`）|
-| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 开工上下文包（身份+铁律+画像+任务相关记忆+近期记忆+边界+承诺；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
+| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 开工上下文包（身份+铁律+画像+长期摘要+任务相关记忆+近期走廊+近期高价值+边界+承诺+会话闭环契约；--budget 控制动态记忆字符预算；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆 |
 | `yotta-memory doctor [--json]` | 开工可靠性检查（v0.12.2：根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；私密入 `.archive/private/<owner>/<type>/`）|

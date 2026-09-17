@@ -1,3 +1,15 @@
+## v0.14.0 (2026-09-17)
+
+**上下文编排：让 AI 越用越懂用户**
+
+- `context` 新增「长期理解摘要」段：优先加载 `consolidate` 生成的周期摘要（`source=consolidate` / tags `consolidate` + `summary`），只注入 subject + statement，原文细节继续用 `recall` 下钻。
+- `context` 新增「近期走廊」段：按 `updated / created` 倒序取样，不受 utility 排序影响，让最近发生的事稳定进入开工上下文。
+- 原有近期记忆改为「近期高价值记忆（补位）」：保留 importance + utility 融合排序，并与摘要、focus、走廊按文件去重；摘要、身份、铁律、画像、边界、承诺与会话闭环契约不受 `--budget` 截断。
+- `context` 末尾新增「本会话闭环契约」：开工加载、进行中信号即 `remember --verify`、收工前复盘并检查 COMMIT / 会话小结是否落盘。
+- SKILL / protocol / USER_GUIDE / README 中英同步说明摘要优先、近期走廊、会话闭环与 `--budget` 语义。
+- 新增 `test/context-cognition.test.js`（3 项：摘要优先与时间走廊、闭环契约与动态预算、跨 owner 私密摘要隔离）；全量 `npm test` 101/101 PASS。
+- 不新增存储格式、不改变 AES-256-GCM、owner 隔离、agent_key 与权限判定；`consolidate` / `profile` / `distill` 语义保持兼容。
+
 ## v0.13.2 (2026-09-16)
 
 **安全修复：调用者认证 + agent_key 绑定**

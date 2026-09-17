@@ -158,7 +158,7 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 | `export [--out f.json]` | 导出全部记忆为 JSON |
 | `import <f.json>` | 从 JSON 导入（幂等）|
 | `profile [--owner <id>]` | 用户画像聚合（零推断，写 `private/<owner>/profile.md`；跨 owner 默认拒绝）|
-| `context [--limit N] [--owner <id>] [--budget N]` | 开工上下文包（stdout：身份 + 多智能体铁律 + 画像 + 近期记忆 + 边界 + 承诺；`--budget` 近期记忆字符预算）|
+| `context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain]` | 开工上下文包（stdout：身份 + 多智能体铁律 + 画像 + 长期摘要 + 任务相关记忆 + 近期走廊 + 近期高价值 + 边界 + 承诺 + 会话闭环契约；`--budget` 控制动态记忆字符预算）|
 | `iam <id> [--name] [--user] [--relationship] [--force]` | 登记身份 + 自我档案（可选扩展显示名 / 用户 / 关系）|
 
 
@@ -169,14 +169,19 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 - 权限：profile.md 属私密区（按 owner）；跨 owner 生成默认拒绝（exit 3），需 `--owner user` / `--unsafe` / grant 授权。
 - profile.md 为生成物，可随时重新生成；不进入 index.json。
 
-### context（开工上下文包，v0.6.0）
+### context（开工上下文包，v0.6.0 + v0.14.0）
 
-- `context [--limit N] [--owner <id>] [--budget N]`：stdout 输出开工上下文包（不落盘），含多智能体接入铁律段（可读 A/B/C、可写范围、违规红线）与五段：
+- `context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain]`：stdout 输出开工上下文包（不落盘），含多智能体接入铁律段（可读 A/B/C、可写范围、违规红线）与以下部分：
   1. 身份：agent_id / agent_name / user_name / relationship / host / memory_home（读自我档案）
   2. 用户画像摘要：profile.md（不存在则自动生成一次或降级跳过）
-  3. 近期记忆：按 importance（confidence × recency + updated + weight + immutable）排序前 N 条（默认 10），读取分区过滤；`--budget` 时按剩余字符预算逐条放行（身份/铁律/画像/边界/承诺 必保）
-  4. 边界提醒：BOUND 全列（可读范围内）
-  5. 承诺 / 锚点：COMMIT 全列（可读范围内）
+  2.5 长期理解摘要：优先加载 `consolidate` 产物（`source=consolidate` 或 tags `consolidate` + `summary`），默认最多 3 条，只注入 subject + statement；细节用 `recall` 下钻。
+  2.6 任务相关记忆（`--focus`）：任务关键词命中条目。
+  3. 近期走廊：按 `updated / created` 倒序取样，默认数量沿用 `--limit`，不受 utility 排序影响；排除摘要、BOUND / COMMIT 与已展示条目。
+  4. 近期高价值记忆（补位）：按 importance + utility 融合排序，补足未进入走廊 / focus 的条目，按文件去重。
+  5. 边界提醒：BOUND 全列（可读范围内）。
+  6. 承诺 / 锚点：COMMIT 全列（可读范围内）。
+  7. 本会话闭环契约：固定输出开工加载、进行中立即 `remember --verify`、收工前复盘检查 COMMIT / 会话小结。
+- `--budget`：控制 focus / 近期走廊 / 近期高价值等动态记忆的字符预算；身份、铁律、画像、长期摘要、边界、承诺与会话闭环契约必保。
 
 ### remember / iam 扩展（v0.6.0）
 

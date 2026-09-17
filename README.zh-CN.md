@@ -9,7 +9,7 @@
 <p align="center">元忆 —— 有权限边界的文件式智能体记忆：让任何 AI 智能体活过会话，而不是只活在单次对话里。</p>
 <p align="center">开工 <code>recall</code> 恢复上下文、重要信息 <code>remember</code> 落盘、收工归档；记忆是落在用户自己目录里的 Markdown 文件——<b>可读、可改、可审计、可回滚</b>，零依赖、即装即用。</p>
 <p align="center">FACT 共享、PREF / BOUND / COMMIT 私密隔离——<b>谁该读、谁不该读，由机制而非 AI 自觉决定</b>；一份记忆可跨智能体共用，记忆库随盘走、局域网可共享。</p>
-<p align="center">「越用越懂」：<code>profile</code> 聚合用户画像（零推断）+ <code>context</code> 一键开工上下文包（身份 + 画像 + 近期记忆 + 边界 + 承诺 + 收工纪律），记忆从「存储」成长为「会成长的记忆系统」。</p>
+<p align="center">「越用越懂（v0.14.0）」：<code>context</code> 一键开工上下文包——长期理解摘要优先（复用 <code>consolidate</code>）+ <code>profile</code> 用户画像（零推断）+ 近期走廊（按时间）+ 近期高价值补位 + 边界 + 承诺 + 会话闭环契约，记忆从「存储」成长为「会成长的记忆系统」。</p>
 <p align="center"><b>私密区机制级加密</b>：AES-256-GCM 信封加密 + 口令派生主密钥 + 恢复钥匙；<code>yotta-memory view</code> 用户查看平台（口令解锁看全部 AI 记忆）；<code>migrate</code> 明文→密文迁移；<code>--no-encrypt</code> 可降级。跨 AI 私密从「纪律层隔离」升级为「机制层不可解」。</p>
 
 <p align="center">
@@ -22,6 +22,8 @@
 </p>
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
+
+> 🆕 **v0.14.0（越用越懂）**：`context` 新增「长期理解摘要」段（优先加载 `consolidate` 产物）+「近期走廊」段（按 updated / created 倒序）+「本会话闭环契约」（开工加载、进行中立即 `remember --verify`、收工前复盘）；原有近期记忆改为「近期高价值记忆（补位）」，与摘要 / focus / 走廊按文件去重。身份、长期摘要、铁律、画像、边界、承诺与闭环契约不受 `--budget` 截断；不改变存储、加密、owner 隔离与权限判定。
 
 > 🆕 **v0.13.2（安全）**：owner ID 不是认证凭证。私密读写必须持有 `agent_key`：由用户执行 `yotta-memory view` 授权（或自行运行 `yotta-memory key bind <id>`），再配置 MCP 注入 `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1`（CLI 用 `--agent <id> --agent-key <key>` 或 `--agent-key-file <文件>`）。授权同时写临时 `keys/pending/<id>.key`，AI 新会话用 `key status <id> --to <AI_HOME>` / `key claim <id> --to <AI_HOME>` 领取到 `<AI_HOME>/.yotta-memory-agent-key` 后删除 pending；弹窗 key 供用户单独备份。legacy `keys/cache/*.key` 不再加载。仍有 owner 需要重新绑定时，`key list` 与失败的私密操作会输出 `[YTM_MIGRATION_REQUIRED]` 并列出受影响 agent；AI 只提醒步骤，由用户在 `yotta-memory view` 逐个授权；平台一次性展示 `agent_key`，已有 binding 时需先「吊销」再重新授权，旧 key 随即校验失败。
 
@@ -48,7 +50,7 @@
 - **记忆就是文件**：每条记忆是一个带 YAML frontmatter 的 Markdown 文件，放在用户自己的目录里。任何编辑器都能看、能改、能删；git 直接做版本管理与回滚，团队同步与交接走同一条标准工具链。
 - **隔离由机制保证**：FACT 进公共区共享，PREF / BOUND / COMMIT 进私密区、按 owner 物理分目录（`private/<owner>/<type>/`）。读取按 scope/owner 分区过滤，越界内容由 CLI 拦截、永不返回（默认静默跳过；显式跨读无授权报错拒绝）；读写一律走 CLI / MCP，禁止 shell 直读写库文件——权限由机制把关，不依赖 AI 的「自觉」。
 - **零依赖、即装即用**：无守护进程、无数据库、无向量库，只需 Node.js。安装即用，数据留在本机，任何机器都能部署。
-- **越用越懂（v0.6.0）**：`profile` 聚合用户画像（引擎零推断，只归组原文）+ `context` 一键生成开工上下文包（身份 + 画像 + 近期记忆 + 边界 + 承诺）；SKILL「记忆守则」注入规则层（类型红线 / 触发信号 / 了解用户 / 底线 / 宿主隔离），只注入规则与机制、不注入人格数据，出厂零数据。
+- **越用越懂（v0.14.0）**：`context` 一键生成开工上下文包——长期理解摘要优先（复用 `consolidate` 的周期摘要）+ `profile` 聚合用户画像（引擎零推断，只归组原文）+ 近期走廊（按更新时间取样）+ 近期高价值补位 + 边界 + 承诺 + 会话闭环契约；SKILL「记忆守则」注入规则层（类型红线 / 触发信号 / 了解用户 / 底线 / 宿主隔离），只注入规则与机制、不注入人格数据，出厂零数据。
 - **自我学习 / 自我进化 / 自我提升（v0.8.0）**：`recall` 语义检索（同义词 / 拼音全拼+首字母 / 字段加权 / 模糊匹配，零依赖）+ 效用分融合排序；`feedback` 显式使用反馈闭环（useful / useless 调整 weight / confidence / feedback_net，越用越懂）；`maintain` 规则层自组织（统一效用分 + 年龄自动归档 / 遗忘候选 / 去重，默认 dry-run，immutable / BOUND 豁免）；`distill` 心理日志蒸馏（统计摘要 / 主题画像 / 知识地图，可选 `--model` 外部模型增强）。
 - **压缩遗忘（v0.10.0）——记忆越用越精简**：`consolidate` 周期摘要压缩——把超龄 + 长期闲置 + 低效用的同主题旧记忆归纳成 **1 条带溯源的摘要**（每条原文路径都写在正文里）留在活跃区，原文整体进 `.archive/`，`--undo <batch>` 一键回滚；`maintain --dedup` 给近重复打分（≥0.85 高置信自动合并 / 0.65–0.85 建议手动），`--apply` 批量合并同归属重复组；时效分量改**分类型衰减**（FACT 慢 / PREF 中 / COMMIT 任务类快 / BOUND 永不衰减）——持久事实不被时间抹掉，过期承诺快速让位；每一步写批次审计（`--batches` 可查）。
 - **可靠性基线（v0.12.0 / v0.12.2）**：`init` 遇到已有记忆库默认拒绝覆盖（`--attach` 用于接入）；`forget` 先移入 `.trash/` 并写删除审计；`backup create / list / doctor / restore` 支持独立盘备份、SHA-256 清单校验、恢复默认只写新目录；`yotta-memory doctor` 检查根目录 / 密钥库 / 索引 / 身份 / 最近备份，破坏性操作在写入前自动创建事务快照。
@@ -67,7 +69,7 @@
 | **双级存储** | 用户级 `~/.yottamemory/`（跨项目）+ 项目级 `.yottamemory/`（随项目共享 / 交接）|
 | **检索与生命周期** | 语义检索（v0.8.0：同义词 / 拼音 / 字段加权 / 模糊，零依赖）+ 效用分融合排序；统一效用分（盖棺分）规则层自动归档 / 遗忘候选 / 去重（`maintain`，默认 dry-run），记忆库越用越精简 |
 | **压缩遗忘（v0.10.0）** | `consolidate` 周期摘要压缩（旧记忆 → 带溯源摘要 + 原文归档，可回滚）+ 近重复自动合并（置信度 + `--apply`）+ 分类型衰减（FACT 730 / PREF 365 / COMMIT 90 天半衰，BOUND 不衰减）+ 批次审计（`--batches` / `--undo`），长期使用不膨胀、主题不丢 |
-| **越用越懂（v0.6.0）** | `profile` 画像聚合（零推断）+ `context` 开工上下文包（身份 / 画像 / 近期记忆 / 边界 / 承诺）+ SKILL「记忆守则」规则层，记忆随使用成长 |
+| **越用越懂（v0.14.0）** | `context` 长期摘要优先 + `profile` 画像聚合（零推断）+ 近期走廊（按时间）+ 近期高价值补位 + 边界 / 承诺 + 会话闭环契约，记忆随使用成长 |
 | **生态分发** | GitHub + npm 双源同步发布；npx / git clone / Download ZIP / install.sh 四种安装方式，覆盖 17+ 类智能体目录 |
 | **便携记忆盘（随盘走）** | 记忆库即引擎：装在硬盘 / 主机上，插上即恢复全部记忆；引擎主机只需装 CLI 当存放点，无需装任何 AI 智能体 |
 | **局域网共享与自启** | 每智能体独立 token（Bearer + X-Agent-Id + X-Agent-Key）鉴权、可吊销；`lan enable` 注册开机自启（Windows：优先计划任务，非管理员自动降级用户级 Startup 静默自启；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）；MCP 工具集与 CLI 一致（8 个工具），管理动作不远程暴露 |
@@ -113,10 +115,10 @@
 - **本机免网络 token**：本机 CLI / stdio 不校验 HTTP token，但私密访问仍必须 `agent_id + agent_key`；MCP 通过独立进程 env 注入。
 - **私密记忆必须有 owner**：写 PREF / BOUND / COMMIT 时未声明身份会被拒绝（公共 FACT 不受影响），从机制上防止「抄别人的 ID」。
 
-### 画像与开工上下文（v0.6.0 + v0.9.0）
+### 画像与开工上下文（v0.6.0 + v0.9.0 + v0.14.0）
 
 - **profile**：聚合 `private/<owner>/` 下 PREF / BOUND / COMMIT 原文，按 type + subject + tags 归组，写 `profile.md`；引擎零推断，画像结论由 AI 依据「记忆守则」内部形成，不当面贴标签。
-- **context**：一键生成开工上下文包——多智能体接入铁律 + 身份 + 用户画像摘要 + 任务相关记忆（`--focus`，v0.9.0）+ 近期记忆（按 importance 排序）+ 边界提醒 + 承诺 / 锚点；支持 `--budget` 字符预算与 `--explain` 选择解释。
+- **context**：一键生成开工上下文包——多智能体接入铁律 + 身份 + 长期理解摘要（`consolidate` 产物优先）+ 用户画像摘要 + 任务相关记忆（`--focus`）+ 近期走廊（按 updated / created 倒序）+ 近期高价值记忆（按 importance + utility 补位并去重）+ 边界提醒 + 承诺 / 锚点 + 会话闭环契约；支持 `--budget` 动态记忆字符预算与 `--explain` 选择解释。
 - **记忆守则**：SKILL.md 内置规则层（类型红线 / 主动捕获触发信号 / 了解用户三阶段四手法 / 心理学底座与对齐 / 底线与边界 / 宿主隔离 / 反模式），让 AI「越用越懂」有章法。
 
 ### 检索：语义检索（v0.8.0 + v0.9.0 embedding）
@@ -261,9 +263,12 @@ bash install.sh --list           # 列出智能体 -> 默认目录
 # 开工上下文包（yotta-memory context）
 ## 1. 身份
 ## 2. 用户画像摘要
-## 3. 近期记忆（按活跃度前 10 条）
-## 4. 边界提醒（BOUND）
-## 5. 承诺 / 锚点（COMMIT）
+## 2.5 长期理解摘要
+## 3. 近期走廊（按时间）
+## 4. 近期高价值记忆（补位）
+## 5. 边界提醒（BOUND）
+## 6. 承诺 / 锚点（COMMIT）
+## 7. 本会话闭环契约
 ```
 
 ## 升级
@@ -311,7 +316,7 @@ bash install.sh --agent <智能体名称>
 | `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入记忆（同 subject+statement 自动更新；--owner 标注归属；--source 记录来源；--weight 重要性权重、去重取 max；--verify 写后回读；--no-hint 关闭类型提示）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain] [--semantic] [--embedding <命令>] [--embedding-timeout N]` | 检索记忆（语义+效用分排序；可选本地 embedding 插件；读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 仅作身份声明、不授予跨读；项目级优先）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
-| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 生成开工上下文包（身份 + 多智能体铁律 + 画像 + 任务相关记忆 + 近期记忆 + 边界 + 承诺；--budget 字符预算；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
+| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 生成开工上下文包（身份 + 铁律 + 画像 + 长期摘要 + 任务相关记忆 + 近期走廊 + 近期高价值 + 边界 + 承诺 + 会话闭环契约；--budget 控制动态记忆字符预算；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆（按类型目录路径或文件名）|
 | `yotta-memory doctor [--json]` | 开工可靠性检查（根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；私密入 `.archive/private/<owner>/<type>/`）|

@@ -23,7 +23,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.13.2';
+const VERSION = '0.14.0';
 // @generated view-html:start
 const VIEW_HTML = "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>元忆 · 用户查看平台</title><style>\nbody{font-family:system-ui,-apple-system,\"Microsoft YaHei\",sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1f2328;background:#fafafa}\nh1{font-size:22px} .card{background:#fff;border:1px solid #e2e2e2;border-radius:10px;padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}\nbutton{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;margin:2px;font-size:14px}\nbutton.danger{background:#dc2626} button.ghost{background:#e5e7eb;color:#1f2328}\ninput,select{padding:8px;border:1px solid #c9c9c9;border-radius:6px;margin:2px;font-size:14px;box-sizing:border-box}\ntable{border-collapse:collapse;width:100%;font-size:13px} td,th{border:1px solid #ececec;padding:6px 8px;text-align:left;vertical-align:top}\n.owner{display:inline-flex;align-items:center;gap:6px;border:1px solid #ddd;border-radius:8px;padding:5px 10px;margin:4px 6px 4px 0;background:#f6f8fa}\n.entry{border-bottom:1px solid #eee;padding:8px 0} .meta{color:#8a8a8a;font-size:12px}\n.err{color:#dc2626;margin-top:8px} .ok{color:#16a34a;margin-top:8px}\n#app{display:none} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:12px}\n</style></head><body>\n<h1>元忆 · 用户查看平台 <span id=\"ver\" style=\"font-size:14px;color:#888\"></span></h1>\n<div id=\"lock\" class=\"card\">\n  <p><b>输入主口令解锁</b>（口令只在本地内存派生，不落盘、不发送远端）。忘口令可在 CLI 用恢复钥匙重设：<code>yotta-memory reset-password --recovery-key &lt;钥匙&gt;</code></p>\n  <input type=\"password\" id=\"pw\" placeholder=\"主口令\" style=\"width:260px\">\n  <button onclick=\"unlock()\">解锁</button>\n  <div class=\"err\" id=\"lockerr\"></div>\n</div>\n<div id=\"app\">\n  <div class=\"card\">\n    <b>AI 列表</b>（✅=已授权可读自己私密，🔒=未授权）\n    <div class=\"meta\" style=\"margin-top:6px\">「授权」由你（用户）操作：确认后生成只显示一次的 agent_key，请立即单独保存；服务端同时写临时待领取文件 <code>keys/pending/&lt;agent_id&gt;.key</code>，供该 AI 新会话领取，领取成功后自动删除。</div>\n    <div id=\"owners\" style=\"margin-top:8px\"></div>\n  </div>\n  <div class=\"card\">\n    <b>记忆</b>\n    <input id=\"q\" placeholder=\"搜索关键词\" style=\"width:220px\" onkeydown=\"if(event.key==='Enter'){off=0;load()}\">\n    <button onclick=\"off=0;load()\">搜索</button>\n    <button class=\"ghost\" onclick=\"doExport()\">导出 JSON</button>\n    <button class=\"ghost\" onclick=\"showRk()\">显示恢复钥匙</button>\n    <span id=\"rkout\" style=\"font-size:12px;color:#888;margin-left:8px\"></span>\n    <div id=\"meta\" style=\"margin-top:10px;font-size:12px;color:#666\"></div>\n    <div id=\"entries\" style=\"margin-top:6px\"></div>\n    <div id=\"pager\" style=\"margin-top:10px\">\n      <button class=\"ghost\" id=\"prevb\" onclick=\"prevPage()\">上一页</button>\n      <span id=\"pageinfo\" style=\"font-size:12px;color:#888;margin:0 8px\"></span>\n      <button class=\"ghost\" id=\"nextb\" onclick=\"nextPage()\">下一页</button>\n    </div>\n  </div>\n  <div class=\"card\">\n    <b>重设口令</b><br>\n    <input type=\"password\" id=\"cur\" placeholder=\"当前口令\">\n    <input type=\"password\" id=\"np1\" placeholder=\"新口令\">\n    <input type=\"password\" id=\"np2\" placeholder=\"确认新口令\">\n    <button onclick=\"resetPw()\">重设</button>\n    <span id=\"pwout\"></span>\n  </div>\n</div>\n<script>\nfunction esc(s){return String(s==null?'':s).replace(/[&<>\"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}\nasync function api(p,b){try{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return await r.json();}catch(e){return{error:String(e)};}}\nasync function boot(){const s=await api('/api/status');document.getElementById('ver').textContent='v'+(s.version||'');if(s.unlocked){showApp();}}\nfunction showApp(){document.getElementById('lock').style.display='none';document.getElementById('app').style.display='block';loadOwners();load();}\nasync function unlock(){const d=await api('/api/unlock',{password:document.getElementById('pw').value});if(d.error){document.getElementById('lockerr').textContent=d.error;return;}showApp();}\nasync function loadOwners(){const d=await api('/api/owners');const box=document.getElementById('owners');box.innerHTML='';if(!d.owners||!d.owners.length){box.innerHTML='（无 owner）';return;}\n  for(const o of d.owners){const c=document.createElement('span');c.className='owner';c.innerHTML=esc(o.owner)+(o.authorized?' ✅':' 🔒')+' <button class=\"ghost\" data-a=\"'+esc(o.owner)+'\">授权</button><button class=\"danger\" data-r=\"'+esc(o.owner)+'\">吊销</button>';box.appendChild(c);}\n  box.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){var owner=b.getAttribute('data-a');if(!confirm('确认由你为用户授权 '+owner+' 读取其私密记忆？授权后将生成只显示一次的 agent_key，请立即保存；同时写入待领取文件供该 AI 新会话领取。AI 不应代为执行该授权操作。'))return;b.disabled=true;api('/api/authorize',{owner:owner}).then(function(d){b.disabled=false;if(!d||d.error){alert((d&&d.error)||'授权失败');loadOwners();return;}if(d.agentKey){showKey(d.agentKey);}loadOwners();});};});\n  box.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){if(!confirm('确认吊销 '+b.getAttribute('data-r')+' 的 agent_key？吊销后该智能体立即失去私密读写能力。'))return;api('/api/revoke',{owner:b.getAttribute('data-r')}).then(function(){loadOwners();});};});\nfunction showKey(k){var ov=document.createElement('div');ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99';var box=document.createElement('div');box.className='card';box.style.cssText='max-width:640px;word-break:break-all';var t=document.createElement('div');t.innerHTML='<b>agent_key（只显示一次）</b>';var hint=document.createElement('div');hint.className='meta';hint.textContent='请用户立即单独保存。AI 新会话执行 yotta-memory key claim <agent_id> --to <AI_HOME> 领取，写入 <AI_HOME>/.yotta-memory-agent-key 后删除待领取文件。若 key 丢失，可吊销后重新授权；旧 key 会立即校验失败。';var ta=document.createElement('textarea');ta.readOnly=true;ta.value=k;ta.style.cssText='width:100%;height:72px;margin-top:8px;font-family:monospace;font-size:12px';var close=document.createElement('button');close.textContent='我已保存，关闭';close.onclick=function(){ov.remove();};box.appendChild(t);box.appendChild(hint);box.appendChild(ta);box.appendChild(close);ov.appendChild(box);document.body.appendChild(ov);ta.focus();ta.select();}\n}\nlet off=0,PS=50;\nasync function load(){const d=await api('/api/entries',{query:document.getElementById('q').value,offset:off,limit:PS});const meta=document.getElementById('meta');const pg=document.getElementById('pageinfo');if(meta)meta.textContent='共 '+d.count+' 条';const lim=d.limit||PS;const totalPg=Math.max(1,Math.ceil(d.count/lim));const curPg=Math.floor((d.offset||0)/lim)+1;if(pg)pg.textContent='第 '+curPg+' / '+totalPg+' 页';const box=document.getElementById('entries');box.innerHTML='';if(d.entries)for(const e of d.entries){const div=document.createElement('div');div.className='entry';div.innerHTML='<b>['+esc(e.type)+'] '+esc(e.subject)+'</b><div>'+esc(e.statement)+'</div><div class=\"meta\">'+esc(e.file)+' · owner='+esc(e.owner||'-')+' · '+esc(e.updated||e.created||'')+'</div>';box.appendChild(div);}const pb=document.getElementById('prevb'),nb=document.getElementById('nextb');if(pb)pb.disabled=(d.offset||0)<=0;if(nb)nb.disabled=!d.hasMore;}\nfunction prevPage(){if(off>=PS){off-=PS;load();}}\nfunction nextPage(){off+=PS;load();}\nasync function doExport(){const d=await api('/api/export');if(d.error){alert(d.error);return;}const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='yottamemory-view-export.json';a.click();}\nasync function showRk(){const d=await api('/api/recovery-key');document.getElementById('rkout').textContent=d.recoveryKey?('恢复钥匙: '+d.recoveryKey):(d.error||'');}\nasync function resetPw(){const np1=document.getElementById('np1').value,np2=document.getElementById('np2').value;if(np1!==np2){document.getElementById('pwout').innerHTML='<span class=\"err\">两次新口令不一致</span>';return;}\n  const d=await api('/api/reset-password',{currentPassword:document.getElementById('cur').value,newPassword:np1});document.getElementById('pwout').innerHTML=d.error?('<span class=\"err\">'+esc(d.error)+'</span>'):('<span class=\"ok\">'+esc(d.text||'ok')+'</span>');}\nboot();\n</script></body></html>\n";
 // @generated view-html:end
@@ -4383,12 +4383,28 @@ function selfProfileKv(root, id) {
   try { text = readMemoryText(root, path.join(selfPrefsDir(root, id), profile), id); } catch (e) { return {}; }
   return parseKvBody(parseFrontmatter(text).body);
 }
+// v0.14.0：长期摘要优先 / 近期走廊 / 会话闭环上下文编排。
+// 摘要只认 consolidate 产物，不新增第二套摘要格式。
+function isConsolidatedSummary(entry) {
+  if (!entry) return false;
+  if (entry.source === 'consolidate') return true;
+  const tags = Array.isArray(entry.tags) ? entry.tags : [];
+  return tags.indexOf('consolidate') !== -1 && tags.indexOf('summary') !== -1;
+}
+function contextRecentKey(entry) {
+  return String((entry && (entry.updated || entry.created)) || '');
+}
+function compareContextRecent(a, b) {
+  const byTime = contextRecentKey(b).localeCompare(contextRecentKey(a));
+  if (byTime !== 0) return byTime;
+  return (b.access_count || 0) - (a.access_count || 0);
+}
 function contextCore(opts) {
   opts = opts || {};
   const roots = memoryRoots();
   if (!roots.length) return { error: false, exitCode: 0, text: '记忆库不存在，请先运行: yotta-memory init' };
   const root = userRoot();
-  const limit = opts.limit || 10;
+  const limit = parseInt(opts.limit || '10', 10) || 10;
   const ident = resolveIdentity(opts);
   if (ident.error) return { error: true, exitCode: 3, text: ident.error };
   if (!ident.id) {
@@ -4410,8 +4426,26 @@ function contextCore(opts) {
   const embeddingTimeout = effectiveEmbeddingTimeout(opts);
   const trace = [];
   const lines = [];
+  const shownFiles = new Set();
   const FENCE = String.fromCharCode(96, 96, 96);
   function usedChars() { return lines.reduce(function (s, x) { return s + String(x).length + 1; }, 0); }
+  function appendContextEntry(entry, reason, options) {
+    options = options || {};
+    if (!entry) return false;
+    if (shownFiles.has(entry.file)) {
+      trace.push('[dropped] ' + entry.file + ' reason: duplicate');
+      return false;
+    }
+    const line = '- [' + entry.type + '] ' + entry.subject + ': ' + entry.statement;
+    if (options.budget !== false && budget > 0 && usedChars() + line.length > budget) {
+      trace.push('[dropped] ' + entry.file + ' reason: budget_exceeded');
+      return false;
+    }
+    lines.push(line);
+    shownFiles.add(entry.file);
+    trace.push('[included] ' + entry.file + ' reason: ' + reason);
+    return true;
+  }
   lines.push('# 开工上下文包（yotta-memory context）');
   lines.push('');
   lines.push('## 1. 身份');
@@ -4462,8 +4496,26 @@ function contextCore(opts) {
   }
   lines.push('');
 
+  const readableEntries = [];
+  for (const r of roots) {
+    for (const e of ensureIndex(r)) {
+      if (classifyRead(e, owner, '', unsafe, selfAgent) === 'denied') continue;
+      readableEntries.push(e);
+    }
+  }
+
+  lines.push('## 2.5 长期理解摘要');
+  lines.push('');
+  const summaries = readableEntries.filter(isConsolidatedSummary).sort(compareContextRecent);
+  const summaryLimit = Math.min(3, Math.max(0, limit));
+  if (!summaries.length) lines.push('（暂无周期摘要；可用 yotta-memory consolidate --apply 生成）');
+  for (const e of summaries.slice(0, summaryLimit)) {
+    appendContextEntry(e, 'summary_priority', { budget: false });
+  }
+  lines.push('');
+
   if (focus) {
-    lines.push('## 2.5 任务相关记忆（--focus）');
+    lines.push('## 2.6 任务相关记忆（--focus）');
     lines.push('');
     const focused = recallCore(focus, {
       limit: limit,
@@ -4476,70 +4528,51 @@ function contextCore(opts) {
     const focusedEntries = focused.entries || [];
     if (!focusedEntries.length) lines.push('（无匹配记忆）');
     for (const e of focusedEntries) {
-      const line = '- [' + e.type + '] ' + e.subject + ': ' + e.statement;
-      if (budget > 0 && usedChars() + line.length > budget) {
-        trace.push('[dropped] ' + e.file + ' reason: budget_exceeded');
-        continue;
-      }
-      lines.push(line);
-      trace.push('[included] ' + e.file + ' reason: focus_match score: ' + round3(e.score));
+      appendContextEntry(e, 'focus_match score: ' + round3(e.score));
     }
     lines.push('');
   }
 
-  lines.push('## 3. 近期记忆（按活跃度前 ' + limit + ' 条）');
+  lines.push('## 3. 近期走廊（按时间）');
   lines.push('');
-  const recent = [];
-  for (const r of roots) {
-    for (const e of ensureIndex(r)) {
-      if (classifyRead(e, owner, '', unsafe, selfAgent) === 'denied') continue;
-      // v0.8.0 排序融合：0.5×importance(旧) + 0.5×utility(新盖棺分)
-      recent.push({ e: e, s: 0.5 * importanceScore(e) + 0.5 * utilityScore(e) });
-    }
-  }
-  recent.sort(function (a, b) { return b.s - a.s; });
-  const recentShown = recent.slice(0, limit);
-  if (!recentShown.length) lines.push('（暂无记忆）');
-  for (const h of recentShown) {
-    const line = '- [' + h.e.type + '] ' + h.e.subject + ': ' + h.e.statement;
-    if (budget > 0 && usedChars() + line.length > budget) {
-      trace.push('[dropped] ' + h.e.file + ' reason: budget_exceeded');
-      break;
-    }
-    lines.push(line);
-    trace.push('[included] ' + h.e.file + ' reason: recent_match');
-  }
+  const corridor = readableEntries
+    .filter(function (e) { return !isConsolidatedSummary(e) && e.type !== 'BOUND' && e.type !== 'COMMIT'; })
+    .sort(compareContextRecent)
+    .filter(function (e) { return !shownFiles.has(e.file); })
+    .slice(0, limit);
+  if (!corridor.length) lines.push('（暂无近期记忆）');
+  for (const e of corridor) appendContextEntry(e, 'recent_corridor');
   lines.push('');
-  lines.push('## 4. 边界提醒（BOUND）');
+
+  lines.push('## 4. 近期高价值记忆（补位）');
   lines.push('');
-  const bounds = [];
-  for (const r of roots) {
-    for (const e of ensureIndex(r)) {
-      if (e.type !== 'BOUND') continue;
-      if (classifyRead(e, owner, '', unsafe, selfAgent) === 'denied') continue;
-      bounds.push(e);
-    }
-  }
+  const highValue = readableEntries
+    .filter(function (e) { return !isConsolidatedSummary(e) && e.type !== 'BOUND' && e.type !== 'COMMIT' && !shownFiles.has(e.file); })
+    .map(function (e) { return { e: e, s: 0.5 * importanceScore(e) + 0.5 * utilityScore(e) }; })
+    .sort(function (a, b) { return b.s - a.s; })
+    .slice(0, limit);
+  if (!highValue.length) lines.push('（暂无补位条目）');
+  for (const h of highValue) appendContextEntry(h.e, 'high_value_backfill');
+  lines.push('');
+  lines.push('## 5. 边界提醒（BOUND）');
+  lines.push('');
+  const bounds = readableEntries.filter(function (e) { return e.type === 'BOUND'; }).sort(compareContextRecent);
   if (!bounds.length) lines.push('（无）');
   for (const e of bounds) lines.push('- ' + (e.subject || '边界') + ': ' + e.statement);
   lines.push('');
-  lines.push('## 5. 承诺 / 锚点（COMMIT）');
+  lines.push('## 6. 承诺 / 锚点（COMMIT）');
   lines.push('');
-  const commits = [];
-  for (const r of roots) {
-    for (const e of ensureIndex(r)) {
-      if (e.type !== 'COMMIT') continue;
-      if (classifyRead(e, owner, '', unsafe, selfAgent) === 'denied') continue;
-      commits.push(e);
-    }
-  }
+  const commits = readableEntries.filter(function (e) { return e.type === 'COMMIT'; }).sort(compareContextRecent);
   if (!commits.length) lines.push('（无）');
   for (const e of commits) lines.push('- ' + (e.subject || '承诺') + ': ' + e.statement);
   lines.push('');
-  lines.push('## 6. 收工纪律');
+  lines.push('## 7. 本会话闭环契约');
   lines.push('');
-  const allEntries = [];
-  for (const r of roots) for (const e of ensureIndex(r)) allEntries.push(e);
+  lines.push('- 开工：本上下文包已加载；身份、长期摘要、边界与承诺以本包为准。');
+  lines.push('- 进行中：出现事实 / 偏好 / 边界 / 纠正 / 承诺信号时立即 `remember <type> <subject> <statement> --verify`，不攒到收工。');
+  lines.push('- 收工前复盘：检查本轮是否留下 COMMIT / 会话小结；有关键结论但未落盘时补写并 `recall` 回读，无长期价值不硬凑。');
+  lines.push('');
+  const allEntries = readableEntries;
   const myCommits = allEntries.filter(function (e) { return e.type === 'COMMIT' && classifyRead(e, owner, '', unsafe, selfAgent) !== 'denied'; });
   if (!myCommits.length) {
     lines.push('- 最近承诺: 无（收工请补 COMMIT / 交接锚点）');
@@ -4552,7 +4585,7 @@ function contextCore(opts) {
   if (oldCount > 0) lines.push('- 归档提醒: ' + oldCount + ' 条超 180 天，建议 archive');
   if (explain) {
     lines.push('');
-    lines.push('## 7. 选择解释（--explain）');
+    lines.push('## 8. 选择解释（--explain）');
     lines.push('');
     if (!trace.length) lines.push('（无选择记录）');
     for (const t of trace) lines.push(t);
