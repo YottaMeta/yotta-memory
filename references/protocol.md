@@ -42,6 +42,8 @@
 
 - **agent ID 必须全局唯一**：`iam <id>` 写入 `agents.json`（记忆库根目录），唯一性强制——ID 已被其它主机 / 来源（含远端 token 登记）占用则拒绝，确认是同一智能体才 `--force`。
 - **当次身份声明**：`whoami` / MCP `agent_info` 读「当次显式身份」——CLI 用 `--agent`，MCP 用 per-process `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1`；远端用 `X-Agent-Id` + `X-Agent-Key` 请求头（经 token 绑定校验）。不接受用户级全局 fallback。
+- **身份优先级（v0.14.0）**：显式 `--agent` 优先；非受信 ambient `YOTTA_AGENT_ID` 被忽略，只有 `YOTTA_MEMORY_TRUST_ENV_AGENT=1` 时环境身份才参与判定。受信环境身份与显式身份冲突仍拒绝。
+- **AI_HOME（v0.14.0）**：`key status` / `key claim` 共用发现规则——显式 `--to <目录>` / `--agent-key-file <文件>` > `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE` > 宿主默认（Codex `$CODEX_HOME` 或 `~/.codex`；OpenCode `$XDG_CONFIG_HOME/opencode`；通用 `~/.<agent_id>`），文件名统一为 `.yotta-memory-agent-key`。status 输出 `checked` 与 `discovery`。
 - **自我档案**：`iam` 自动写一条 PREF `subject=自我接入档案`（owner=自己），statement 为 `; ` 分隔的 key:value——`agent_id / host / memory_home / mcp_mode(stdio|http) / engine_url(仅远端) / token(仅远端；本机不存 token)`，可含 `agent_name / user_name / relationship`（`iam --name/--user/--relationship` 写入）。
 - **私密记忆必须有 owner**：PREF / BOUND / COMMIT 写入时未声明身份（owner 空）直接拒绝（公共 FACT 不受影响），从机制上防止「抄别人的 ID」。
 
@@ -92,7 +94,7 @@ immutable: false
 - **UMK（用户主密钥）**：主口令 PBKDF2-SHA256（600000 次迭代 + 随机 16B 盐，盐存 `keys/salt`）派生，永不落盘明文。
 - **Owner Key**：每 owner 随机 32B；被 UMK 包裹存 `keys/<owner>.key.enc`（头 `YTMKEY1`，AAD=`owner:<id>`），被恢复钥匙包裹存 `keys/<owner>.key.recovery`。
 - **恢复钥匙（RK）**：随机 32B；被 UMK 包裹存 `keys/recovery.key.enc`（AAD=`recovery`），初始化/迁移时向用户打印一次（base64）。忘口令时用户提供 RK → 解开 `*.key.recovery` → 重设口令。
-- **agent_key 绑定**：由用户执行 `key bind <id>` 或在 `view` 平台授权，生成 32 字节 agent_key，只展示一次；owner key 由 agent_key 包裹写入 `keys/bindings/<id>.key.agent`（AES-256-GCM），同时写临时待领取文件 `keys/pending/<id>.key`。AI 新会话用 `key status <id> --to <AI_HOME>` / `key claim <id> --to <AI_HOME>` 领取到 `<AI_HOME>/.yotta-memory-agent-key`，claim 成功后删除 pending。本机 MCP 用 `YOTTA_MEMORY_AGENT_KEY`，远程 MCP 用 `X-Agent-Key`，CLI 用 `--agent-key/--agent-key-file`；调用方必须提供 `agent_id + agent_key` 才能解出 owner key；UMK 永不接触 AI。`key revoke` 删除 binding 与 pending，旧 key 随即校验失败。`key list` 与私密操作失败时输出 `[YTM_MIGRATION_REQUIRED]`，AI 只负责把迁移步骤转达给用户。
+- **agent_key 绑定**：由用户执行 `key bind <id>` 或在 `view` 平台授权，生成 32 字节 agent_key，只展示一次；owner key 由 agent_key 包裹写入 `keys/bindings/<id>.key.agent`（AES-256-GCM），同时写临时待领取文件 `keys/pending/<id>.key`。AI 新会话用 `key status <id>` / `key claim <id>` 领取到 `<AI_HOME>/.yotta-memory-agent-key`，需要时显式加 `--to` / `--agent-key-file`，claim 成功后删除 pending。本机 MCP 用 `YOTTA_MEMORY_AGENT_KEY`，远程 MCP 用 `X-Agent-Key`，CLI 用 `--agent-key/--agent-key-file`；调用方必须提供 `agent_id + agent_key` 才能解出 owner key；UMK 永不接触 AI。`key revoke` 删除 binding 与 pending，旧 key 随即校验失败。`key list` 与私密操作失败时输出 `[YTM_MIGRATION_REQUIRED]`，AI 只负责把迁移步骤转达给用户。
 
 ### 密文记忆文件（`.md.enc`，头 `YTMENC1`）
 ```

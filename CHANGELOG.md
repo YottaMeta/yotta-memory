@@ -1,13 +1,16 @@
 ## v0.14.0 (2026-09-17)
 
-**上下文编排：让 AI 越用越懂用户**
+**上下文编排：让 AI 越用越懂用户；合并 O2 CLI 诊断修复**
 
 - `context` 新增「长期理解摘要」段：优先加载 `consolidate` 生成的周期摘要（`source=consolidate` / tags `consolidate` + `summary`），只注入 subject + statement，原文细节继续用 `recall` 下钻。
 - `context` 新增「近期走廊」段：按 `updated / created` 倒序取样，不受 utility 排序影响，让最近发生的事稳定进入开工上下文。
 - 原有近期记忆改为「近期高价值记忆（补位）」：保留 importance + utility 融合排序，并与摘要、focus、走廊按文件去重；摘要、身份、铁律、画像、边界、承诺与会话闭环契约不受 `--budget` 截断。
 - `context` 末尾新增「本会话闭环契约」：开工加载、进行中信号即 `remember --verify`、收工前复盘并检查 COMMIT / 会话小结是否落盘。
 - SKILL / protocol / USER_GUIDE / README 中英同步说明摘要优先、近期走廊、会话闭环与 `--budget` 语义。
-- 新增 `test/context-cognition.test.js`（3 项：摘要优先与时间走廊、闭环契约与动态预算、跨 owner 私密摘要隔离）；全量 `npm test` 101/101 PASS。
+- 合并 O2 `0.13.3` CLI 诊断候选：非受信 ambient `YOTTA_AGENT_ID` 不再参与身份冲突判定，显式 `--agent` 优先；只有 `YOTTA_MEMORY_TRUST_ENV_AGENT=1` 时才接受环境身份。
+- `key status` / `key claim` 统一 AI_HOME 解析：显式 `--to` / `--agent-key-file` > `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE` > 宿主默认（Codex `$CODEX_HOME` 或 `~/.codex`；OpenCode `$XDG_CONFIG_HOME/opencode`；通用 `~/.<agent_id>`）> 文件名 `.yotta-memory-agent-key`；`key status` 输出 `checked` 与实际发现规则。
+- 顶层 usage 明确 `remember <type> <subject> <statement>` 与 `recall [关键词]`；`--query`、remember `--type` 等位置参数误用给出专门提示。
+- 新增 `test/context-cognition.test.js` 与 `test/cli-diagnostics.test.js`；合并后全量 `npm test` 108/108 PASS。
 - 不新增存储格式、不改变 AES-256-GCM、owner 隔离、agent_key 与权限判定；`consolidate` / `profile` / `distill` 语义保持兼容。
 
 ## v0.13.2 (2026-09-16)

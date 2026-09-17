@@ -135,7 +135,7 @@ statement: 本周完成发布
 
 1. 该 AI 登记身份（`iam` / MCP 配置 `YOTTA_AGENT_ID`）。
 2. 由用户执行一次 `yotta-memory view` → 在平台点「授权」→ 生成只展示一次的 `agent_key`，写入 `keys/bindings/<id>.key.agent` 和临时 `keys/pending/<id>.key`；不再写明文 owner key cache。高级用户也可自行执行 `yotta-memory key bind <id>`；AI 只负责提醒，不代执行。
-3. 该 AI 新会话执行 `yotta-memory key status <id> --to <AI_HOME>`；有 pending 就执行 `yotta-memory key claim <id> --to <AI_HOME>`，落到 `<AI_HOME>/.yotta-memory-agent-key`。之后 MCP 配置注入 `YOTTA_MEMORY_AGENT_KEY`，CLI 用 `--agent-key-file <AI_HOME>/.yotta-memory-agent-key`。
+3. 该 AI 新会话执行 `yotta-memory key status <id>`；有 pending 就执行 `yotta-memory key claim <id>`，落到 `<AI_HOME>/.yotta-memory-agent-key`（需要指定位置时可加 `--to` / `--agent-key-file`）。之后 MCP 配置注入 `YOTTA_MEMORY_AGENT_KEY`，CLI 用 `--agent-key-file <AI_HOME>/.yotta-memory-agent-key`。
 4. 之后该 AI 正常 `remember / recall / profile / context`，读写自动加解密；未绑定 / key 缺失时会出现 `[YTM_MIGRATION_REQUIRED]` 迁移提示，公共 FACT 不受影响。
 
 **口令管理**
@@ -315,11 +315,13 @@ yotta-memory remember FACT 主题 内容    # 智能体落盘
 **方式二：stdio MCP（零常驻进程，智能体按需拉起 CLI）。** 先让 AI 领取 agent_key：
 
 ```bash
-yotta-memory key status <本智能体ID> --to <AI_HOME>
-yotta-memory key claim <本智能体ID> --to <AI_HOME>
+yotta-memory key status <本智能体ID>
+yotta-memory key claim <本智能体ID>
 ```
 
 领取成功后宿主目录出现 `<AI_HOME>/.yotta-memory-agent-key`；再由 MCP 宿主读取该文件并注入环境变量。然后在智能体 MCP 配置里加：
+
+`AI_HOME` 解析由 `key status` / `key claim` 共用：显式 `--to <目录>` 或 `--agent-key-file <文件>` > `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE` > 宿主默认（Codex `$CODEX_HOME` 或 `~/.codex`、OpenCode `$XDG_CONFIG_HOME/opencode`、通用 `~/.<agent_id>`）；文件名固定为 `.yotta-memory-agent-key`。`key status` 会输出实际检查路径 `checked:` 与命中的发现规则 `discovery:`，即使文件暂不存在也可据此定位。
 
 ```json
 {

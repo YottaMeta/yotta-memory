@@ -226,7 +226,7 @@ yotta-memory doctor --json
    - 输出 `memory_home: <目录>`（已显式设置）→ 直接用该位置。
    - 输出 `memory_home: (未设置，默认 ~/.yottamemory)` → 🔒 征得同意后引导设置：问用户用默认还是指定目录（项目级 `<repo>/.yottamemory`、记忆盘等），确认后 AI 执行 `yotta-memory config set memory_home <目录>`，回读 `config get` 验证。
 2. **已有记忆**：目标目录已存在 `facts/` 等子目录或 `index.json` → 直接 recall；全新目录 → 按「便携记忆盘模式 §0.3」初始化。
-3. **私密区已加密（存在 `keys/`）**：先 `yotta-memory key list` 确认本智能体是否有 agent binding；没有 → 告知用户由用户自己执行 `yotta-memory view` → 浏览器打开平台 → 输入主口令 → 点「授权」并保存只展示一次的 `agent_key`。用户授权后服务端会写 `keys/pending/<id>.key`；AI 在新会话执行 `yotta-memory key status <id> --to <AI_HOME>`，有 pending 就执行 `yotta-memory key claim <id> --to <AI_HOME>`，落到 `<AI_HOME>/.yotta-memory-agent-key` 后再使用 `--agent-key-file`。**升级后首次调用元忆 / 重启会话时**，若输出 `[YTM_MIGRATION_REQUIRED]`，必须主动把 marker、受影响 agent 和处理步骤转达给用户。**AI 不得代替用户执行 `migrate` / `key bind` 迁移**，只负责提醒和讲解（marker 只列仍有私密数据、未绑定的 agent；仅有 legacy cache、无迁移数据的 owner 会单独提示，不进入迁移清单；公共 FACT 不受影响）。
+3. **私密区已加密（存在 `keys/`）**：先 `yotta-memory key list` 确认本智能体是否有 agent binding；没有 → 告知用户由用户自己执行 `yotta-memory view` → 浏览器打开平台 → 输入主口令 → 点「授权」并保存只展示一次的 `agent_key`。用户授权后服务端会写 `keys/pending/<id>.key`；AI 在新会话执行 `yotta-memory key status <id>`（需要时显式加 `--to <AI_HOME>` 或 `--agent-key-file <文件>`；默认发现规则见下），有 pending 就执行 `yotta-memory key claim <id>`，落到 `<AI_HOME>/.yotta-memory-agent-key` 后再使用 `--agent-key-file`。**升级后首次调用元忆 / 重启会话时**，若输出 `[YTM_MIGRATION_REQUIRED]`，必须主动把 marker、受影响 agent 和处理步骤转达给用户。**AI 不得代替用户执行 `migrate` / `key bind` 迁移**，只负责提醒和讲解（marker 只列仍有私密数据、未绑定的 agent；仅有 legacy cache、无迁移数据的 owner 会单独提示，不进入迁移清单；公共 FACT 不受影响）。
 
 **B. 确认本智能体唯一身份（强制，写私密记忆前必做）**：
 
@@ -239,7 +239,7 @@ yotta-memory doctor --json
    - 回读：`yotta-memory whoami` 显示「已登记 + 自我档案」。
 3. **自我档案校验**：`yotta-memory recall "自我接入档案"`（本智能体）能读回字段才算就绪：
    `agent_id / host / memory_home / mcp_mode（stdio|http）/ engine_url（仅远端）/ token（仅远端；本机不存 token）`，可扩展 `agent_name / user_name / relationship`（`iam --name/--user/--relationship` 写入）。
-4. **本机多智能体（v0.13.2 安全模型）**：owner ID 不是身份认证。每个 AI 必须同时持有自己的 `agent_key`，并在 MCP 配置里注入 `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1`；CLI 直连用 `--agent <id> --agent-key <key>` 或 `--agent-key-file <文件>`。没有 agent_key 时，私密读写一律 fail-closed；禁止使用用户级 / 机器级 `YOTTA_AGENT_ID` fallback。
+4. **本机多智能体（v0.14.0 安全模型）**：owner ID 不是身份认证。每个 AI 必须同时持有自己的 `agent_key`，并在 MCP 配置里注入 `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1`；CLI 直连用 `--agent <id> --agent-key <key>` 或 `--agent-key-file <文件>`。没有 agent_key 时，私密读写一律 fail-closed；显式 `--agent` 优先于非受信 ambient `YOTTA_AGENT_ID`，只有 `YOTTA_MEMORY_TRUST_ENV_AGENT=1` 的环境身份才参与身份判定；禁止使用用户级 / 机器级 `YOTTA_AGENT_ID` fallback。
 
 **C. 身份红线（强制）**：
 
@@ -264,7 +264,7 @@ yotta-memory doctor --json
 | `yotta-memory migrate` | 明文私密区 → 密文迁移（**由用户执行**；需主口令；迁移后打印恢复钥匙；不写明文授权缓存，授权由用户在 `view` 平台完成）|
 | `yotta-memory view [--port 8788] [--host 127.0.0.1]` | 用户查看平台（本机 Web：口令解锁浏览 / 搜索 / 导出全部 AI 记忆 + 授权 / 吊销 AI + 重设口令 + 显示恢复钥匙）|
 | `yotta-memory reset-password [--password <当前> | --recovery-key <钥匙>] [--new-password <新>]` | 重设主口令（忘口令用恢复钥匙）|
-| `yotta-memory key list / bind <id> / rotate <id> / claim <id> --to <AI_HOME> / status <id> / revoke <id>` | 管理 agent_key binding（**bind/rotate 由用户执行**，需主口令或恢复钥匙；claim/status 由 AI 读取 pending 并落到宿主目录；revoke 立即吊销该 AI 解密能力，旧 key 随即校验失败；`key list` 输出 `[YTM_MIGRATION_REQUIRED]` 时提醒用户走 `view` 重新授权）|
+| `yotta-memory key list / bind <id> / rotate <id> / claim <id> [--to <AI_HOME> | --agent-key-file <文件>] / status <id> [--to <AI_HOME> | --agent-key-file <文件>] / revoke <id>` | 管理 agent_key binding（**bind/rotate 由用户执行**，需主口令或恢复钥匙；claim/status 由 AI 读取 pending 并落到宿主目录，按同一 AI_HOME 发现规则；revoke 立即吊销该 AI 解密能力，旧 key 随即校验失败；`key list` 输出 `[YTM_MIGRATION_REQUIRED]` 时提醒用户走 `view` 重新授权）|
 | `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入（同 subject+statement 自动更新；--owner 标注归属；--source 记录来源；--weight 重要性权重默认 1.0、去重取 max；--verify 写后回读校验；--no-hint 关闭类型启发式提示）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain] [--semantic] [--embedding <command>] [--embedding-timeout N]` | 检索（v0.8.0 默认语义检索：同义词 / 拼音全拼+首字母 / 字段加权 / 模糊匹配 + 效用分融合排序；v0.9.0 支持可选本地 embedding 插件，失败自动降级；`--explain` 显示命中理由与效用分项；`--semantic` 显式开启；读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 只作身份声明/展示，不授予跨读——读他人私密同样要授权；项目级优先）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
@@ -327,11 +327,11 @@ yotta-memory doctor --json
 ### 流程
 1. **建加密库**：`yotta-memory init --encrypt`（新建默认加密）→ 设主口令 → 抄下恢复钥匙离线保存。
 2. **老库迁移**：由用户执行 `yotta-memory migrate`（需主口令）→ 明文私密逐文件加密后删除明文 → 打印恢复钥匙。迁移不写明文授权缓存；每个 AI 的重新授权由用户自己在 `yotta-memory view` 平台完成并自行备份弹窗 `agent_key`；AI 随后用 `key status` / `key claim` 领取（AI 只提醒授权，不代执行 `migrate` / `key bind`）。
-3. **AI 读写自己的私密（v0.13.2）**：用户侧完成一次 `yotta-memory view` 授权（或用户自行执行 `yotta-memory key bind <id>`），生成只展示一次的 `agent_key`，并写入 `keys/bindings/<id>.key.agent` 与临时 `keys/pending/<id>.key`。AI 新会话用 `key status` / `key claim` 将 pending 落到 `<AI_HOME>/.yotta-memory-agent-key`，之后 CLI 用 `--agent <id> --agent-key-file <宿主key文件>`；MCP 注入 `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1`。owner ID 单独存在时不能解密私密；legacy `keys/cache/<id>.key` 不再加载。
+3. **AI 读写自己的私密（v0.14.0）**：用户侧完成一次 `yotta-memory view` 授权（或用户自行执行 `yotta-memory key bind <id>`），生成只展示一次的 `agent_key`，并写入 `keys/bindings/<id>.key.agent` 与临时 `keys/pending/<id>.key`。AI 新会话用 `key status` / `key claim` 将 pending 落到 `<AI_HOME>/.yotta-memory-agent-key`，之后 CLI 用 `--agent <id> --agent-key-file <宿主key文件>`；MCP 注入 `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1`。owner ID 单独存在时不能解密私密；legacy `keys/cache/<id>.key` 不再加载。
 4. **用户查看全部 AI 记忆**：`yotta-memory view` → 输口令 → 浏览 / 搜索 / 导出全部（含各 AI 私密明文，仅用户可见）。口令只在本地内存派生，不落盘、不发远端；默认仅 127.0.0.1，远程需 `--host` 显式开启。
 5. **口令管理**：`yotta-memory reset-password`（当前口令或恢复钥匙）；`key revoke <id>` 立即吊销某 AI 的 agent binding（该 AI 随即失去解密能力）。`view` 平台的「授权」只对未绑定 agent 生成新 key；已绑定的 agent 需先「吊销」再授权，避免误打断在用的 agent_key。
 
-## agent_key 本地领取与恢复流程（v0.13.2，AI 必读）
+## agent_key 本地领取与恢复流程（v0.14.0，AI 必读）
 
 > 目标：用户只负责在 `view` 平台授权和备份弹窗 key；AI 负责把待领取 key 落到自己的宿主目录，并在新会话稳定读取。模型上下文不需要出现 key 明文。
 
@@ -348,14 +348,23 @@ yotta-memory doctor --json
 AI 在开工身份检查后执行：
 
 ```bash
-yotta-memory key status <agent_id> --to <AI_HOME>
+yotta-memory key status <agent_id>
 ```
 
 若输出 `pending: yes`，执行：
 
 ```bash
-yotta-memory key claim <agent_id> --to <AI_HOME>
+yotta-memory key claim <agent_id>
 ```
+
+`AI_HOME` 解析优先级由 `claim` / `status` 共用：
+
+1. 显式 `--to <目录>` 或 `--agent-key-file <文件>`；
+2. `YOTTA_MEMORY_AGENT_HOME` 或 `YOTTA_MEMORY_AGENT_KEY_FILE`；
+3. 宿主默认：Codex 使用 `$CODEX_HOME`（未设置时 `~/.codex`）、OpenCode 使用 `$XDG_CONFIG_HOME/opencode`、其他宿主使用 `~/.<agent_id>`；
+4. 文件名统一为 `.yotta-memory-agent-key`。
+
+`key status` 即使目标文件不存在也会输出 `checked: <实际检查路径>` 与 `discovery: <命中的发现规则>`，不要仅凭 `host_key: missing` 重复 `claim`。
 
 `claim` 会：
 
@@ -443,7 +452,7 @@ MCP 模式由宿主把宿主 key 文件内容注入 `YOTTA_MEMORY_AGENT_KEY`，�
 2. AI 引导用户在**引擎主机**执行：`yotta-memory token new --agent <本智能体ID>`（引擎主机没装 → 按 4.0 先装；或请引擎主机上的 AI 代执行）。
 3. 命令打印 token（`ytm_...`），只打印一次，请用户妥善保管。
 4. 确认本智能体已持有 `agent_key`；没有时由用户在引擎主机执行 `yotta-memory view` 授权并保存弹窗 key，引擎会同时写 `keys/pending/<id>.key`。
-5. 如果 AI 宿主与记忆库同机或能访问同一文件系统：AI 执行 `yotta-memory key status <id> --to <AI_HOME>`，有 pending 就 `key claim`，写到 `<AI_HOME>/.yotta-memory-agent-key`。
+5. 如果 AI 宿主与记忆库同机或能访问同一文件系统：AI 执行 `yotta-memory key status <id>`，有 pending 就 `key claim`，写到 `<AI_HOME>/.yotta-memory-agent-key`（需要时显式加 `--to` / `--agent-key-file`）。
 6. 如果 AI 宿主与引擎主机不共享文件系统：pending 不能跨机自动读取。用户必须通过密码管理器、加密文件传输或目标主机本地输入把 key 放到 AI 宿主目录；不要粘贴到聊天窗口。
 
 > token 可以按用户习惯复制；agent_key 属于私密能力，优先走 `key claim` 或安全文件传输，不走对话明文。

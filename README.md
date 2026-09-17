@@ -23,9 +23,9 @@
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
 
-> 🆕 **v0.14.0 (grows smarter)**: `context` now loads long-term `consolidate` summaries first, samples a time-ordered recent corridor, keeps a deduplicated high-value backfill, and ends with a session loop contract (load at start, `remember --verify` during work, review before wrap-up). Identity, summaries, rules, profile, boundaries, commitments and the contract are not truncated by `--budget`; storage, encryption, owner isolation and permission checks are unchanged.
+> 🆕 **v0.14.0 (grows smarter + CLI diagnostics)**: `context` now loads long-term `consolidate` summaries first, samples a time-ordered recent corridor, keeps a deduplicated high-value backfill, and ends with a session loop contract (load at start, `remember --verify` during work, review before wrap-up). Identity, summaries, rules, profile, boundaries, commitments and the contract are not truncated by `--budget`; storage, encryption, owner isolation and permission checks are unchanged. This release also includes the CLI diagnostics work: explicit `--agent` wins over an untrusted ambient `YOTTA_AGENT_ID`; only `YOTTA_MEMORY_TRUST_ENV_AGENT=1` makes an environment identity authoritative. `key status` / `key claim` share one AI_HOME discovery rule (explicit `--to` / `--agent-key-file`, then `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE`, then the Codex / OpenCode / generic host default) and `key status` always prints `checked` + `discovery`. The usage text now documents `remember <type> <subject> <statement>` and `recall [关键词]` directly.
 
-> 🆕 **v0.13.2 (security)**: owner ID is not an authentication credential. Private reads/writes now require an explicit `agent_key`; the user creates it through `yotta-memory view` (or by running `yotta-memory key bind <id>`), then configures MCP with `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1` (or CLI `--agent <id> --agent-key <key>` / `--agent-key-file <file>`). Authorization also writes a temporary `keys/pending/<id>.key`; a new AI session runs `key status <id> --to <AI_HOME>` / `key claim <id> --to <AI_HOME>` to store it at `<AI_HOME>/.yotta-memory-agent-key` and delete pending, while the popup key is the user's separate backup. Legacy `keys/cache/*.key` is no longer loaded. When an owner still needs rebinding, `key list` and failed private operations print `[YTM_MIGRATION_REQUIRED]` with the affected agent IDs; the AI relays the steps and the user re-authorizes in `yotta-memory view`, which shows the one-time `agent_key` and refuses to overwrite an existing binding until it is revoked; the old key then fails validation.
+> 🆕 **v0.13.2 (security)**: owner ID is not an authentication credential. Private reads/writes now require an explicit `agent_key`; the user creates it through `yotta-memory view` (or by running `yotta-memory key bind <id>`), then configures MCP with `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1` (or CLI `--agent <id> --agent-key <key>` / `--agent-key-file <file>`). Authorization also writes a temporary `keys/pending/<id>.key`; a new AI session runs `key status <id>` / `key claim <id>` to store it at `<AI_HOME>/.yotta-memory-agent-key` and delete pending, while the popup key is the user's separate backup. Legacy `keys/cache/*.key` is no longer loaded. When an owner still needs rebinding, `key list` and failed private operations print `[YTM_MIGRATION_REQUIRED]` with the affected agent IDs; the AI relays the steps and the user re-authorizes in `yotta-memory view`, which shows the one-time `agent_key` and refuses to overwrite an existing binding until it is revoked; the old key then fails validation.
 
 > 🆕 **v0.12.2**: reliability closure — `yotta-memory doctor` checks the store, key material, index, identity registry and latest backup; `maintain --apply`, `consolidate --apply`, `merge`, `archive` and `--purge` create a transaction snapshot before writing and refuse to proceed if the snapshot fails.
 
@@ -309,6 +309,7 @@ Environment variables:
 - `YOTTA_MEMORY_HOME`: overrides the user-level store directory (default `~/.yottamemory/`).
 - `YOTTA_AGENT_ID` / `AGENT_ID`: per-process MCP identity only; trusted only with `YOTTA_MEMORY_TRUST_ENV_AGENT=1`, never as a user-level global fallback.
 - `YOTTA_MEMORY_AGENT_KEY`: per-agent 32-byte key used to unwrap `keys/bindings/<id>.key.agent`; required for encrypted private reads/writes. After authorization, the AI runs `key status` / `key claim` to store it at `<AI_HOME>/.yotta-memory-agent-key`, and the MCP host injects it from that file.
+- `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE`: explicit AI host directory / key file overrides for `key status` and `key claim`; command-line `--to` / `--agent-key-file` take precedence.
 
 ## After the agent is wired up
 
@@ -347,8 +348,8 @@ The store can live on any host or disk (= the memory engine) and be reached by a
 Before registering the connection, confirm the agent has claimed its key:
 
 ```bash
-yotta-memory key status <agent-id> --to <AI_HOME>
-yotta-memory key claim <agent-id> --to <AI_HOME>
+yotta-memory key status <agent-id>
+yotta-memory key claim <agent-id>
 ```
 
 If the engine and the agent do not share a filesystem, `key claim` cannot read the remote pending file directly; the user must transport the key through a password manager or a secure file transfer into the agent host directory. Then register the connection (`url` + three headers):
