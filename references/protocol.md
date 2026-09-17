@@ -185,6 +185,12 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
   7. 本会话闭环契约：固定输出开工加载、进行中立即 `remember --verify`、收工前复盘检查 COMMIT / 会话小结。
 - `--budget`：控制 focus / 近期走廊 / 近期高价值等动态记忆的字符预算；身份、铁律、画像、长期摘要、边界、承诺与会话闭环契约必保。
 
+### MCP 工具分组（v0.15.0）
+
+- `yotta-memory serve --stdio --tools core`：只暴露 `context / recall / search / remember`，适合常驻 MCP。
+- `yotta-memory serve --stdio --tools full`：暴露现有 16 个工具，适合诊断、维护、导入导出与自我学习操作。
+- 未指定 `--tools`：默认 `full`，保持旧配置兼容；`tools/list` 按当前分组返回，`tools/call` 越组调用会被拒绝并提示切换到 full。
+
 ### remember / iam 扩展（v0.6.0）
 
 - `remember ... --verify`：写后自动回读校验（recall 命中刚写入条目），输出「已写回读 OK」。

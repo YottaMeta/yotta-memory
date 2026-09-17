@@ -23,7 +23,7 @@ const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
 
-const VERSION = '0.14.0';
+const VERSION = '0.15.0';
 // @generated view-html:start
 const VIEW_HTML = "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>元忆 · 用户查看平台</title><style>\r\nbody{font-family:system-ui,-apple-system,\"Microsoft YaHei\",sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1f2328;background:#fafafa}\r\nh1{font-size:22px} .card{background:#fff;border:1px solid #e2e2e2;border-radius:10px;padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}\r\nbutton{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;margin:2px;font-size:14px}\r\nbutton.danger{background:#dc2626} button.ghost{background:#e5e7eb;color:#1f2328}\r\ninput,select{padding:8px;border:1px solid #c9c9c9;border-radius:6px;margin:2px;font-size:14px;box-sizing:border-box}\r\ntable{border-collapse:collapse;width:100%;font-size:13px} td,th{border:1px solid #ececec;padding:6px 8px;text-align:left;vertical-align:top}\r\n.owner{display:inline-flex;align-items:center;gap:6px;border:1px solid #ddd;border-radius:8px;padding:5px 10px;margin:4px 6px 4px 0;background:#f6f8fa}\r\n.entry{border-bottom:1px solid #eee;padding:8px 0} .meta{color:#8a8a8a;font-size:12px}\r\n.err{color:#dc2626;margin-top:8px} .ok{color:#16a34a;margin-top:8px}\r\n#app{display:none} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:12px}\r\n</style></head><body>\r\n<h1>元忆 · 用户查看平台 <span id=\"ver\" style=\"font-size:14px;color:#888\"></span></h1>\r\n<div id=\"lock\" class=\"card\">\r\n  <p><b>输入主口令解锁</b>（口令只在本地内存派生，不落盘、不发送远端）。忘口令可在 CLI 用恢复钥匙重设：<code>yotta-memory reset-password --recovery-key &lt;钥匙&gt;</code></p>\r\n  <input type=\"password\" id=\"pw\" placeholder=\"主口令\" style=\"width:260px\">\r\n  <button onclick=\"unlock()\">解锁</button>\r\n  <div class=\"err\" id=\"lockerr\"></div>\r\n</div>\r\n<div id=\"app\">\r\n  <div class=\"card\">\r\n    <b>AI 列表</b>（✅=已授权可读自己私密，🔒=未授权）\r\n    <div class=\"meta\" style=\"margin-top:6px\">「授权」由你（用户）操作：确认后生成只显示一次的 agent_key，请立即单独保存；服务端同时写临时待领取文件 <code>keys/pending/&lt;agent_id&gt;.key</code>，供该 AI 新会话领取，领取成功后自动删除。</div>\r\n    <div id=\"owners\" style=\"margin-top:8px\"></div>\r\n  </div>\r\n  <div class=\"card\">\r\n    <b>记忆</b>\r\n    <input id=\"q\" placeholder=\"搜索关键词\" style=\"width:220px\" onkeydown=\"if(event.key==='Enter'){off=0;load()}\">\r\n    <button onclick=\"off=0;load()\">搜索</button>\r\n    <button class=\"ghost\" onclick=\"doExport()\">导出 JSON</button>\r\n    <button class=\"ghost\" onclick=\"showRk()\">显示恢复钥匙</button>\r\n    <span id=\"rkout\" style=\"font-size:12px;color:#888;margin-left:8px\"></span>\r\n    <div id=\"meta\" style=\"margin-top:10px;font-size:12px;color:#666\"></div>\r\n    <div id=\"entries\" style=\"margin-top:6px\"></div>\r\n    <div id=\"pager\" style=\"margin-top:10px\">\r\n      <button class=\"ghost\" id=\"prevb\" onclick=\"prevPage()\">上一页</button>\r\n      <span id=\"pageinfo\" style=\"font-size:12px;color:#888;margin:0 8px\"></span>\r\n      <button class=\"ghost\" id=\"nextb\" onclick=\"nextPage()\">下一页</button>\r\n    </div>\r\n  </div>\r\n  <div class=\"card\">\r\n    <b>重设口令</b><br>\r\n    <input type=\"password\" id=\"cur\" placeholder=\"当前口令\">\r\n    <input type=\"password\" id=\"np1\" placeholder=\"新口令\">\r\n    <input type=\"password\" id=\"np2\" placeholder=\"确认新口令\">\r\n    <button onclick=\"resetPw()\">重设</button>\r\n    <span id=\"pwout\"></span>\r\n  </div>\r\n</div>\r\n<script>\r\nfunction esc(s){return String(s==null?'':s).replace(/[&<>\"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}\r\nasync function api(p,b){try{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return await r.json();}catch(e){return{error:String(e)};}}\r\nasync function boot(){const s=await api('/api/status');document.getElementById('ver').textContent='v'+(s.version||'');if(s.unlocked){showApp();}}\r\nfunction showApp(){document.getElementById('lock').style.display='none';document.getElementById('app').style.display='block';loadOwners();load();}\r\nasync function unlock(){const d=await api('/api/unlock',{password:document.getElementById('pw').value});if(d.error){document.getElementById('lockerr').textContent=d.error;return;}showApp();}\r\nasync function loadOwners(){const d=await api('/api/owners');const box=document.getElementById('owners');box.innerHTML='';if(!d.owners||!d.owners.length){box.innerHTML='（无 owner）';return;}\r\n  for(const o of d.owners){const c=document.createElement('span');c.className='owner';c.innerHTML=esc(o.owner)+(o.authorized?' ✅':' 🔒')+' <button class=\"ghost\" data-a=\"'+esc(o.owner)+'\">授权</button><button class=\"danger\" data-r=\"'+esc(o.owner)+'\">吊销</button>';box.appendChild(c);}\r\n  box.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){var owner=b.getAttribute('data-a');if(!confirm('确认由你为用户授权 '+owner+' 读取其私密记忆？授权后将生成只显示一次的 agent_key，请立即保存；同时写入待领取文件供该 AI 新会话领取。AI 不应代为执行该授权操作。'))return;b.disabled=true;api('/api/authorize',{owner:owner}).then(function(d){b.disabled=false;if(!d||d.error){alert((d&&d.error)||'授权失败');loadOwners();return;}if(d.agentKey){showKey(d.agentKey);}loadOwners();});};});\r\n  box.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){if(!confirm('确认吊销 '+b.getAttribute('data-r')+' 的 agent_key？吊销后该智能体立即失去私密读写能力。'))return;api('/api/revoke',{owner:b.getAttribute('data-r')}).then(function(){loadOwners();});};});\r\nfunction showKey(k){var ov=document.createElement('div');ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99';var box=document.createElement('div');box.className='card';box.style.cssText='max-width:640px;word-break:break-all';var t=document.createElement('div');t.innerHTML='<b>agent_key（只显示一次）</b>';var hint=document.createElement('div');hint.className='meta';hint.textContent='请用户立即单独保存。AI 新会话先执行 yotta-memory key status <agent_id>，有 pending 再执行 key claim <agent_id>；默认写入 AI_HOME/.yotta-memory-agent-key，需要时用 --to 或 --agent-key-file 指定。若 key 丢失，可吊销后重新授权；旧 key 会立即校验失败。';var ta=document.createElement('textarea');ta.readOnly=true;ta.value=k;ta.style.cssText='width:100%;height:72px;margin-top:8px;font-family:monospace;font-size:12px';var close=document.createElement('button');close.textContent='我已保存，关闭';close.onclick=function(){ov.remove();};box.appendChild(t);box.appendChild(hint);box.appendChild(ta);box.appendChild(close);ov.appendChild(box);document.body.appendChild(ov);ta.focus();ta.select();}\r\n}\r\nlet off=0,PS=50;\r\nasync function load(){const d=await api('/api/entries',{query:document.getElementById('q').value,offset:off,limit:PS});const meta=document.getElementById('meta');const pg=document.getElementById('pageinfo');if(meta)meta.textContent='共 '+d.count+' 条';const lim=d.limit||PS;const totalPg=Math.max(1,Math.ceil(d.count/lim));const curPg=Math.floor((d.offset||0)/lim)+1;if(pg)pg.textContent='第 '+curPg+' / '+totalPg+' 页';const box=document.getElementById('entries');box.innerHTML='';if(d.entries)for(const e of d.entries){const div=document.createElement('div');div.className='entry';div.innerHTML='<b>['+esc(e.type)+'] '+esc(e.subject)+'</b><div>'+esc(e.statement)+'</div><div class=\"meta\">'+esc(e.file)+' · owner='+esc(e.owner||'-')+' · '+esc(e.updated||e.created||'')+'</div>';box.appendChild(div);}const pb=document.getElementById('prevb'),nb=document.getElementById('nextb');if(pb)pb.disabled=(d.offset||0)<=0;if(nb)nb.disabled=!d.hasMore;}\r\nfunction prevPage(){if(off>=PS){off-=PS;load();}}\r\nfunction nextPage(){off+=PS;load();}\r\nasync function doExport(){const d=await api('/api/export');if(d.error){alert(d.error);return;}const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='yottamemory-view-export.json';a.click();}\r\nasync function showRk(){const d=await api('/api/recovery-key');document.getElementById('rkout').textContent=d.recoveryKey?('恢复钥匙: '+d.recoveryKey):(d.error||'');}\r\nasync function resetPw(){const np1=document.getElementById('np1').value,np2=document.getElementById('np2').value;if(np1!==np2){document.getElementById('pwout').innerHTML='<span class=\"err\">两次新口令不一致</span>';return;}\r\n  const d=await api('/api/reset-password',{currentPassword:document.getElementById('cur').value,newPassword:np1});document.getElementById('pwout').innerHTML=d.error?('<span class=\"err\">'+esc(d.error)+'</span>'):('<span class=\"ok\">'+esc(d.text||'ok')+'</span>');}\r\nboot();\r\n</script></body></html>\r\n";
 // @generated view-html:end
@@ -4702,8 +4702,12 @@ function cmdConfigGet() {
 }
 
 // ---- MCP serve（局域网 streamable HTTP 记忆引擎，零依赖）----
-function mcpTools() {
-  return [
+const MCP_CORE_TOOL_NAMES = ['context', 'recall', 'search', 'remember'];
+function normalizeMcpToolProfile(profile) {
+  return String(profile || 'full').trim().toLowerCase() === 'core' ? 'core' : 'full';
+}
+function mcpTools(profile) {
+  const tools = [
     { name: 'remember', description: '写入一条记忆。参数 type(FACT/PREF/BOUND/COMMIT)、subject、statement 必填；owner 可选，默认当前智能体', inputSchema: { type: 'object', properties: { type: { type: 'string', description: 'FACT/PREF/BOUND/COMMIT' }, subject: { type: 'string' }, statement: { type: 'string' }, owner: { type: 'string' } }, required: ['type', 'subject', 'statement'] } },
     { name: 'recall', description: '检索记忆。query 可选；type 可选；limit 可选（默认 20）；explain 可选。只返回当前智能体可读记忆；embedding 插件只能由本机 config 配置，远端不可传命令', inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string' }, limit: { type: 'number' }, embeddingTimeout: { type: 'number' }, explain: { type: 'boolean' } } } },
     { name: 'search', description: '检索记忆（同 recall）。query 可选；type 可选；limit 可选（默认 20）；explain 可选；embedding 插件只能由本机 config 配置，远端不可传命令', inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string' }, limit: { type: 'number' }, embeddingTimeout: { type: 'number' }, explain: { type: 'boolean' } } } },
@@ -4721,9 +4725,17 @@ function mcpTools() {
     { name: 'distill', description: '心理日志蒸馏（自我提升）：统计摘要/主题画像/知识地图。owner 默认当前智能体（MCP 不支持 --model 外部命令）', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, subject: { type: 'string' } } } },
     { name: 'explain', description: '解释单条记忆效用分项（为什么靠前/归档/遗忘）。file 为记忆文件路径或文件名', inputSchema: { type: 'object', properties: { file: { type: 'string' } }, required: ['file'] } },
   ];
+  if (normalizeMcpToolProfile(profile) !== 'core') return tools;
+  return MCP_CORE_TOOL_NAMES
+    .map((name) => tools.find((tool) => tool.name === name))
+    .filter(Boolean);
 }
 function callTool(name, args, ctx) {
-  const agent = ctx.agent || '';
+  const agent = (ctx && ctx.agent) || '';
+  const toolProfile = normalizeMcpToolProfile(ctx && ctx.toolProfile);
+  if (toolProfile === 'core' && MCP_CORE_TOOL_NAMES.indexOf(name) === -1) {
+    return { text: '工具 ' + name + ' 属于 full 分组，当前 MCP 以 core 模式启动。需要完整工具集时请使用 --tools full 重新启动。', error: true };
+  }
   if (agent && !isSafeAgentId(agent)) return { text: '非法 agent ID：只允许单段名称，禁止 /、\\、.. 和控制字符。', error: true };
   try {
     if (name === 'remember') {
@@ -4861,14 +4873,15 @@ function handleMessage(msg, ctx) {
   if (pv !== null) {
     // ---- modern（2026-07-28 无状态）----
     if (pv !== MCP_PROTOCOL_MODERN) return unsupportedVersion(id, pv);
+    const toolProfile = normalizeMcpToolProfile(ctx && ctx.toolProfile);
     if (method === 'server/discover') {
       return { jsonrpc: '2.0', id: id, result: modernOk({
         supportedVersions: [MCP_PROTOCOL_MODERN],
         capabilities: { tools: {} },
-        instructions: '元忆 MCP（基于 MCP 最新协议 2026-07-28，向后兼容 2025-11-25 及更早握手）：文件式智能体记忆 remember/recall/search/context/forget/archive/maintain 等读写检索与维护；私密按 owner 物理隔离，数据不出本机。'
+        instructions: '元忆 MCP（基于 MCP 最新协议 2026-07-28，向后兼容 2025-11-25 及更早握手）：当前工具分组 ' + toolProfile + '；文件式智能体记忆 remember/recall/search/context/forget/archive/maintain 等读写检索与维护；私密按 owner 物理隔离，数据不出本机。'
       }, [3600000, 'public']) };
     }
-    if (method === 'tools/list') return { jsonrpc: '2.0', id: id, result: modernOk({ tools: mcpTools() }, [300000, 'public']) };
+    if (method === 'tools/list') return { jsonrpc: '2.0', id: id, result: modernOk({ tools: mcpTools(toolProfile) }, [300000, 'public']) };
     if (method === 'tools/call') {
       const out = callTool(params.name || '', params.arguments || {}, ctx);
       return { jsonrpc: '2.0', id: id, result: modernOk({ content: [{ type: 'text', text: out.text }], isError: !!out.error }) };
@@ -4883,7 +4896,7 @@ function handleMessage(msg, ctx) {
     return { jsonrpc: '2.0', id: id, result: { protocolVersion: MCP_PROTOCOL_LEGACY, capabilities: { tools: {} }, serverInfo: { name: 'yotta-memory', version: VERSION } } };
   }
   if (method === 'ping') return { jsonrpc: '2.0', id: id, result: {} };
-  if (method === 'tools/list') return { jsonrpc: '2.0', id: id, result: { tools: mcpTools() } };
+  if (method === 'tools/list') return { jsonrpc: '2.0', id: id, result: { tools: mcpTools(ctx && ctx.toolProfile) } };
   if (method === 'tools/call') {
     const out = callTool(params.name || '', params.arguments || {}, ctx);
     return { jsonrpc: '2.0', id: id, result: { content: [{ type: 'text', text: out.text }], isError: !!out.error } };
@@ -4891,7 +4904,7 @@ function handleMessage(msg, ctx) {
   return { jsonrpc: '2.0', id: id, error: { code: -32601, message: 'Method not found: ' + method } };
 }
 function cmdServe(opts) {
-  if (opts.stdio) { cmdServeStdio(); return; }
+  if (opts.stdio) { cmdServeStdio(opts); return; }
   const host = opts.host || '0.0.0.0';
   const port = opts.port || 8787;
   const noAuth = !!opts.noAuth;
@@ -4900,14 +4913,15 @@ function cmdServe(opts) {
   function authorize(req) {
     const agentId = String(req.headers['x-agent-id'] || '');
     const agentKey = String(req.headers['x-agent-key'] || '').trim();
-    if (noAuth) return { agent: agentId, agentKey: agentKey };
+    const toolProfile = normalizeMcpToolProfile(opts.toolProfile);
+    if (noAuth) return { agent: agentId, agentKey: agentKey, toolProfile: toolProfile };
     const auth = req.headers['authorization'] || '';
     const m = /^Bearer\s+(.+)$/i.exec(auth);
     if (!m) return null;
     const token = m[1].trim();
     const agent = agentId;
     const tokenMap = (loadTokens(root).tokens) || {};
-    if (tokenMap[agent] && tokenMap[agent].token === token) return { agent: agent, agentKey: agentKey };
+    if (tokenMap[agent] && tokenMap[agent].token === token) return { agent: agent, agentKey: agentKey, toolProfile: toolProfile };
     return null;
   }
   function originAllowed(req) {
@@ -4977,6 +4991,7 @@ function cmdServe(opts) {
     console.log('URL: http://' + host + ':' + port + '/mcp');
     console.log('记忆库: ' + root);
     console.log('MCP 协议: 2026-07-28（modern，server/discover）/ 2025-11-25（legacy 握手兼容）');
+    console.log('工具分组: ' + normalizeMcpToolProfile(opts.toolProfile));
     if (noAuth) console.log('鉴权: 已关闭（--no-auth，仅限可信内网）');
     else console.log('鉴权: Bearer token + X-Agent-Id + X-Agent-Key（token 由 token new 生成，agent_key 由 view 授权生成）');
     console.log('按 Ctrl+C 停止');
@@ -4984,10 +4999,10 @@ function cmdServe(opts) {
   });
 }
 // ---- stdio 本地零进程模式（客户端按需拉起 CLI）----
-function cmdServeStdio() {
+function cmdServeStdio(opts) {
   const root = userRoot();
   ensureInit(root);
-  const ctx = { agent: currentAgent(), agentKey: trustedEnvAgentKey() };
+  const ctx = { agent: currentAgent(), agentKey: trustedEnvAgentKey(), toolProfile: normalizeMcpToolProfile(opts && opts.toolProfile) };
   let buf = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', function (chunk) {
@@ -5973,7 +5988,7 @@ function usage() {
       ['config', '查看/设置配置（get；set memory_home <目录> / backup_dir <目录> / embedding_cmd <命令> / embedding_timeout <毫秒> / maintain_* 阈值与半衰 / consolidate_* 参数）']
     ]],
     ['平台与服务', [
-      ['serve', '启动 MCP 记忆引擎（streamable HTTP；--stdio 本地零进程）'],
+      ['serve', '启动 MCP 记忆引擎（streamable HTTP；--stdio 本地零进程；--tools core|full 控制工具分组）'],
       ['lan', '开机自启管理（enable/disable/status；Windows 计划任务 / Linux systemd/crontab）'],
       ['--version', '版本']
     ]]
@@ -5998,7 +6013,7 @@ async function main() {
   if (!args.length) { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-key', '--agent-key-file', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-key', '--agent-key-file', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools']);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--version' || a === '-v') { console.log(VERSION); return; }
@@ -6068,6 +6083,7 @@ async function main() {
       else if (a === '--to') opts.to = v;
       else if (a === '--id') opts.id = v;
       else if (a === '--time') opts.time = v;
+      else if (a === '--tools') opts.toolProfile = v;
     } else if (a.startsWith('--')) {
       if (a === '--query') {
         console.error('未知选项: --query。recall/search 的关键词是位置参数：yotta-memory recall [关键词]');
@@ -6077,6 +6093,13 @@ async function main() {
       process.exit(2);
     } else {
       positional.push(a);
+    }
+  }
+  if (opts.toolProfile !== undefined) {
+    opts.toolProfile = String(opts.toolProfile).trim().toLowerCase();
+    if (opts.toolProfile !== 'core' && opts.toolProfile !== 'full') {
+      console.error('工具分组必须是 core 或 full（例如：yotta-memory serve --stdio --tools core）。');
+      process.exit(2);
     }
   }
   const first = positional[0];

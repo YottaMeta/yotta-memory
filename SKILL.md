@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
 description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照
-version: 0.14.0
+version: 0.15.0
 license: MIT
 ---
 
@@ -16,6 +16,7 @@ license: MIT
 - **类型体系**：FACT（事实，公共共享）/ PREF（偏好，私密）/ BOUND（边界，私密）/ COMMIT（承诺，私密）。
 - **双级存储**：用户级 `~/.yottamemory/`（跨项目）+ 项目级 `.yottamemory/`（随项目共享）。
 - **越用越懂（v0.14.0）**：`context` 一键生成开工上下文包——长期理解摘要优先（复用 `consolidate` 产物）+ 用户画像（引擎零推断，只归组原文）+ 近期走廊（按更新时间取样）+ 近期高价值补位 + 边界 + 承诺 + 会话闭环契约；SKILL「记忆守则」规则层只注入规则与机制，不注入人格数据（出厂零数据）。
+- **MCP 工具分组（v0.15.0）**：`serve --tools core|full` 控制工具暴露面。`core` 固定为 `context / recall / search / remember`，适合常驻；`full` 为现有 16 工具，适合维护与诊断。未指定时默认 `full`，保持现有配置兼容。
 - **自我学习 / 自我进化 / 自我提升（v0.8.0）**：`recall` 语义检索（同义词 / 拼音 / 字段加权 / 模糊匹配，零依赖）；`feedback` 显式使用反馈闭环（useful / useless → weight / confidence / feedback_net 演化，越用越懂）；`maintain` 规则层自组织（统一效用分 + 年龄自动归档 / 遗忘候选 / 去重，默认 dry-run，immutable / BOUND 豁免）；`distill` 心理日志蒸馏（统计摘要 / 主题画像 / 知识地图，可选 `--model` 外部模型增强）；`explain` 查看单条记忆效用分项。
 - **召回质量与上下文选择（v0.9.0）**：`recall` 支持可选本地 embedding 插件（`--embedding <command>` / `config set embedding_cmd <command>`）；`context --focus <关键词>` 生成任务感知上下文；`--explain` 输出选择 trace，无插件时自动降级为词法检索。
 - **压缩遗忘（v0.10.0）**：记忆库长期可用不膨胀——`consolidate` 周期摘要压缩（把超龄 + 低效用 + 长期闲置的同主题旧记忆归纳成**带溯源**的摘要，原文整体进 `.archive/`，`--undo` 一键回滚）；`maintain --dedup` 近重复**自动合并**（置信度分档，`--apply` 批量执行高置信组）；效用分时效改为**分类型衰减**（FACT 慢 / PREF 中 / COMMIT 任务类快 / BOUND 不衰减）；`consolidate --batches` 批次审计可查。
@@ -280,7 +281,7 @@ yotta-memory doctor --json
 | `yotta-memory whoami --agent <id> [--agent-key <key>]` | 查看当前显式身份与登记状态；环境身份仅在 MCP 信任标记下有效 |
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 每智能体访问 token：生成 / 列出 / 吊销（登记 `<记忆库>/.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
-| `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id + X-Agent-Key 鉴权）|
+| `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio] [--tools core|full]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id + X-Agent-Key 鉴权；工具分组默认 full）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务，默认 ONLOGON、--onstart 开机即启需管理员，非管理员自动降级用户级 Startup 静默自启，v0.6.3 起 VBS 自愈不弹 80070002；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）|
 | `yotta-memory feedback <文件|主题> --useful|--useless [--reason <原因>] [--undo]` | 显式使用反馈（v0.8.0 自我学习闭环：useful → weight×1.2 / useless → weight×0.8，confidence / feedback_net 同步演化；`--undo` 回滚最近一次；审计写 `.archive/feedback-<日期>.jsonl`）|
 | `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--dedup --apply] [--merge A,B]` | 记忆自组织（v0.8.0 自我进化 + v0.10.0 自动合并）：默认 dry-run 预览；`--apply` 执行归档（immutable / BOUND 豁免；私密归档入 `.archive/private/<owner>/<type>/`），`--purge` 才真删遗忘候选；`--dedup` 查重并给**置信度分档**（≥0.85 高置信 / 0.65–0.85 建议手动 / 其余忽略），`--dedup --apply` 自动合并同归属高置信组（写批次审计可回滚；与归档互斥，不误归档）；`--merge A,B` 手动合并两条；审计写 `.archive/audit-<日期>.jsonl`）|
@@ -465,6 +466,8 @@ MCP 模式由宿主把宿主 key 文件内容注入 `YOTTA_MEMORY_AGENT_KEY`，�
 5. 用 MCP tools 读写记忆。
 
 > MCP 工具集与 CLI 一致：remember / recall / search / forget / archive / reindex / export / import / profile；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露；MCP export/import 路径限记忆库内、distill 不支持 `--model`（仅本地 CLI）。
+
+> 工具分组（v0.15.0）：常驻场景用 `yotta-memory serve --stdio --tools core`，只暴露 `context / recall / search / remember`；需要诊断、维护、导入导出时用 `--tools full`。调用不属于当前分组的工具会返回明确提示，不会静默执行。
 
 ### 4.7 MCP 配置位置表
 | 智能体 | 常见 MCP 配置位置 |

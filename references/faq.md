@@ -23,6 +23,9 @@
 ## 7. MCP 工具没加载？
 检查客户端 `mcpServers` 已配置 yotta-memory（url + token + agent_key）；agent_key 应来自 `<AI_HOME>/.yotta-memory-agent-key` 或 MCP secret 注入，不把明文 key 写进对话。改配置后重启/重载会话。本机直连可不配 MCP，直接用 CLI。
 
+## 7.1 MCP 工具太多，想减少常驻工具？
+用 `serve --tools core` 启动，工具列表只保留 `context / recall / search / remember`；需要 `doctor`、`forget`、`maintain`、`distill` 等完整能力时改用 `--tools full`。未指定 `--tools` 时默认仍为 `full`，不会影响已有配置。
+
 ## 8. 记忆库在哪个目录？
 `yotta-memory config get` 查看；`config set memory_home <目录>` 改位置。项目级记忆用 `init --project`（存 `.yottamemory/` 随项目共享）。
 

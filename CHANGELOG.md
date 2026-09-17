@@ -1,3 +1,13 @@
+## v0.15.0 (2026-09-17)
+
+**MCP 工具分组：降低常驻工具面**
+
+- `serve` 新增 `--tools core|full`：`core` 暴露 `context / recall / search / remember`，`full` 保留现有 16 个工具；未指定时默认 `full`，保持向后兼容。
+- `tools/list` 按当前分组返回；`tools/call` 调非当前分组工具时返回可执行提示，要求切换到 `--tools full`。
+- OpenCode 集成默认使用 `core`，需要在智能体运行中减少工具常驻税；完整维护能力仍可按需启动 `full`。
+- 新增 `test/mcp-tool-profiles.test.js`，覆盖 core 列表、legacy / modern 分组一致性与越组调用提示。
+- 存储格式、AES-256-GCM、owner 隔离、agent_key 与权限判定不变。
+
 ## v0.14.0 (2026-09-17)
 
 **上下文编排：让 AI 越用越懂用户；合并 O2 CLI 诊断修复**

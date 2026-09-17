@@ -23,6 +23,8 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
+> 🆕 **v0.15.0（MCP 工具分组）**：`serve --tools core|full` 控制 MCP 工具暴露面。`core` 常驻 `context / recall / search / remember`；`full` 保留现有 16 个诊断与维护工具。未指定参数时默认 `full`，保持现有配置兼容。
+
 > 🆕 **v0.14.0（越用越懂 + CLI 诊断）**：`context` 新增「长期理解摘要」段（优先加载 `consolidate` 产物）+「近期走廊」段（按 updated / created 倒序）+「本会话闭环契约」（开工加载、进行中立即 `remember --verify`、收工前复盘）；原有近期记忆改为「近期高价值记忆（补位）」，与摘要 / focus / 走廊按文件去重。身份、长期摘要、铁律、画像、边界、承诺与闭环契约不受 `--budget` 截断；不改变存储、加密、owner 隔离与权限判定。本版同时合并 CLI 诊断修复：显式 `--agent` 优先于非受信 ambient `YOTTA_AGENT_ID`；只有 `YOTTA_MEMORY_TRUST_ENV_AGENT=1` 时环境身份才参与判定。`key status` / `key claim` 共用 AI_HOME 发现规则（显式 `--to` / `--agent-key-file` > `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE` > Codex / OpenCode / 通用宿主默认），`key status` 始终输出 `checked` 与 `discovery`。usage 直接列出 `remember <type> <subject> <statement>` 与 `recall [关键词]`。
 
 > 🆕 **v0.13.2（安全）**：owner ID 不是认证凭证。私密读写必须持有 `agent_key`：由用户执行 `yotta-memory view` 授权（或自行运行 `yotta-memory key bind <id>`），再配置 MCP 注入 `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1`（CLI 用 `--agent <id> --agent-key <key>` 或 `--agent-key-file <文件>`）。授权同时写临时 `keys/pending/<id>.key`，AI 新会话用 `key status <id>` / `key claim <id>` 领取到 `<AI_HOME>/.yotta-memory-agent-key` 后删除 pending；弹窗 key 供用户单独备份。legacy `keys/cache/*.key` 不再加载。仍有 owner 需要重新绑定时，`key list` 与失败的私密操作会输出 `[YTM_MIGRATION_REQUIRED]` 并列出受影响 agent；AI 只提醒步骤，由用户在 `yotta-memory view` 逐个授权；平台一次性展示 `agent_key`，已有 binding 时需先「吊销」再重新授权，旧 key 随即校验失败。
