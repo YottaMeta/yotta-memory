@@ -27,7 +27,7 @@
 `yotta-memory config get` 查看；`config set memory_home <目录>` 改位置。项目级记忆用 `init --project`（存 `.yottamemory/` 随项目共享）。
 
 ## 9. 跨会话恢复上下文？
-开工运行 `yotta-memory context`（身份 + 画像 + 近期记忆 + 边界 + 承诺），需要细节再 `recall <关键词>`。
+开工运行 `yotta-memory context`（身份 + 铁律 + 画像 + 长期摘要 + 近期走廊 + 近期高价值 + 边界 + 承诺 + 会话闭环契约），需要细节再 `recall <关键词>`；摘要优先来自 `consolidate` 产物，收工前按闭环契约复盘并检查关键结论是否落盘。
 
 ## 10. 备份与迁移？
 优先使用 `backup create --dir <独立盘目录>` 创建整库备份；`backup list` 查看，`backup doctor` 校验 SHA-256，`backup restore <id> --to <新目录>` 恢复到新目录。备份默认拒绝与记忆库同卷。`export --out 文件.json` 仍可用于跨工具迁移；公共 FACT 是明文文件也可直接 git 备份。v0.12.2 起，破坏性操作也会在写入前自动创建事务快照。

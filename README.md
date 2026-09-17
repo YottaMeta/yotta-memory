@@ -9,7 +9,7 @@
 <p align="center">Boundary-aware, file-based memory for AI agents: let any agent live across sessions instead of a single conversation.</p>
 <p align="center">Start work with <code>recall</code> to restore context, <code>remember</code> important facts as you go, and archive at wrap-up; memories are Markdown files in the user's own directory — <b>readable, editable, auditable, rollback-able</b>, zero-dependency and ready to use.</p>
 <p align="center">FACT is shared, PREF / BOUND / COMMIT are privately isolated — <b>who may read what is decided by mechanism, not by AI self-discipline</b>; one memory store can be shared across agents, travels with the disk, and can be shared over LAN.</p>
-<p align="center">"Grows smarter the more you use it": <code>profile</code> aggregates a user profile (zero inference) + <code>context</code> builds a one-shot start-of-work package (identity + profile + recent memory + boundaries + commitments + wrap-up discipline), turning memory from "storage" into "a memory system that grows".</p>
+<p align="center">"Grows smarter the more you use it" (v0.14.0): <code>context</code> builds a one-shot start-of-work package with long-term summaries first (reusing <code>consolidate</code>) + a zero-inference <code>profile</code> + a time-ordered recent corridor + high-value backfill + boundaries + commitments + a session loop contract, turning memory from "storage" into "a memory system that grows".</p>
 <p align="center"><b>Mechanism-level encryption for the private zone</b>: AES-256-GCM envelope encryption + passphrase-derived master key + recovery key; <code>yotta-memory view</code> is a user-facing review platform (unlock with passphrase to see all AI memory); <code>migrate</code> converts plaintext → encrypted; <code>--no-encrypt</code> can downgrade. Cross-agent privacy upgrades from "discipline-level isolation" to "mechanism-level unreadable".</p>
 
 <p align="center">
@@ -22,6 +22,8 @@
 </p>
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
+
+> 🆕 **v0.14.0 (grows smarter)**: `context` now loads long-term `consolidate` summaries first, samples a time-ordered recent corridor, keeps a deduplicated high-value backfill, and ends with a session loop contract (load at start, `remember --verify` during work, review before wrap-up). Identity, summaries, rules, profile, boundaries, commitments and the contract are not truncated by `--budget`; storage, encryption, owner isolation and permission checks are unchanged.
 
 > 🆕 **v0.13.2 (security)**: owner ID is not an authentication credential. Private reads/writes now require an explicit `agent_key`; the user creates it through `yotta-memory view` (or by running `yotta-memory key bind <id>`), then configures MCP with `YOTTA_AGENT_ID` + `YOTTA_MEMORY_AGENT_KEY` + `YOTTA_MEMORY_TRUST_ENV_AGENT=1` (or CLI `--agent <id> --agent-key <key>` / `--agent-key-file <file>`). Authorization also writes a temporary `keys/pending/<id>.key`; a new AI session runs `key status <id> --to <AI_HOME>` / `key claim <id> --to <AI_HOME>` to store it at `<AI_HOME>/.yotta-memory-agent-key` and delete pending, while the popup key is the user's separate backup. Legacy `keys/cache/*.key` is no longer loaded. When an owner still needs rebinding, `key list` and failed private operations print `[YTM_MIGRATION_REQUIRED]` with the affected agent IDs; the AI relays the steps and the user re-authorizes in `yotta-memory view`, which shows the one-time `agent_key` and refuses to overwrite an existing binding until it is revoked; the old key then fails validation.
 
@@ -44,7 +46,7 @@ Most memory solutions treat "remembering" as a black box: data goes into a datab
 - **Memory is files** — each memory is a Markdown file with YAML frontmatter in the user's own directory. Any editor can view / edit / delete; git handles versioning and rollback; team sync and handoff use the same standard toolchain.
 - **Isolation is guaranteed by mechanism** — FACT goes to the public zone and is shared; PREF / BOUND / COMMIT go to the private zone, physically split per owner (`private/<owner>/<type>/`). Reads are partitioned by scope/owner; out-of-bound content is intercepted by the CLI and never returned (silently skipped by default; explicit unauthorized cross-read is denied with an error); all reads/writes go through CLI / MCP — direct shell access to library files is forbidden. Permissions are enforced by mechanism, not by AI "self-discipline".
 - **Zero dependency, ready to use** — no daemon, no database, no vector store; just Node.js. Install and use; data stays on the machine; deployable anywhere.
-- **Grows smarter (v0.6.0)** — `profile` aggregates a user profile (the engine infers nothing; it only groups verbatim text) + `context` generates a one-shot start-of-work package (identity + profile + recent memory + boundaries + commitments); the SKILL "memory discipline" injects rule layers (type red lines / trigger signals / know the user / bottom lines / host isolation) — rules and mechanisms only, no personality data; zero data out of the box.
+- **Grows smarter (v0.14.0)** — `context` generates a one-shot start-of-work package (identity + long-term summaries first + zero-inference profile + time-ordered recent corridor + high-value backfill + boundaries + commitments + session loop contract); long-term summaries reuse `consolidate` output. The SKILL "memory discipline" injects rule layers (type red lines / trigger signals / know the user / bottom lines / host isolation) — rules and mechanisms only, no personality data; zero data out of the box.
 - **Self-learning / self-evolving / self-improving (v0.8.0)** — `recall` semantic search (synonyms / pinyin full + initials / field weighting / fuzzy match, zero-dependency) with utility-score blended ranking; `feedback` explicit usage feedback loop (useful / useless adjusts weight / confidence / feedback_net); `maintain` rule-layer self-organization (unified utility score + age-based auto-archive / forget candidates / dedup, dry-run by default, immutable / BOUND exempt); `distill` psychological-log distillation (statistical summary / topic profile / knowledge map, optional `--model` external model enhancement).
 - **Compression & forgetting (v0.10.0) — memory that never bloats** — `consolidate` summarizes old, low-use memories on the same topic into one **provenance-carrying periodic summary** that stays in active memory (every original file is listed as provenance; originals move to `.archive/`; `--undo <batch>` restores everything); `maintain --dedup` scores near-duplicates and `--apply` auto-merges high-confidence groups; the utility recency component now decays **per type** (FACT slow / PREF medium / COMMIT task-like fast / BOUND never) so durable facts are not wiped by time and stale commitments step aside quickly; every batch is auditable via `consolidate --batches`.
 - **Reliability baseline (v0.12.0 / v0.12.2)** — `init` refuses to overwrite an existing store and `--attach` attaches instead; `forget` moves entries to `.trash/` with an audit record; `backup create / list / doctor / restore` backs up the store to an independent volume with a SHA-256 manifest and restores only to a new directory; `yotta-memory doctor` checks the store, key material, index, identity registry and latest backup, and destructive writes take a transaction snapshot first.
@@ -86,10 +88,10 @@ Each agent has a globally unique agent ID: it is the ownership key for private m
 - **No network token locally**: local CLI / stdio bypasses HTTP tokens, but private access still requires `agent_id + agent_key`; MCP declares the key through per-process `YOTTA_MEMORY_AGENT_KEY` and `YOTTA_MEMORY_TRUST_ENV_AGENT=1`.
 - **Private memory requires an owner**: writing PREF / BOUND / COMMIT without declaring identity is rejected (public FACT is unaffected), mechanically preventing ID spoofing.
 
-### Profile & start-of-work context (v0.6.0 + v0.9.0)
+### Profile & start-of-work context (v0.6.0 + v0.9.0 + v0.14.0)
 
 - **profile**: aggregates `private/<owner>/` PREF / BOUND / COMMIT verbatim, grouped by type + subject + tags, written to `profile.md`; the engine infers nothing — profile conclusions are formed internally by the AI per the "memory discipline", never pasted as labels.
-- **context**: one-shot start-of-work package — multi-agent integration rules + identity + user profile digest + optional task-focused memory (`--focus`) + recent memory (importance-sorted) + boundary reminders + commitments/anchors; supports `--budget` character budget and `--explain` selection trace.
+- **context**: one-shot start-of-work package — multi-agent integration rules + identity + long-term summaries first (`consolidate` output) + user profile digest + optional task-focused memory (`--focus`) + time-ordered recent corridor + deduplicated high-value backfill + boundary reminders + commitments/anchors + session loop contract; supports `--budget` for dynamic memory and `--explain` selection trace.
 - **Memory discipline**: SKILL.md embeds a rule layer (type red lines / proactive trigger capture / know-the-user three stages / psychological grounding & alignment / bottom lines / host isolation / anti-patterns).
 
 ### Retrieval: semantic search (v0.8.0 + v0.9.0 embedding)
@@ -222,9 +224,12 @@ Recorded: ~/.yottamemory/facts/2026-09-01-0001.md
 # Start-of-work context (yotta-memory context)
 ## 1. Identity
 ## 2. User profile summary
-## 3. Recent memories (top 10 by activity)
-## 4. Boundaries (BOUND)
-## 5. Commitments / anchors (COMMIT)
+## 2.5 Long-term understanding summaries
+## 3. Recent corridor (time-ordered)
+## 4. Recent high-value backfill
+## 5. Boundaries (BOUND)
+## 6. Commitments / anchors (COMMIT)
+## 7. Session loop contract
 ```
 
 ## Upgrade
@@ -270,7 +275,7 @@ Optional post-upgrade self-check: `yotta-memory config get` (confirm `memory_hom
 | `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <src>] [--weight <0..>] [--verify] [--no-hint]` | Write a memory (same subject+statement auto-updates; --owner marks ownership; --source records origin; --weight importance, dedup takes max; --verify read-back; --no-hint disables type hints) |
 | `yotta-memory recall [keywords] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain] [--semantic] [--embedding <cmd>] [--embedding-timeout N]` | Search memory (semantic + utility ranking; optional local embedding plugin; partitioned reads; cross-reading other agents' private is denied by default, needs grant / identity=user / `--unsafe`; project-level priority) |
 | `yotta-memory profile [--owner <id>]` | Generate a user profile (aggregates `private/<owner>` verbatim, zero inference, writes `profile.md`; cross-owner denied by default) |
-| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <text>] [--explain] [--embedding <cmd>]` | Generate the start-of-work package (identity + multi-agent rules + profile + task-focused memory + recent memory + boundaries + commitments; --budget caps chars, --focus adds task relevance, --explain shows included/dropped) |
+| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <text>] [--explain] [--embedding <cmd>]` | Generate the start-of-work package (identity + rules + profile + long-term summaries + task-focused memory + recent corridor + high-value backfill + boundaries + commitments + session loop contract; --budget caps dynamic memory, --focus adds task relevance, --explain shows included/dropped) |
 | `yotta-memory forget <file>` | Delete a memory (by type-dir path or file name) |
 | `yotta-memory doctor [--json]` | Start-of-work reliability check (store / key material / index / identity / latest backup; critical issues lock destructive writes) |
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | Archive old memory (decay-blended utility + age; immutable / BOUND exempt; private to `.archive/private/<owner>/<type>/`) |
