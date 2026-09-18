@@ -532,6 +532,11 @@ function runtimeListCore() {
   }
   return { error: false, text: lines.join('\n'), versions: versions, current: manifest.current || '' };
 }
+function runtimeExecutionPath() {
+  const invoked = process.argv && process.argv[1] ? path.resolve(process.argv[1]) : '';
+  if (invoked && path.basename(invoked).toLowerCase() === 'yotta-memory.js') return invoked;
+  return path.resolve(__filename);
+}
 function runtimeEnsureForManagedTask() {
   const manifest = readRuntimeManifest();
   if (manifest && manifest.current) {
@@ -2553,6 +2558,348 @@ function backupHealthCore(opts) {
   }
   return { level: 'none', needsSetup: false, text: '' };
 }
+// ---- v0.16.0 M3: runtime drift diagnosis ----
+function runtimePathList(value) {
+  const pattern = path.delimiter === ':' ? /[;:\n]/ : /[;\n]/;
+  return String(value || '').split(pattern).map(function (item) { return item.trim(); }).filter(Boolean);
+}
+function runtimeVersionFromDir(dir) {
+  let current = path.resolve(String(dir || ''));
+  for (let i = 0; i < 8; i++) {
+    const pkgPath = path.join(current, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const version = String(JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version || '').trim();
+        if (version) return version;
+      } catch (e) {}
+    }
+    const skillPath = path.join(current, 'SKILL.md');
+    if (fs.existsSync(skillPath)) {
+      try {
+        const text = fs.readFileSync(skillPath, 'utf8');
+        const match = text.match(/^---\s*\n([\s\S]*?)\n---/);
+        if (match) {
+          const versionLine = match[1].split(/\r?\n/).find(function (line) { return /^version\s*:/.test(line); });
+          if (versionLine) {
+            const version = versionLine.slice(versionLine.indexOf(':') + 1).trim().replace(/^["']|["']$/g, '');
+            if (version) return version;
+          }
+        }
+      } catch (e) {}
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return '';
+}
+function runtimeVersionFromPath(target) {
+  const value = String(target || '').trim();
+  if (!value) return '';
+  const normalized = value.replace(/\\/g, '/');
+  const versionMatch = normalized.match(/\/versions\/([^/]+)\/bin\/yotta-memory\.js$/i);
+  if (versionMatch) return versionMatch[1];
+  const abs = path.resolve(value);
+  if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) return runtimeVersionFromDir(abs);
+  const base = path.basename(abs).toLowerCase();
+  const dir = path.dirname(abs);
+  return runtimeVersionFromDir(base === 'yotta-memory.js' ? path.dirname(dir) : dir);
+}
+function runtimeExtractLauncherPaths(text) {
+  const found = new Set();
+  const add = function (value) {
+    const raw = String(value || '').trim().replace(/^['"]|['"]$/g, '');
+    if (!raw) return;
+    const parts = splitCommandArgv(raw);
+    for (const part of parts) {
+      const token = part.replace(/^['"]|['"]$/g, '');
+      if (/yotta-memory\.js$/i.test(token.replace(/[;,]$/, ''))) found.add(token.replace(/[;,]$/, ''));
+    }
+  };
+  const parsed = [];
+  try {
+    const value = JSON.parse(String(text || ''));
+    const walk = function (node) {
+      if (typeof node === 'string') parsed.push(node);
+      else if (Array.isArray(node)) node.forEach(walk);
+      else if (node && typeof node === 'object') Object.keys(node).forEach(function (key) { walk(node[key]); });
+    };
+    walk(value);
+  } catch (e) {}
+  for (const value of parsed) if (/yotta-memory\.js/i.test(value)) add(value);
+  const raw = String(text || '').replace(/\\\\/g, '\\');
+  const patterns = [
+    /[A-Za-z]:[\\/][^"'\r\n|;]+?yotta-memory\.js/gi,
+    /(?:\.{0,2}[\\/])?[^"'\s|;]+?yotta-memory\.js/gi,
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(raw)) !== null) add(match[0]);
+  }
+  return Array.from(found);
+}
+function runtimeConfigIdentityMode(text) {
+  const raw = String(text || '');
+  if (/YOTTA_AGENT_ID|YOTTA_MEMORY_AGENT_KEY|YOTTA_MEMORY_TRUST_ENV_AGENT/.test(raw)) return 'legacy-env';
+  if (/--agent-id/.test(raw) && /--agent-key-file/.test(raw)) return 'stdio-args';
+  if (/X-Agent-Id|Authorization/i.test(raw)) return 'headers';
+  return 'unknown';
+}
+function runtimeDiscoverProcesses() {
+  try {
+    if (process.platform === 'win32') {
+      const script = "$p=Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*yotta-memory*' }; if ($p) { $p | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress }";
+      const result = child_process.spawnSync('powershell.exe', ['-NoProfile', '-Command', script], {
+        encoding: 'utf8',
+        timeout: 15000,
+        windowsHide: true,
+      });
+      if (result.status !== 0 || !String(result.stdout || '').trim()) return [];
+      const parsed = JSON.parse(String(result.stdout).trim());
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+      return rows.map(function (row) {
+        return { pid: row.ProcessId, commandLine: row.CommandLine || '' };
+      });
+    }
+    const result = child_process.spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8', timeout: 10000 });
+    if (result.status !== 0) return [];
+    return String(result.stdout || '').split(/\r?\n/).filter(Boolean).map(function (line) {
+      const match = line.trim().match(/^(\d+)\s+(.*)$/);
+      return match ? { pid: parseInt(match[1], 10), commandLine: match[2] } : null;
+    }).filter(Boolean);
+  } catch (e) {
+    return [];
+  }
+}
+function runtimeDiscoverSkillDirs() {
+  const explicit = runtimePathList(process.env.YOTTA_MEMORY_SKILL_DIRS);
+  if (explicit.length) return explicit;
+  const candidates = [];
+  const add = function (base) {
+    if (!base) return;
+    candidates.push(path.join(base, 'skills', 'yotta-memory'));
+    candidates.push(path.join(base, 'yotta-memory'));
+  };
+  add(process.env.CODEX_HOME);
+  if (process.env.XDG_CONFIG_HOME) candidates.push(path.join(process.env.XDG_CONFIG_HOME, 'opencode', 'skills', 'yotta-memory'));
+  add(process.env.HERMES_HOME);
+  add(path.join(os.homedir(), '.codex'));
+  candidates.push(path.join(os.homedir(), '.config', 'opencode', 'skills', 'yotta-memory'));
+  return Array.from(new Set(candidates)).filter(function (dir) { return fs.existsSync(dir); });
+}
+function runtimeDoctorCore(opts) {
+  opts = opts || {};
+  const drifts = [];
+  const warnings = [];
+  const mcpConfigPaths = opts.mcpConfigPaths !== undefined
+    ? opts.mcpConfigPaths
+    : runtimePathList(process.env.YOTTA_MEMORY_MCP_CONFIGS);
+  const skillDirs = opts.skillDirs !== undefined ? opts.skillDirs : runtimeDiscoverSkillDirs();
+  const processes = opts.processes !== undefined ? opts.processes : runtimeDiscoverProcesses();
+  const manifest = readRuntimeManifest();
+  const currentDir = runtimeCurrentDir();
+  const currentBin = runtimeCurrentBin();
+  const manifestVersion = manifest && manifest.current ? String(manifest.current) : '';
+  const installedCurrentVersion = fs.existsSync(path.join(currentDir, 'package.json'))
+    ? runtimeVersionFromDir(currentDir)
+    : '';
+
+  const checks = {
+    cli: { path: runtimeExecutionPath(), version: VERSION },
+    current: {
+      path: currentDir,
+      version: manifestVersion || installedCurrentVersion || '',
+      installedVersion: installedCurrentVersion,
+      manifestVersion: manifestVersion,
+    },
+    runtimeRoot: runtimeRoot(),
+    mcpConfigs: [],
+    runningServers: [],
+    skillCopies: [],
+    identityModes: [],
+    drifts: drifts,
+  };
+
+  if (!manifest || !manifest.current) {
+    drifts.push({
+      kind: 'current-runtime',
+      source: runtimeManifestPath(),
+      actual: 'missing',
+      expected: VERSION,
+      fix: 'yotta-memory runtime install --from-current',
+      blocking: true,
+    });
+  } else {
+    const versionDir = runtimeVersionDir(manifest.current);
+    if (!fs.existsSync(versionDir)) {
+      drifts.push({
+        kind: 'current-runtime',
+        source: runtimeManifestPath(),
+        actual: manifest.current,
+        expected: VERSION,
+        fix: 'yotta-memory runtime install --from-current && yotta-memory runtime use ' + VERSION + ' --restart',
+        blocking: true,
+      });
+    } else if (manifest.current !== VERSION) {
+      drifts.push({
+        kind: 'current-runtime',
+        source: runtimeManifestPath(),
+        actual: manifest.current,
+        expected: VERSION,
+        fix: 'yotta-memory runtime install --from-current && yotta-memory runtime use ' + VERSION + ' --restart',
+        blocking: true,
+      });
+    }
+    if (fs.existsSync(versionDir)) {
+      if (!fs.existsSync(currentBin)) {
+        drifts.push({
+          kind: 'current-runtime',
+          source: currentDir,
+          actual: 'launcher-missing',
+          expected: VERSION,
+          fix: 'yotta-memory runtime use ' + manifest.current + ' --force',
+          blocking: true,
+        });
+      } else {
+        try {
+          const real = fs.realpathSync(currentDir);
+          if (path.resolve(real) !== path.resolve(versionDir)) {
+            drifts.push({
+              kind: 'current-runtime',
+              source: currentDir,
+              actual: 'pointer-mismatch',
+              expected: manifest.current,
+              fix: 'yotta-memory runtime use ' + manifest.current + ' --restart',
+              blocking: true,
+            });
+          }
+        } catch (e) {
+          drifts.push({
+            kind: 'current-runtime',
+            source: currentDir,
+            actual: 'pointer-unreadable',
+            expected: manifest.current,
+            fix: 'yotta-memory runtime use ' + manifest.current + ' --restart',
+            blocking: true,
+          });
+        }
+      }
+    }
+  }
+
+  const legacyEnv = legacyIdentityEnvNames();
+  if (legacyEnv.length) {
+    drifts.push({
+      kind: 'identity-mode',
+      source: 'process-env',
+      actual: 'legacy-env',
+      expected: 'headers|stdio-args',
+      fix: '移除 ' + legacyEnv.join(', ') + '，HTTP 改用请求头，stdio 改用 --agent-id + --agent-key-file',
+      blocking: true,
+    });
+  }
+
+  for (const configPath of mcpConfigPaths) {
+    const abs = path.resolve(String(configPath));
+    let text = '';
+    try {
+      text = fs.readFileSync(abs, 'utf8');
+    } catch (e) {
+      warnings.push('MCP 配置无法读取: ' + abs);
+      checks.mcpConfigs.push({ path: abs, readable: false, version: 'unknown', identityMode: 'unknown' });
+      continue;
+    }
+    const launchers = runtimeExtractLauncherPaths(text);
+    const identityMode = runtimeConfigIdentityMode(text);
+    const version = launchers.length ? (runtimeVersionFromPath(launchers[0]) || 'unknown') : 'unknown';
+    checks.mcpConfigs.push({ path: abs, readable: true, launcher: launchers[0] || '', version: version, identityMode: identityMode });
+    checks.identityModes.push({ source: abs, mode: identityMode });
+    if (identityMode === 'legacy-env') {
+      drifts.push({
+        kind: 'identity-mode',
+        source: abs,
+        actual: 'legacy-env',
+        expected: 'headers|stdio-args',
+        fix: '从 MCP 配置移除身份 env，HTTP 改用请求头，stdio 改用 --agent-id + --agent-key-file',
+        blocking: true,
+      });
+    }
+    if (version !== 'unknown' && version !== VERSION) {
+      drifts.push({
+        kind: 'mcp-config',
+        source: abs,
+        actual: version,
+        expected: VERSION,
+        fix: '把 MCP 配置中的运行时路径改为 ' + runtimeCurrentBin() + ' 后重启该 MCP',
+        blocking: true,
+      });
+    }
+  }
+
+  for (const processInfo of processes || []) {
+    const row = typeof processInfo === 'string' ? { pid: '', commandLine: processInfo } : (processInfo || {});
+    const commandLine = String(row.commandLine || '');
+    if (!commandLine || commandLine.indexOf('yotta-memory') === -1 || commandLine.indexOf('serve') === -1) continue;
+    const launchers = runtimeExtractLauncherPaths(commandLine);
+    const launcher = launchers[0] || '';
+    const version = launcher ? (runtimeVersionFromPath(launcher) || 'unknown') : 'unknown';
+    checks.runningServers.push({ pid: row.pid || '', launcher: launcher, version: version });
+    if (version !== 'unknown' && version !== VERSION) {
+      drifts.push({
+        kind: 'running-server',
+        source: 'pid=' + String(row.pid || 'unknown'),
+        actual: version,
+        expected: VERSION,
+        fix: 'yotta-memory runtime use ' + VERSION + ' --restart 或重启对应 MCP 客户端',
+        blocking: false,
+      });
+    }
+  }
+
+  for (const skillDir of skillDirs) {
+    const abs = path.resolve(String(skillDir));
+    if (!fs.existsSync(path.join(abs, 'SKILL.md'))) continue;
+    const version = runtimeVersionFromDir(abs) || 'unknown';
+    checks.skillCopies.push({ path: abs, version: version });
+    if (version !== 'unknown' && version !== VERSION) {
+      drifts.push({
+        kind: 'skill-copy',
+        source: abs,
+        actual: version,
+        expected: VERSION,
+        fix: '用官方安装器更新该 yotta-memory 技能副本',
+        blocking: false,
+      });
+    }
+  }
+
+  const lines = [
+    '## 运行时一致性',
+    '- CLI: ' + VERSION + ' (' + runtimeExecutionPath() + ')',
+    '- current: ' + (checks.current.version || '(missing)') + ' (' + currentDir + ')',
+    '- runtime.json: ' + runtimeManifestPath(),
+  ];
+  if (checks.mcpConfigs.length) {
+    for (const item of checks.mcpConfigs) lines.push('- MCP 配置: ' + item.path + ' -> ' + item.version + ' / ' + item.identityMode);
+  } else lines.push('- MCP 配置: (未提供或未发现)');
+  if (checks.runningServers.length) {
+    for (const item of checks.runningServers) lines.push('- 运行中 server: pid=' + item.pid + ' -> ' + item.version);
+  } else lines.push('- 运行中 server: (未发现)');
+  if (checks.skillCopies.length) {
+    for (const item of checks.skillCopies) lines.push('- 技能副本: ' + item.path + ' -> ' + item.version);
+  } else lines.push('- 技能副本: (未提供或未发现)');
+  if (!drifts.length) lines.push('- 漂移: 无');
+  for (const drift of drifts) {
+    lines.push('- [漂移] ' + drift.kind + ': actual=' + drift.actual + ' expected=' + drift.expected + ' fix=' + drift.fix + ' blocking=' + (drift.blocking ? 'yes' : 'no'));
+  }
+  return {
+    ok: !drifts.some(function (drift) { return drift.blocking; }),
+    checks: checks,
+    drifts: drifts,
+    warnings: warnings,
+    text: lines.join('\n'),
+  };
+}
 // 开工可靠性检查：只读检查根目录、密钥库、索引、身份登记与最近备份。
 function doctorCore(opts) {
   opts = opts || {};
@@ -2651,6 +2998,18 @@ function doctorCore(opts) {
     if (cfg.backup_scheduler_error) warnings.push('每日备份调度异常: ' + cfg.backup_scheduler_error);
   }
 
+  let runtimeReport = null;
+  if (opts.runtime) {
+    runtimeReport = runtimeDoctorCore(opts);
+    checks.runtime = runtimeReport.checks;
+    for (const drift of runtimeReport.drifts) {
+      const message = '运行时漂移 [' + drift.kind + ']: actual=' + drift.actual + ' expected=' + drift.expected + '；修复: ' + drift.fix + '；阻断: ' + (drift.blocking ? '是' : '否');
+      if (drift.blocking) critical.push(message);
+      else warnings.push(message);
+    }
+    for (const warning of runtimeReport.warnings || []) warnings.push(warning);
+  }
+
   const level = critical.length ? 'critical' : (warnings.length ? 'warning' : 'ok');
   const lines = [
     '# yotta-memory doctor（开工可靠性检查）',
@@ -2663,6 +3022,10 @@ function doctorCore(opts) {
   for (const message of critical) lines.push('- [严重] ' + message);
   for (const message of warnings) lines.push('- [警告] ' + message);
   if (!critical.length && !warnings.length) lines.push('- 检查项: 全部通过');
+  if (runtimeReport) {
+    lines.push('');
+    lines.push(runtimeReport.text);
+  }
   if (level === 'critical') {
     lines.push('');
     lines.push('- 破坏性写入已锁定：先运行 yotta-memory doctor 修复严重问题。');
@@ -5344,11 +5707,26 @@ function reqVersion(params) {
   const meta = (params && params._meta) || {};
   return meta['io.modelcontextprotocol/protocolVersion'] || null;
 }
-function modernOk(payload, ttl) {
+function mcpIdentityMode(ctx) {
+  const mode = String((ctx && ctx.identityMode) || '').trim().toLowerCase();
+  if (mode === 'headers' || mode === 'stdio-args') return mode;
+  if (ctx && ctx.agent) return 'stdio-args';
+  return 'unknown';
+}
+function mcpServerInfo(ctx) {
+  return {
+    name: 'yotta-memory',
+    version: VERSION,
+    runtimePath: runtimeExecutionPath(),
+    identityMode: mcpIdentityMode(ctx),
+    toolProfile: normalizeMcpToolProfile(ctx && ctx.toolProfile),
+  };
+}
+function modernOk(payload, ttl, ctx) {
   const out = { resultType: 'complete' };
   Object.assign(out, payload);
   if (ttl) { out.ttlMs = ttl[0]; out.cacheScope = ttl[1]; }
-  out._meta = { 'io.modelcontextprotocol/serverInfo': { name: 'yotta-memory', version: VERSION } };
+  out._meta = { 'io.modelcontextprotocol/serverInfo': mcpServerInfo(ctx) };
   return out;
 }
 function unsupportedVersion(id, pv) {
@@ -5370,12 +5748,12 @@ function handleMessage(msg, ctx) {
         supportedVersions: [MCP_PROTOCOL_MODERN],
         capabilities: { tools: {} },
         instructions: '元忆 MCP（基于 MCP 最新协议 2026-07-28，向后兼容 2025-11-25 及更早握手）：当前工具分组 ' + toolProfile + '；文件式智能体记忆 remember/recall/search/context/forget/archive/maintain 等读写检索与维护；私密按 owner 物理隔离，数据不出本机。'
-      }, [3600000, 'public']) };
+      }, [3600000, 'public'], ctx) };
     }
-    if (method === 'tools/list') return { jsonrpc: '2.0', id: id, result: modernOk({ tools: mcpTools(toolProfile) }, [300000, 'public']) };
+    if (method === 'tools/list') return { jsonrpc: '2.0', id: id, result: modernOk({ tools: mcpTools(toolProfile) }, [300000, 'public'], ctx) };
     if (method === 'tools/call') {
       const out = callTool(params.name || '', params.arguments || {}, ctx);
-      return { jsonrpc: '2.0', id: id, result: modernOk({ content: [{ type: 'text', text: out.text }], isError: !!out.error }) };
+      return { jsonrpc: '2.0', id: id, result: modernOk({ content: [{ type: 'text', text: out.text }], isError: !!out.error }, null, ctx) };
     }
     if (method === 'initialize') {
       return { jsonrpc: '2.0', id: id, error: { code: -32601, message: "initialize removed in MCP 2026-07-28; use server/discover. supported: ['2026-07-28']" } };
@@ -5384,7 +5762,7 @@ function handleMessage(msg, ctx) {
   }
   // ---- legacy（<=2025-11-25，initialize 握手；响应保持旧形状）----
   if (method === 'initialize') {
-    return { jsonrpc: '2.0', id: id, result: { protocolVersion: MCP_PROTOCOL_LEGACY, capabilities: { tools: {} }, serverInfo: { name: 'yotta-memory', version: VERSION } } };
+    return { jsonrpc: '2.0', id: id, result: { protocolVersion: MCP_PROTOCOL_LEGACY, capabilities: { tools: {} }, serverInfo: mcpServerInfo(ctx) } };
   }
   if (method === 'ping') return { jsonrpc: '2.0', id: id, result: {} };
   if (method === 'tools/list') return { jsonrpc: '2.0', id: id, result: { tools: mcpTools(ctx && ctx.toolProfile) } };
@@ -5414,7 +5792,7 @@ function cmdServe(opts) {
     const agentId = String(req.headers['x-agent-id'] || '').trim();
     const agentKey = String(req.headers['x-agent-key'] || '').trim();
     const toolProfile = normalizeMcpToolProfile(opts.toolProfile);
-    if (noAuth) return { agent: agentId, agentKey: agentKey, toolProfile: toolProfile };
+    if (noAuth) return { agent: agentId, agentKey: agentKey, toolProfile: toolProfile, identityMode: 'headers' };
     if (!agentId || !agentKey) return null;
     const auth = req.headers['authorization'] || '';
     const m = /^Bearer\s+(.+)$/i.exec(auth);
@@ -5422,7 +5800,7 @@ function cmdServe(opts) {
     const token = m[1].trim();
     const agent = agentId;
     const tokenMap = (loadTokens(root).tokens) || {};
-    if (tokenMap[agent] && tokenMap[agent].token === token) return { agent: agent, agentKey: agentKey, toolProfile: toolProfile };
+    if (tokenMap[agent] && tokenMap[agent].token === token) return { agent: agent, agentKey: agentKey, toolProfile: toolProfile, identityMode: 'headers' };
     return null;
   }
   function originAllowed(req) {
@@ -5525,6 +5903,7 @@ function cmdServeStdio(opts) {
     agent: ident.id,
     agentKey: ident.agentKey,
     toolProfile: normalizeMcpToolProfile(opts && opts.toolProfile),
+    identityMode: 'stdio-args',
   };
   let buf = '';
   process.stdin.setEncoding('utf8');
@@ -6521,7 +6900,7 @@ function usage() {
       ['forget', '删除一条记忆'],
       ['archive', '归档（--days/--threshold 盖棺分+年龄）'],
       ['backup', '备份记忆库（volumes / setup / status / ensure-daily / schedule / create / list / doctor / restore <id> --to <目录> / drill）'],
-      ['doctor', '开工可靠性检查（根目录/密钥库/索引/身份/最近备份；严重异常时锁定破坏性写入）'],
+      ['doctor', '开工可靠性检查（根目录/密钥库/索引/身份/最近备份；--runtime 加查 CLI/current/MCP/进程/技能副本漂移）'],
       ['maintain', '记忆自组织（归档/遗忘候选/去重/合并；默认 dry-run；--dedup 查重+置信度，--dedup --apply 自动合并高置信组）'],
       ['consolidate', '周期摘要压缩（默认 dry-run；--apply 执行；--undo <batch> 回滚；--batches 查批次；候选=超龄+闲置+低效用，immutable/BOUND 豁免）'],
       ['distill', '心理日志蒸馏（统计摘要/主题画像/知识地图；--model 可选外部模型）'],
@@ -6572,7 +6951,7 @@ async function main() {
   if (!args.length) { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir']);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--version' || a === '-v') { console.log(VERSION); return; }
@@ -6605,6 +6984,7 @@ async function main() {
     else if (a === '--batches') opts.batches = true;
     else if (a === '--explain') opts.explain = true;
     else if (a === '--semantic') opts.semantic = true;
+    else if (a === '--runtime') opts.runtime = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;
@@ -6646,6 +7026,8 @@ async function main() {
       else if (a === '--id') opts.id = v;
       else if (a === '--time') opts.time = v;
       else if (a === '--tools') opts.toolProfile = v;
+      else if (a === '--mcp-config') opts.mcpConfigPaths = (opts.mcpConfigPaths || []).concat(v);
+      else if (a === '--skill-dir') opts.skillDirs = (opts.skillDirs || []).concat(v);
     } else if (a.startsWith('--')) {
       if (a === '--query') {
         console.error('未知选项: --query。recall/search 的关键词是位置参数：yotta-memory recall [关键词]');
@@ -6803,6 +7185,7 @@ module.exports = {
   runtimeVersionDir: runtimeVersionDir,
   runtimeCurrentDir: runtimeCurrentDir,
   runtimeCurrentBin: runtimeCurrentBin,
+  runtimeExecutionPath: runtimeExecutionPath,
   runtimeManagedScript: runtimeManagedScript,
   runtimeTreeHash: runtimeTreeHash,
   runtimeListVersions: runtimeListVersions,
@@ -6815,6 +7198,7 @@ module.exports = {
   runtimeRollbackCore: runtimeRollbackCore,
   runtimeStatusCore: runtimeStatusCore,
   runtimeListCore: runtimeListCore,
+  runtimeDoctorCore: runtimeDoctorCore,
   runtimeEnsureForManagedTask: runtimeEnsureForManagedTask,
   runtimeRestartManagedServer: runtimeRestartManagedServer,
   lanTaskRunCmd: lanTaskRunCmd,

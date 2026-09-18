@@ -9,7 +9,9 @@
 - CLI 仍是 `--agent <id>` + `--agent-key` / `--agent-key-file`；`--agent-id` 与 `--agent` 同时出现且不一致时拒绝启动。
 - **运行时稳定入口（M2）**：新增 `runtime list` / `runtime install <tarball|版本> [--from-current] [--force]` / `runtime use <版本> [--restart]` / `runtime rollback [--restart]` / `runtime status`；`runtime.json` 记录 current / previous / 安装时间 / tree hash，`<runtimeRoot>/current` 作为 stable launcher。
 - `lan enable` 与备份调度先准备 runtime current，只登记 `<runtimeRoot>/current/bin/yotta-memory.js`；`runtime use --restart` 尝试重启受管 server，失败时把 current 切回旧版本。
-- 本条目为 0.16.0 的 M1 / M2 候选；`doctor --runtime` / serverInfo 版本握手属于后续 M3，完成后才进入发布闸门。
+- **运行时诊断与握手（M3）**：新增 `doctor --runtime [--json] [--mcp-config <文件>] [--skill-dir <目录>]`，检查 CLI / current / runtime.json / MCP 配置 / 运行中 server / 技能副本 / 身份模式漂移，并为每项漂移输出实际版本、期望版本、修复命令和是否阻断。
+- MCP `initialize` 与 `server/discover` 的 `serverInfo` 新增 `runtimePath` / `identityMode` / `toolProfile`，宿主可直接读取实际执行的运行时路径、身份模式和工具分组。
+- 本条目为 0.16.0 的 M1-M3 候选；完成后才进入发布闸门。
 
 ## v0.15.0 (2026-09-17)
 

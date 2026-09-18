@@ -23,7 +23,7 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
-> 🆕 **v0.16.0（身份模型 + 稳定运行时）**：身份不再从环境变量读取。HTTP / 远程 MCP 用请求头 `Authorization` + `X-Agent-Id` + `X-Agent-Key`；stdio MCP 用显式参数 `--agent-id` + `--agent-key-file`；CLI 用 `--agent` + `--agent-key` / `--agent-key-file`。新增 `runtime install --from-current` / `use` / `rollback` / `status`，创建 `<runtimeRoot>/current` 稳定入口，受管 MCP、自启与备份任务不再写死版本目录。
+> 🆕 **v0.16.0（身份模型 + 稳定运行时）**：身份不再从环境变量读取。HTTP / 远程 MCP 用请求头 `Authorization` + `X-Agent-Id` + `X-Agent-Key`；stdio MCP 用显式参数 `--agent-id` + `--agent-key-file`；CLI 用 `--agent` + `--agent-key` / `--agent-key-file`。新增 `runtime install --from-current` / `use` / `rollback` / `status`，创建 `<runtimeRoot>/current` 稳定入口，受管 MCP、自启与备份任务不再写死版本目录。`doctor --runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；MCP `serverInfo` 返回 `runtimePath` / `identityMode` / `toolProfile`。
 > 🆕 **v0.15.0（MCP 工具分组）**：`serve --tools core|full` 控制 MCP 工具暴露面。`core` 常驻 `context / recall / search / remember`；`full` 保留现有 16 个诊断与维护工具。未指定参数时默认 `full`，保持现有配置兼容。
 
 > 🆕 **v0.14.0（越用越懂 + CLI 诊断）**：`context` 新增「长期理解摘要」段（优先加载 `consolidate` 产物）+「近期走廊」段（按 updated / created 倒序）+「本会话闭环契约」（开工加载、进行中立即 `remember --verify`、收工前复盘）；原有近期记忆改为「近期高价值记忆（补位）」，与摘要 / focus / 走廊按文件去重。身份、长期摘要、铁律、画像、边界、承诺与闭环契约不受 `--budget` 截断；不改变存储、加密、owner 隔离与权限判定。本版同时合并 CLI 诊断修复：显式 `--agent` 优先于非受信 ambient `YOTTA_AGENT_ID`；只有 `YOTTA_MEMORY_TRUST_ENV_AGENT=1` 时环境身份才参与判定。`key status` / `key claim` 共用 AI_HOME 发现规则（显式 `--to` / `--agent-key-file` > `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE` > Codex / OpenCode / 通用宿主默认），`key status` 始终输出 `checked` 与 `discovery`。usage 直接列出 `remember <type> <subject> <statement>` 与 `recall [关键词]`。
@@ -173,6 +173,7 @@
 | 忘记主口令？ | 用恢复钥匙 reset-password（无私密区锁定的预期行为） |
 | 局域网怎么连？ | 引擎 lan enable + token new；客户端配 url+token |
 | MCP 没加载？ | 检查 mcpServers + 重启会话；本机直连用 CLI |
+| 版本不一致？ | 运行 `yotta-memory doctor --runtime`，按漂移项给出的修复命令升级并重启 |
 | 记忆库在哪？ | config get；项目级 .yottamemory |
 | 跨会话恢复？ | 开工跑 context + recall |
 | 备份迁移？ | export / import |
@@ -321,7 +322,7 @@ bash install.sh --agent <智能体名称>
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 生成开工上下文包（身份 + 铁律 + 画像 + 长期摘要 + 任务相关记忆 + 近期走廊 + 近期高价值 + 边界 + 承诺 + 会话闭环契约；--budget 控制动态记忆字符预算；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆（按类型目录路径或文件名）|
-| `yotta-memory doctor [--json]` | 开工可靠性检查（根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）|
+| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入；`--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；私密入 `.archive/private/<owner>/<type>/`）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
@@ -390,6 +391,7 @@ yotta-memory recall --type FACT --limit 10
    ```bash
    yotta-memory runtime install --from-current
    yotta-memory runtime status
+   yotta-memory doctor --runtime
    ```
    > `lan enable` 与备份调度会自动做同样的 runtime 准备，只登记 `<runtimeRoot>/current/bin/yotta-memory.js`。
 3. 为需要访问的每个智能体生成独立 token：

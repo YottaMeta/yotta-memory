@@ -21,7 +21,7 @@
 引擎主机 `lan enable` 注册开机自启（Windows 计划任务 / Linux systemd）→ `token new --agent <id>` 生成 token；客户端配 `url: http://<主机IP>:8787/mcp` + `Authorization: Bearer <token>` + `X-Agent-Id: <id>` + `X-Agent-Key: <agent_key>`。同机 / 共享文件系统由 AI 用 `key status` / `key claim` 领取宿主 key；跨机不共享文件系统由用户通过密码管理器或安全文件传输放置，不走聊天明文。`lan status` 查状态。
 
 ## 6.1 全局 CLI、MCP 或常驻服务版本不一致？
-用 `yotta-memory runtime install --from-current` 建立 `<runtimeRoot>/current` 稳定入口；`runtime status` 会显示 current 版本、实际路径、versions 与漂移。升级用 `runtime install <tarball|版本>` + `runtime use <版本> --restart`，回滚用 `runtime rollback --restart`。`lan enable` 与备份调度只登记 `current/bin/yotta-memory.js`，不再写死版本目录。
+先跑 `yotta-memory doctor --runtime`：它会列出 CLI、current、`runtime.json`、MCP 配置、运行中 server、技能副本与身份模式的漂移，并给出实际版本、期望版本、修复命令和是否阻断。用 `yotta-memory runtime install --from-current` 建立 `<runtimeRoot>/current` 稳定入口；升级用 `runtime install <tarball|版本>` + `runtime use <版本> --restart`，回滚用 `runtime rollback --restart`。`lan enable` 与备份调度只登记 `current/bin/yotta-memory.js`，不再写死版本目录。
 
 ## 7. MCP 工具没加载？
 检查客户端 `mcpServers` 已配置 yotta-memory（url + token + agent_key）；agent_key 应来自 `<AI_HOME>/.yotta-memory-agent-key` 或 MCP secret 注入，不把明文 key 写进对话。改配置后重启/重载会话。本机直连可不配 MCP，直接用 CLI。

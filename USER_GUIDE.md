@@ -239,13 +239,15 @@ statement: 本周完成发布
 - `maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在写入前自动创建新的整库事务快照，并在 `.archive/audit-<日期>.jsonl` 记录 transaction / operation / snapshot。
 - 未配置独立备份目录、doctor critical 或快照失败时，命令直接拒绝执行，原记忆保持不变；`forget` 仍只移入 `.trash/`，不重复创建整库快照。
 
-## 3.10 运行时稳定入口（v0.16.0 M2）
+## 3.10 运行时稳定入口与漂移诊断（v0.16.0 M2/M3）
 
 - `yotta-memory runtime install --from-current`：把当前 CLI 所属的完整包安装到 `<runtimeRoot>/versions/<版本>/`，并创建 `<runtimeRoot>/current` 稳定指针。
 - `yotta-memory runtime install <tarball|版本> [--force]`：安装本地 tarball，或从 npm 拉取指定版本；内容哈希写入 `runtime.json`。
 - `yotta-memory runtime use <版本> [--restart]`：切换到已安装版本；`--restart` 会尝试重启受管的 `lan` 服务，失败时自动把 current 切回旧版本。
 - `yotta-memory runtime rollback [--restart]`：回到上一个版本；`runtime list` / `runtime status` 查看版本、current 指针与漂移。
 - stdio MCP、`lan enable` 与备份调度只引用 `<runtimeRoot>/current/bin/yotta-memory.js`，不写死 `versions/<版本>/` 路径；升级只需 `runtime install` + `runtime use --restart`。
+- `yotta-memory doctor --runtime [--json]`：检查 CLI / current / `runtime.json` / MCP 配置 / 运行中 server / 技能副本 / 身份模式漂移；每项漂移给出实际版本、期望版本、修复命令和是否阻断。可用 `--mcp-config <文件>`、`--skill-dir <目录>` 显式补充检查目标。
+- MCP `initialize` / `server/discover` 的 `serverInfo` 返回 `runtimePath` / `identityMode` / `toolProfile`，宿主可显示实际执行的运行时路径与工具分组，不再只看配置里的版本。
 
 ## 4. 便携记忆盘 · 记忆引擎主机篇
 
@@ -399,7 +401,7 @@ yotta-memory key claim <本智能体ID>
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（零推断，写 `profile.md`）|
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 开工上下文包（身份+铁律+画像+长期摘要+任务相关记忆+近期走廊+近期高价值+边界+承诺+会话闭环契约；--budget 控制动态记忆字符预算；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆 |
-| `yotta-memory doctor [--json]` | 开工可靠性检查（v0.12.2：根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）|
+| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（v0.12.2：根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入；v0.16.0：`--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；私密入 `.archive/private/<owner>/<type>/`）|
 | `yotta-memory reindex` | 重建索引 |
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |

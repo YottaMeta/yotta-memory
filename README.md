@@ -23,7 +23,7 @@
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
 
-> 🆕 **v0.16.0 (identity model + stable runtime)**: identity is no longer read from environment variables. HTTP / remote MCP uses request headers `Authorization` + `X-Agent-Id` + `X-Agent-Key`; stdio MCP uses explicit `--agent-id` + `--agent-key-file`; CLI uses `--agent` + `--agent-key` / `--agent-key-file`. The new `runtime install --from-current` / `use` / `rollback` / `status` commands create a stable `<runtimeRoot>/current` launcher so managed MCP, autostart and backup tasks do not pin a version directory.
+> 🆕 **v0.16.0 (identity model + stable runtime)**: identity is no longer read from environment variables. HTTP / remote MCP uses request headers `Authorization` + `X-Agent-Id` + `X-Agent-Key`; stdio MCP uses explicit `--agent-id` + `--agent-key-file`; CLI uses `--agent` + `--agent-key` / `--agent-key-file`. The new `runtime install --from-current` / `use` / `rollback` / `status` commands create a stable `<runtimeRoot>/current` launcher so managed MCP, autostart and backup tasks do not pin a version directory. `doctor --runtime` checks CLI / current / MCP config / running server / skill-copy drift, and MCP `serverInfo` returns `runtimePath` / `identityMode` / `toolProfile`.
 > 🆕 **v0.15.0 (MCP tool profiles)**: `serve --tools core|full` controls the exposed MCP surface. `core` keeps `context / recall / search / remember` resident; `full` keeps the existing 16 tools for diagnostics and maintenance. Omitting the flag keeps the previous `full` behavior for compatibility.
 
 > 🆕 **v0.14.0 (grows smarter + CLI diagnostics)**: `context` now loads long-term `consolidate` summaries first, samples a time-ordered recent corridor, keeps a deduplicated high-value backfill, and ends with a session loop contract (load at start, `remember --verify` during work, review before wrap-up). Identity, summaries, rules, profile, boundaries, commitments and the contract are not truncated by `--budget`; storage, encryption, owner isolation and permission checks are unchanged. This release also includes the CLI diagnostics work: explicit `--agent` wins over an untrusted ambient `YOTTA_AGENT_ID`; only `YOTTA_MEMORY_TRUST_ENV_AGENT=1` makes an environment identity authoritative. `key status` / `key claim` share one AI_HOME discovery rule (explicit `--to` / `--agent-key-file`, then `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE`, then the Codex / OpenCode / generic host default) and `key status` always prints `checked` + `discovery`. The usage text now documents `remember <type> <subject> <statement>` and `recall [关键词]` directly.
@@ -134,6 +134,7 @@ Each agent has a globally unique agent ID: it is the ownership key for private m
 | Lost master password? | reset-password with recovery key |
 | LAN connect? | lan enable + token new; client url+token |
 | MCP not loaded? | Check mcpServers + restart; use CLI directly |
+| Version mismatch? | Run `yotta-memory doctor --runtime` and apply the repair command for each drift |
 | Where is the store? | config get; project-level .yottamemory |
 | Cross-session resume? | Run context + recall at session start |
 | Backup / migrate? | export / import |
@@ -280,7 +281,7 @@ Optional post-upgrade self-check: `yotta-memory config get` (confirm `memory_hom
 | `yotta-memory profile [--owner <id>]` | Generate a user profile (aggregates `private/<owner>` verbatim, zero inference, writes `profile.md`; cross-owner denied by default) |
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <text>] [--explain] [--embedding <cmd>]` | Generate the start-of-work package (identity + rules + profile + long-term summaries + task-focused memory + recent corridor + high-value backfill + boundaries + commitments + session loop contract; --budget caps dynamic memory, --focus adds task relevance, --explain shows included/dropped) |
 | `yotta-memory forget <file>` | Delete a memory (by type-dir path or file name) |
-| `yotta-memory doctor [--json]` | Start-of-work reliability check (store / key material / index / identity / latest backup; critical issues lock destructive writes) |
+| `yotta-memory doctor [--json] [--runtime] [--mcp-config <file>] [--skill-dir <dir>]` | Start-of-work reliability check (store / key material / index / identity / latest backup; critical issues lock destructive writes); `--runtime` checks CLI / current / MCP config / running server / skill-copy drift |
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | Archive old memory (decay-blended utility + age; immutable / BOUND exempt; private to `.archive/private/<owner>/<type>/`) |
 | `yotta-memory reindex` | Rebuild the index (after manually editing .md) |
 | `yotta-memory export [--out f.json]` / `import <f.json>` | Export / import |
@@ -349,6 +350,7 @@ The store can live on any host or disk (= the memory engine) and be reached by a
    ```bash
    yotta-memory runtime install --from-current
    yotta-memory runtime status
+   yotta-memory doctor --runtime
    ```
    > `lan enable` and backup scheduling call the same runtime preparation automatically and only register `<runtimeRoot>/current/bin/yotta-memory.js`.
 3. Generate an independent token for each agent that needs access:
