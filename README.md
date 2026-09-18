@@ -23,7 +23,7 @@
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
 
-> 🆕 **v0.16.0 (identity model)**: identity is no longer read from environment variables. HTTP / remote MCP uses request headers `Authorization` + `X-Agent-Id` + `X-Agent-Key`; stdio MCP uses explicit `--agent-id` + `--agent-key-file`; CLI uses `--agent` + `--agent-key` / `--agent-key-file`. Legacy identity env is rejected at MCP startup with migration guidance.
+> 🆕 **v0.16.0 (identity model + stable runtime)**: identity is no longer read from environment variables. HTTP / remote MCP uses request headers `Authorization` + `X-Agent-Id` + `X-Agent-Key`; stdio MCP uses explicit `--agent-id` + `--agent-key-file`; CLI uses `--agent` + `--agent-key` / `--agent-key-file`. The new `runtime install --from-current` / `use` / `rollback` / `status` commands create a stable `<runtimeRoot>/current` launcher so managed MCP, autostart and backup tasks do not pin a version directory.
 > 🆕 **v0.15.0 (MCP tool profiles)**: `serve --tools core|full` controls the exposed MCP surface. `core` keeps `context / recall / search / remember` resident; `full` keeps the existing 16 tools for diagnostics and maintenance. Omitting the flag keeps the previous `full` behavior for compatibility.
 
 > 🆕 **v0.14.0 (grows smarter + CLI diagnostics)**: `context` now loads long-term `consolidate` summaries first, samples a time-ordered recent corridor, keeps a deduplicated high-value backfill, and ends with a session loop contract (load at start, `remember --verify` during work, review before wrap-up). Identity, summaries, rules, profile, boundaries, commitments and the contract are not truncated by `--budget`; storage, encryption, owner isolation and permission checks are unchanged. This release also includes the CLI diagnostics work: explicit `--agent` wins over an untrusted ambient `YOTTA_AGENT_ID`; only `YOTTA_MEMORY_TRUST_ENV_AGENT=1` makes an environment identity authoritative. `key status` / `key claim` share one AI_HOME discovery rule (explicit `--to` / `--agent-key-file`, then `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE`, then the Codex / OpenCode / generic host default) and `key status` always prints `checked` + `discovery`. The usage text now documents `remember <type> <subject> <statement>` and `recall [关键词]` directly.
@@ -332,7 +332,7 @@ The store can live on any host or disk (= the memory engine) and be reached by a
     "yotta-memory": {
       "command": "node",
       "args": [
-        "<runtime>/bin/yotta-memory.js",
+        "<runtimeRoot>/current/bin/yotta-memory.js",
         "serve", "--stdio", "--tools", "core",
         "--agent-id", "<this-agent-id>",
         "--agent-key-file", "<AI_HOME>/.yotta-memory-agent-key"
@@ -345,14 +345,20 @@ The store can live on any host or disk (= the memory engine) and be reached by a
 ### Engine side (the host where memory lives)
 
 1. Initialize or attach to the store (see CLI usage).
-2. Generate an independent token for each agent that needs access:
+2. Install or refresh the stable runtime entry:
+   ```bash
+   yotta-memory runtime install --from-current
+   yotta-memory runtime status
+   ```
+   > `lan enable` and backup scheduling call the same runtime preparation automatically and only register `<runtimeRoot>/current/bin/yotta-memory.js`.
+3. Generate an independent token for each agent that needs access:
    ```bash
    yotta-memory token new --agent <agent-id>     # printed once, e.g. ytm_... (--force if the ID is taken by another source)
    yotta-memory token list                        # list registered agents
    yotta-memory token revoke --agent <agent-id>   # revoke
    ```
    > New tokens take effect immediately; no service restart needed.
-3. Start the service (default listens on 0.0.0.0:8787, Bearer token + X-Agent-Id + X-Agent-Key auth) — temporary run or register autostart:
+4. Start the service (default listens on 0.0.0.0:8787, Bearer token + X-Agent-Id + X-Agent-Key auth) — temporary run or register autostart:
    ```bash
    yotta-memory serve                          # temporary foreground
    yotta-memory lan enable                     # register autostart (Windows: scheduled task / user-level Startup; Linux: systemd user unit / user crontab)

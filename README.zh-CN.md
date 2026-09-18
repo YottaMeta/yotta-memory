@@ -23,7 +23,7 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
-> 🆕 **v0.16.0（身份模型）**：身份不再从环境变量读取。HTTP / 远程 MCP 用请求头 `Authorization` + `X-Agent-Id` + `X-Agent-Key`；stdio MCP 用显式参数 `--agent-id` + `--agent-key-file`；CLI 用 `--agent` + `--agent-key` / `--agent-key-file`。旧身份 env 会在 MCP 启动时被明确拒绝并给出迁移指引。
+> 🆕 **v0.16.0（身份模型 + 稳定运行时）**：身份不再从环境变量读取。HTTP / 远程 MCP 用请求头 `Authorization` + `X-Agent-Id` + `X-Agent-Key`；stdio MCP 用显式参数 `--agent-id` + `--agent-key-file`；CLI 用 `--agent` + `--agent-key` / `--agent-key-file`。新增 `runtime install --from-current` / `use` / `rollback` / `status`，创建 `<runtimeRoot>/current` 稳定入口，受管 MCP、自启与备份任务不再写死版本目录。
 > 🆕 **v0.15.0（MCP 工具分组）**：`serve --tools core|full` 控制 MCP 工具暴露面。`core` 常驻 `context / recall / search / remember`；`full` 保留现有 16 个诊断与维护工具。未指定参数时默认 `full`，保持现有配置兼容。
 
 > 🆕 **v0.14.0（越用越懂 + CLI 诊断）**：`context` 新增「长期理解摘要」段（优先加载 `consolidate` 产物）+「近期走廊」段（按 updated / created 倒序）+「本会话闭环契约」（开工加载、进行中立即 `remember --verify`、收工前复盘）；原有近期记忆改为「近期高价值记忆（补位）」，与摘要 / focus / 走廊按文件去重。身份、长期摘要、铁律、画像、边界、承诺与闭环契约不受 `--budget` 截断；不改变存储、加密、owner 隔离与权限判定。本版同时合并 CLI 诊断修复：显式 `--agent` 优先于非受信 ambient `YOTTA_AGENT_ID`；只有 `YOTTA_MEMORY_TRUST_ENV_AGENT=1` 时环境身份才参与判定。`key status` / `key claim` 共用 AI_HOME 发现规则（显式 `--to` / `--agent-key-file` > `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE` > Codex / OpenCode / 通用宿主默认），`key status` 始终输出 `checked` 与 `discovery`。usage 直接列出 `remember <type> <subject> <statement>` 与 `recall [关键词]`。
@@ -373,7 +373,7 @@ yotta-memory recall --type FACT --limit 10
     "yotta-memory": {
       "command": "node",
       "args": [
-        "<runtime>/bin/yotta-memory.js",
+        "<runtimeRoot>/current/bin/yotta-memory.js",
         "serve", "--stdio", "--tools", "core",
         "--agent-id", "<本智能体ID>",
         "--agent-key-file", "<AI_HOME>/.yotta-memory-agent-key"
@@ -386,14 +386,20 @@ yotta-memory recall --type FACT --limit 10
 ### 引擎侧（记忆所在主机）
 
 1. 初始化或接入记忆库（见 CLI 用法）。
-2. 为需要访问的每个智能体生成独立 token：
+2. 安装或刷新稳定运行时入口：
+   ```bash
+   yotta-memory runtime install --from-current
+   yotta-memory runtime status
+   ```
+   > `lan enable` 与备份调度会自动做同样的 runtime 准备，只登记 `<runtimeRoot>/current/bin/yotta-memory.js`。
+3. 为需要访问的每个智能体生成独立 token：
    ```bash
    yotta-memory token new --agent <智能体ID>     # 打印一次，如 ytm_...（同 ID 已被其它来源占用需加 --force）
    yotta-memory token list                        # 查看已登记智能体
    yotta-memory token revoke --agent <智能体ID>   # 吊销
    ```
    > 新生成的 token 即时生效，无需重启服务。
-3. 启动服务（默认监听 0.0.0.0:8787，Bearer token + X-Agent-Id + X-Agent-Key 鉴权）——临时运行或注册开机自启二选一：
+4. 启动服务（默认监听 0.0.0.0:8787，Bearer token + X-Agent-Id + X-Agent-Key 鉴权）——临时运行或注册开机自启二选一：
    ```bash
    yotta-memory serve                          # 临时前台运行
    yotta-memory lan enable                     # 注册开机自启（Windows：计划任务/用户级 Startup；Linux：systemd 用户单元/用户 crontab）

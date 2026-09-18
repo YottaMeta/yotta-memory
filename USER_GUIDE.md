@@ -239,6 +239,14 @@ statement: 本周完成发布
 - `maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在写入前自动创建新的整库事务快照，并在 `.archive/audit-<日期>.jsonl` 记录 transaction / operation / snapshot。
 - 未配置独立备份目录、doctor critical 或快照失败时，命令直接拒绝执行，原记忆保持不变；`forget` 仍只移入 `.trash/`，不重复创建整库快照。
 
+## 3.10 运行时稳定入口（v0.16.0 M2）
+
+- `yotta-memory runtime install --from-current`：把当前 CLI 所属的完整包安装到 `<runtimeRoot>/versions/<版本>/`，并创建 `<runtimeRoot>/current` 稳定指针。
+- `yotta-memory runtime install <tarball|版本> [--force]`：安装本地 tarball，或从 npm 拉取指定版本；内容哈希写入 `runtime.json`。
+- `yotta-memory runtime use <版本> [--restart]`：切换到已安装版本；`--restart` 会尝试重启受管的 `lan` 服务，失败时自动把 current 切回旧版本。
+- `yotta-memory runtime rollback [--restart]`：回到上一个版本；`runtime list` / `runtime status` 查看版本、current 指针与漂移。
+- stdio MCP、`lan enable` 与备份调度只引用 `<runtimeRoot>/current/bin/yotta-memory.js`，不写死 `versions/<版本>/` 路径；升级只需 `runtime install` + `runtime use --restart`。
+
 ## 4. 便携记忆盘 · 记忆引擎主机篇
 
 场景：记忆放在一台主机上（Linux / Windows 均可），本机直接 CLI 读写；局域网内其它主机上的 AI 智能体经 MCP 远程接入。引擎主机只需装 CLI，不需要装任何 AI 智能体。
@@ -257,6 +265,8 @@ yotta-memory init --dir /srv/yotta-memory               # 新库：初始化（�
 如果目标目录**已经是记忆库**（里面有 `facts/` 等子目录或 `index.json`，例如从旧机复制或 git 克隆来的），直接 `config set memory_home <目录>` 接入即可，**不要重复 init**。
 
 **第 3 步：注册开机自启（可选，推荐）**
+
+`lan enable` 会先准备稳定运行时入口：没有 `<runtimeRoot>/current` 时自动执行 `runtime install --from-current`，然后把计划任务 / systemd / crontab 指向 `<runtimeRoot>/current/bin/yotta-memory.js`。如需手动准备，可先执行 `yotta-memory runtime install --from-current && yotta-memory runtime status`。
 
 ```bash
 # Windows：内置命令（优先计划任务；非管理员自动降级用户级 Startup 静默自启；
@@ -398,6 +408,7 @@ yotta-memory key claim <本智能体ID>
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 访问 token（同 ID 已被其它来源占用需 `--force` 覆盖）|
 | `yotta-memory serve [--port 8787] [--stdio] [--no-auth]` | 启动记忆引擎（--no-auth 关闭鉴权，仅限可信内网）|
+| `yotta-memory runtime list / install <tarball|版本> [--from-current] [--force] / use <版本> [--restart] / rollback [--restart] / status` | 运行时稳定入口（runtime.json + versions + current；安装 / 切换 / 回滚 / 查看漂移；`--restart` 尝试重启受管 server）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务/用户级 Startup 静默自启；Linux：systemd 用户单元/用户 crontab @reboot）|
 | `yotta-memory feedback <文件|主题> --useful|--useless [--reason <原因>] [--undo]` | 使用反馈（v0.8.0：useful/useless 调 weight/confidence/feedback_net；--undo 回滚）|
 | `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--dedup --apply] [--merge A,B]` | 记忆自组织（v0.8.0 + v0.10.0 自动合并）：归档 / 遗忘候选 / 置信度查重 / 自动合并；默认 dry-run，`--dedup` 与归档互斥 |

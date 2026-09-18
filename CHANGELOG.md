@@ -7,7 +7,9 @@
 - 删除身份环境变量解析；启动 HTTP / stdio MCP 时检测到旧身份 env 会以 `[YTM_IDENTITY_ENV_REMOVED]` 明确拒绝，并给出请求头 / 显式参数迁移指引，不静默降级。
 - 增加 per-call identity context，HTTP 与 stdio 的并发调用不再共享可变的进程级身份；新增三 agent 并发私密上下文隔离回归。
 - CLI 仍是 `--agent <id>` + `--agent-key` / `--agent-key-file`；`--agent-id` 与 `--agent` 同时出现且不一致时拒绝启动。
-- 本条目为 0.16.0 的 M1 身份模型候选；runtime current / `doctor --runtime` / serverInfo 版本握手属于后续 M2 / M3，完成后才进入发布闸门。
+- **运行时稳定入口（M2）**：新增 `runtime list` / `runtime install <tarball|版本> [--from-current] [--force]` / `runtime use <版本> [--restart]` / `runtime rollback [--restart]` / `runtime status`；`runtime.json` 记录 current / previous / 安装时间 / tree hash，`<runtimeRoot>/current` 作为 stable launcher。
+- `lan enable` 与备份调度先准备 runtime current，只登记 `<runtimeRoot>/current/bin/yotta-memory.js`；`runtime use --restart` 尝试重启受管 server，失败时把 current 切回旧版本。
+- 本条目为 0.16.0 的 M1 / M2 候选；`doctor --runtime` / serverInfo 版本握手属于后续 M3，完成后才进入发布闸门。
 
 ## v0.15.0 (2026-09-17)
 

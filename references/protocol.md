@@ -185,6 +185,13 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
   7. 本会话闭环契约：固定输出开工加载、进行中立即 `remember --verify`、收工前复盘检查 COMMIT / 会话小结。
 - `--budget`：控制 focus / 近期走廊 / 近期高价值等动态记忆的字符预算；身份、铁律、画像、长期摘要、边界、承诺与会话闭环契约必保。
 
+### 运行时稳定入口（v0.16.0 M2）
+
+- `runtimeRoot` 默认位于 `~/.yottamemory/runtime`；布局为 `runtime.json` + `versions/<version>/` + `current`（Windows junction / Unix symlink）。
+- `runtime install --from-current` 从当前完整 npm 包安装；`runtime install <tarball|版本>` 安装 tarball 或拉取指定版本；`runtime use <version>` 切换 current；`runtime rollback` 切回 previous。
+- `runtime.json` 记录 `current / previous / versions[].treeHash / installedAt`；`runtime status` 报告 current 指针与版本目录漂移。
+- stdio MCP、`lan enable`、备份调度只引用 `<runtimeRoot>/current/bin/yotta-memory.js`；`runtime use --restart` 尝试重启受管 server，失败时把 current 切回旧版本。
+
 ### MCP 工具分组（v0.15.0）
 
 - `yotta-memory serve --stdio --tools core`：只暴露 `context / recall / search / remember`，适合常驻 MCP。
