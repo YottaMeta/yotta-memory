@@ -23,6 +23,7 @@
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
 
+> 🆕 **v0.16.0 (identity model)**: identity is no longer read from environment variables. HTTP / remote MCP uses request headers `Authorization` + `X-Agent-Id` + `X-Agent-Key`; stdio MCP uses explicit `--agent-id` + `--agent-key-file`; CLI uses `--agent` + `--agent-key` / `--agent-key-file`. Legacy identity env is rejected at MCP startup with migration guidance.
 > 🆕 **v0.15.0 (MCP tool profiles)**: `serve --tools core|full` controls the exposed MCP surface. `core` keeps `context / recall / search / remember` resident; `full` keeps the existing 16 tools for diagnostics and maintenance. Omitting the flag keeps the previous `full` behavior for compatibility.
 
 > 🆕 **v0.14.0 (grows smarter + CLI diagnostics)**: `context` now loads long-term `consolidate` summaries first, samples a time-ordered recent corridor, keeps a deduplicated high-value backfill, and ends with a session loop contract (load at start, `remember --verify` during work, review before wrap-up). Identity, summaries, rules, profile, boundaries, commitments and the contract are not truncated by `--budget`; storage, encryption, owner isolation and permission checks are unchanged. This release also includes the CLI diagnostics work: explicit `--agent` wins over an untrusted ambient `YOTTA_AGENT_ID`; only `YOTTA_MEMORY_TRUST_ENV_AGENT=1` makes an environment identity authoritative. `key status` / `key claim` share one AI_HOME discovery rule (explicit `--to` / `--agent-key-file`, then `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE`, then the Codex / OpenCode / generic host default) and `key status` always prints `checked` + `discovery`. The usage text now documents `remember <type> <subject> <statement>` and `recall [关键词]` directly.
@@ -87,7 +88,7 @@ Each agent has a globally unique agent ID: it is the ownership key for private m
 - **Register (must be unique)**: `yotta-memory iam <id>` writes `agents.json` at the memory root, **enforcing uniqueness** — denied if the ID is already used by another host / source (including remote token registration); `--force` only when you confirm it is the same agent.
 - **Confirm identity**: `yotta-memory whoami` (remote MCP tool `agent_info`) reads the "declared identity of this session" — it never guesses or assumes.
 - **Self profile (forced to disk)**: `iam` auto-writes a PREF `subject=自我接入档案` (owner=self) with `; `-separated key:value: `agent_id / host / memory_home / mcp_mode / engine_url / token` (token not stored locally). Start work with `recall "自我接入档案"` to recover identity and connection info.
-- **No network token locally**: local CLI / stdio bypasses HTTP tokens, but private access still requires `agent_id + agent_key`; MCP declares the key through per-process `YOTTA_MEMORY_AGENT_KEY` and `YOTTA_MEMORY_TRUST_ENV_AGENT=1`.
+- **No network token locally**: local CLI / stdio bypasses HTTP tokens, but private access still requires `agent_id + agent_key`; stdio MCP passes the key file with `--agent-id` + `--agent-key-file`, never through identity env.
 - **Private memory requires an owner**: writing PREF / BOUND / COMMIT without declaring identity is rejected (public FACT is unaffected), mechanically preventing ID spoofing.
 
 ### Profile & start-of-work context (v0.6.0 + v0.9.0 + v0.14.0)
@@ -309,9 +310,9 @@ yotta-memory recall --type FACT --limit 10
 
 Environment variables:
 - `YOTTA_MEMORY_HOME`: overrides the user-level store directory (default `~/.yottamemory/`).
-- `YOTTA_AGENT_ID` / `AGENT_ID`: per-process MCP identity only; trusted only with `YOTTA_MEMORY_TRUST_ENV_AGENT=1`, never as a user-level global fallback.
-- `YOTTA_MEMORY_AGENT_KEY`: per-agent 32-byte key used to unwrap `keys/bindings/<id>.key.agent`; required for encrypted private reads/writes. After authorization, the AI runs `key status` / `key claim` to store it at `<AI_HOME>/.yotta-memory-agent-key`, and the MCP host injects it from that file.
 - `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE`: explicit AI host directory / key file overrides for `key status` and `key claim`; command-line `--to` / `--agent-key-file` take precedence.
+
+Identity environment variables (`YOTTA_AGENT_ID`, `AGENT_ID`, `YOTTA_MEMORY_AGENT_KEY`, `YOTTA_MEMORY_TRUST_ENV_AGENT`) are no longer supported. The CLI ignores them; HTTP / stdio MCP startup rejects them so a stale host configuration cannot silently keep using the old model.
 
 ## After the agent is wired up
 
@@ -323,7 +324,23 @@ The store can live on any host or disk (= the memory engine) and be reached by a
 
 - **Local direct**: CLI reads/writes directly, no token;
 - **Remote**: the engine host runs `yotta-memory serve` (or registers `lan enable` autostart); remote agents connect via MCP with `url + token + agent_key`. Same-host / shared-filesystem agents use `key claim`; cross-host setups without a shared filesystem require the user to transfer the host key securely.
-- **Local zero-process**: local MCP clients can use `serve --stdio` to launch the CLI on demand (no resident process).
+- **Local zero-process**: local MCP clients can use `serve --stdio --agent-id <id> --agent-key-file <path>` to launch the CLI on demand (no resident process).
+
+```json
+{
+  "mcpServers": {
+    "yotta-memory": {
+      "command": "node",
+      "args": [
+        "<runtime>/bin/yotta-memory.js",
+        "serve", "--stdio", "--tools", "core",
+        "--agent-id", "<this-agent-id>",
+        "--agent-key-file", "<AI_HOME>/.yotta-memory-agent-key"
+      ]
+    }
+  }
+}
+```
 
 ### Engine side (the host where memory lives)
 

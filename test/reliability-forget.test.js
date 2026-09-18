@@ -75,24 +75,18 @@ test('forget CLI propagates --unsafe for explicitly authorized private cleanup',
   }), 'utf8');
 
   const oldHome = process.env.YOTTA_MEMORY_HOME;
-  const oldAgent = process.env.YOTTA_AGENT_ID;
   process.env.YOTTA_MEMORY_HOME = root;
-  process.env.YOTTA_AGENT_ID = 'codex';
-  process.env.YOTTA_MEMORY_TRUST_ENV_AGENT = '1';
   try {
     const cli = path.join(__dirname, '..', 'bin', 'yotta-memory.js');
     const result = spawnSync(process.execPath, [cli, 'forget', rel, '--unsafe', '--agent', 'codex'], {
       encoding: 'utf8',
-      env: { ...process.env, YOTTA_MEMORY_HOME: root, YOTTA_AGENT_ID: 'codex', YOTTA_MEMORY_TRUST_ENV_AGENT: '1' },
+      env: { ...process.env, YOTTA_MEMORY_HOME: root },
     });
     assert.strictEqual(result.status, 0, result.stderr + result.stdout);
     assert.strictEqual(fs.existsSync(file), false);
   } finally {
     if (oldHome === undefined) delete process.env.YOTTA_MEMORY_HOME;
     else process.env.YOTTA_MEMORY_HOME = oldHome;
-    if (oldAgent === undefined) delete process.env.YOTTA_AGENT_ID;
-    else process.env.YOTTA_AGENT_ID = oldAgent;
-    delete process.env.YOTTA_MEMORY_TRUST_ENV_AGENT;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

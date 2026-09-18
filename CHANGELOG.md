@@ -1,3 +1,14 @@
+## v0.16.0 (2026-09-18, M1 身份模型候选)
+
+**身份模型：请求边界即身份边界**
+
+- HTTP / 远程 MCP 身份只从请求头读取：`Authorization: Bearer <token>` + `X-Agent-Id` + `X-Agent-Key`；鉴权模式下缺少任一身份头直接返回 401，不再进入工具调用。
+- stdio MCP 身份只从显式启动参数读取：`serve --stdio --agent-id <id> --agent-key-file <path>`；不再读取 `YOTTA_AGENT_ID` / `YOTTA_MEMORY_AGENT_KEY` / `YOTTA_MEMORY_TRUST_ENV_AGENT`，并拒绝把裸 key 放进 `--agent-key` 命令行。
+- 删除身份环境变量解析；启动 HTTP / stdio MCP 时检测到旧身份 env 会以 `[YTM_IDENTITY_ENV_REMOVED]` 明确拒绝，并给出请求头 / 显式参数迁移指引，不静默降级。
+- 增加 per-call identity context，HTTP 与 stdio 的并发调用不再共享可变的进程级身份；新增三 agent 并发私密上下文隔离回归。
+- CLI 仍是 `--agent <id>` + `--agent-key` / `--agent-key-file`；`--agent-id` 与 `--agent` 同时出现且不一致时拒绝启动。
+- 本条目为 0.16.0 的 M1 身份模型候选；runtime current / `doctor --runtime` / serverInfo 版本握手属于后续 M2 / M3，完成后才进入发布闸门。
+
 ## v0.15.0 (2026-09-17)
 
 **MCP 工具分组：降低常驻工具面**

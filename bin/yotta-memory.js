@@ -22,8 +22,9 @@ const os = require('os');
 const crypto = require('crypto');
 const http = require('http');
 const child_process = require('child_process');
+const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.15.0';
+const VERSION = '0.16.0';
 // @generated view-html:start
 const VIEW_HTML = "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>元忆 · 用户查看平台</title><style>\r\nbody{font-family:system-ui,-apple-system,\"Microsoft YaHei\",sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1f2328;background:#fafafa}\r\nh1{font-size:22px} .card{background:#fff;border:1px solid #e2e2e2;border-radius:10px;padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}\r\nbutton{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;margin:2px;font-size:14px}\r\nbutton.danger{background:#dc2626} button.ghost{background:#e5e7eb;color:#1f2328}\r\ninput,select{padding:8px;border:1px solid #c9c9c9;border-radius:6px;margin:2px;font-size:14px;box-sizing:border-box}\r\ntable{border-collapse:collapse;width:100%;font-size:13px} td,th{border:1px solid #ececec;padding:6px 8px;text-align:left;vertical-align:top}\r\n.owner{display:inline-flex;align-items:center;gap:6px;border:1px solid #ddd;border-radius:8px;padding:5px 10px;margin:4px 6px 4px 0;background:#f6f8fa}\r\n.entry{border-bottom:1px solid #eee;padding:8px 0} .meta{color:#8a8a8a;font-size:12px}\r\n.err{color:#dc2626;margin-top:8px} .ok{color:#16a34a;margin-top:8px}\r\n#app{display:none} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:12px}\r\n</style></head><body>\r\n<h1>元忆 · 用户查看平台 <span id=\"ver\" style=\"font-size:14px;color:#888\"></span></h1>\r\n<div id=\"lock\" class=\"card\">\r\n  <p><b>输入主口令解锁</b>（口令只在本地内存派生，不落盘、不发送远端）。忘口令可在 CLI 用恢复钥匙重设：<code>yotta-memory reset-password --recovery-key &lt;钥匙&gt;</code></p>\r\n  <input type=\"password\" id=\"pw\" placeholder=\"主口令\" style=\"width:260px\">\r\n  <button onclick=\"unlock()\">解锁</button>\r\n  <div class=\"err\" id=\"lockerr\"></div>\r\n</div>\r\n<div id=\"app\">\r\n  <div class=\"card\">\r\n    <b>AI 列表</b>（✅=已授权可读自己私密，🔒=未授权）\r\n    <div class=\"meta\" style=\"margin-top:6px\">「授权」由你（用户）操作：确认后生成只显示一次的 agent_key，请立即单独保存；服务端同时写临时待领取文件 <code>keys/pending/&lt;agent_id&gt;.key</code>，供该 AI 新会话领取，领取成功后自动删除。</div>\r\n    <div id=\"owners\" style=\"margin-top:8px\"></div>\r\n  </div>\r\n  <div class=\"card\">\r\n    <b>记忆</b>\r\n    <input id=\"q\" placeholder=\"搜索关键词\" style=\"width:220px\" onkeydown=\"if(event.key==='Enter'){off=0;load()}\">\r\n    <button onclick=\"off=0;load()\">搜索</button>\r\n    <button class=\"ghost\" onclick=\"doExport()\">导出 JSON</button>\r\n    <button class=\"ghost\" onclick=\"showRk()\">显示恢复钥匙</button>\r\n    <span id=\"rkout\" style=\"font-size:12px;color:#888;margin-left:8px\"></span>\r\n    <div id=\"meta\" style=\"margin-top:10px;font-size:12px;color:#666\"></div>\r\n    <div id=\"entries\" style=\"margin-top:6px\"></div>\r\n    <div id=\"pager\" style=\"margin-top:10px\">\r\n      <button class=\"ghost\" id=\"prevb\" onclick=\"prevPage()\">上一页</button>\r\n      <span id=\"pageinfo\" style=\"font-size:12px;color:#888;margin:0 8px\"></span>\r\n      <button class=\"ghost\" id=\"nextb\" onclick=\"nextPage()\">下一页</button>\r\n    </div>\r\n  </div>\r\n  <div class=\"card\">\r\n    <b>重设口令</b><br>\r\n    <input type=\"password\" id=\"cur\" placeholder=\"当前口令\">\r\n    <input type=\"password\" id=\"np1\" placeholder=\"新口令\">\r\n    <input type=\"password\" id=\"np2\" placeholder=\"确认新口令\">\r\n    <button onclick=\"resetPw()\">重设</button>\r\n    <span id=\"pwout\"></span>\r\n  </div>\r\n</div>\r\n<script>\r\nfunction esc(s){return String(s==null?'':s).replace(/[&<>\"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}\r\nasync function api(p,b){try{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return await r.json();}catch(e){return{error:String(e)};}}\r\nasync function boot(){const s=await api('/api/status');document.getElementById('ver').textContent='v'+(s.version||'');if(s.unlocked){showApp();}}\r\nfunction showApp(){document.getElementById('lock').style.display='none';document.getElementById('app').style.display='block';loadOwners();load();}\r\nasync function unlock(){const d=await api('/api/unlock',{password:document.getElementById('pw').value});if(d.error){document.getElementById('lockerr').textContent=d.error;return;}showApp();}\r\nasync function loadOwners(){const d=await api('/api/owners');const box=document.getElementById('owners');box.innerHTML='';if(!d.owners||!d.owners.length){box.innerHTML='（无 owner）';return;}\r\n  for(const o of d.owners){const c=document.createElement('span');c.className='owner';c.innerHTML=esc(o.owner)+(o.authorized?' ✅':' 🔒')+' <button class=\"ghost\" data-a=\"'+esc(o.owner)+'\">授权</button><button class=\"danger\" data-r=\"'+esc(o.owner)+'\">吊销</button>';box.appendChild(c);}\r\n  box.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){var owner=b.getAttribute('data-a');if(!confirm('确认由你为用户授权 '+owner+' 读取其私密记忆？授权后将生成只显示一次的 agent_key，请立即保存；同时写入待领取文件供该 AI 新会话领取。AI 不应代为执行该授权操作。'))return;b.disabled=true;api('/api/authorize',{owner:owner}).then(function(d){b.disabled=false;if(!d||d.error){alert((d&&d.error)||'授权失败');loadOwners();return;}if(d.agentKey){showKey(d.agentKey);}loadOwners();});};});\r\n  box.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){if(!confirm('确认吊销 '+b.getAttribute('data-r')+' 的 agent_key？吊销后该智能体立即失去私密读写能力。'))return;api('/api/revoke',{owner:b.getAttribute('data-r')}).then(function(){loadOwners();});};});\r\nfunction showKey(k){var ov=document.createElement('div');ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99';var box=document.createElement('div');box.className='card';box.style.cssText='max-width:640px;word-break:break-all';var t=document.createElement('div');t.innerHTML='<b>agent_key（只显示一次）</b>';var hint=document.createElement('div');hint.className='meta';hint.textContent='请用户立即单独保存。AI 新会话先执行 yotta-memory key status <agent_id>，有 pending 再执行 key claim <agent_id>；默认写入 AI_HOME/.yotta-memory-agent-key，需要时用 --to 或 --agent-key-file 指定。若 key 丢失，可吊销后重新授权；旧 key 会立即校验失败。';var ta=document.createElement('textarea');ta.readOnly=true;ta.value=k;ta.style.cssText='width:100%;height:72px;margin-top:8px;font-family:monospace;font-size:12px';var close=document.createElement('button');close.textContent='我已保存，关闭';close.onclick=function(){ov.remove();};box.appendChild(t);box.appendChild(hint);box.appendChild(ta);box.appendChild(close);ov.appendChild(box);document.body.appendChild(ov);ta.focus();ta.select();}\r\n}\r\nlet off=0,PS=50;\r\nasync function load(){const d=await api('/api/entries',{query:document.getElementById('q').value,offset:off,limit:PS});const meta=document.getElementById('meta');const pg=document.getElementById('pageinfo');if(meta)meta.textContent='共 '+d.count+' 条';const lim=d.limit||PS;const totalPg=Math.max(1,Math.ceil(d.count/lim));const curPg=Math.floor((d.offset||0)/lim)+1;if(pg)pg.textContent='第 '+curPg+' / '+totalPg+' 页';const box=document.getElementById('entries');box.innerHTML='';if(d.entries)for(const e of d.entries){const div=document.createElement('div');div.className='entry';div.innerHTML='<b>['+esc(e.type)+'] '+esc(e.subject)+'</b><div>'+esc(e.statement)+'</div><div class=\"meta\">'+esc(e.file)+' · owner='+esc(e.owner||'-')+' · '+esc(e.updated||e.created||'')+'</div>';box.appendChild(div);}const pb=document.getElementById('prevb'),nb=document.getElementById('nextb');if(pb)pb.disabled=(d.offset||0)<=0;if(nb)nb.disabled=!d.hasMore;}\r\nfunction prevPage(){if(off>=PS){off-=PS;load();}}\r\nfunction nextPage(){off+=PS;load();}\r\nasync function doExport(){const d=await api('/api/export');if(d.error){alert(d.error);return;}const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='yottamemory-view-export.json';a.click();}\r\nasync function showRk(){const d=await api('/api/recovery-key');document.getElementById('rkout').textContent=d.recoveryKey?('恢复钥匙: '+d.recoveryKey):(d.error||'');}\r\nasync function resetPw(){const np1=document.getElementById('np1').value,np2=document.getElementById('np2').value;if(np1!==np2){document.getElementById('pwout').innerHTML='<span class=\"err\">两次新口令不一致</span>';return;}\r\n  const d=await api('/api/reset-password',{currentPassword:document.getElementById('cur').value,newPassword:np1});document.getElementById('pwout').innerHTML=d.error?('<span class=\"err\">'+esc(d.error)+'</span>'):('<span class=\"ok\">'+esc(d.text||'ok')+'</span>');}\r\nboot();\r\n</script></body></html>\r\n";
 // @generated view-html:end
@@ -94,34 +95,46 @@ function today() {
   const p = (n) => String(n).padStart(2, '0');
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
-function envAgentTrusted() {
-  const v = String(process.env.YOTTA_MEMORY_TRUST_ENV_AGENT || '').trim().toLowerCase();
-  return v === '1' || v === 'true' || v === 'yes';
-}
-function rawEnvAgent() {
-  return process.env.YOTTA_AGENT_ID || process.env.AGENT_ID || '';
-}
 let RUNTIME_AGENT = { id: '', agentKey: '' };
+const IDENTITY_CONTEXT = new AsyncLocalStorage();
 const RUNTIME_OWNER_KEYS = new Map();
 function setRuntimeAgent(id, agentKey) {
   RUNTIME_AGENT = { id: String(id || '').trim(), agentKey: String(agentKey || '').trim() };
   RUNTIME_OWNER_KEYS.clear();
 }
-function trustedEnvAgentKey() {
-  return envAgentTrusted() ? String(process.env.YOTTA_MEMORY_AGENT_KEY || '').trim() : '';
+function currentRuntimeIdentity() {
+  return IDENTITY_CONTEXT.getStore() || RUNTIME_AGENT;
 }
-function currentAgent() {
-  // Ambient environment identity is only trusted for host-managed MCP processes.
-  if (RUNTIME_AGENT.id) return RUNTIME_AGENT.id;
-  return envAgentTrusted() ? rawEnvAgent() : '';
+function runWithIdentity(identity, fn) {
+  const store = {
+    id: String((identity && identity.id) || '').trim(),
+    agentKey: String((identity && identity.agentKey) || '').trim(),
+  };
+  return IDENTITY_CONTEXT.run(store, fn);
+}
+function legacyIdentityEnvNames() {
+  return ['YOTTA_AGENT_ID', 'AGENT_ID', 'YOTTA_MEMORY_AGENT_KEY', 'YOTTA_MEMORY_TRUST_ENV_AGENT']
+    .filter(function (name) { return String(process.env[name] || '').trim() !== ''; });
+}
+function legacyIdentityEnvError() {
+  const names = legacyIdentityEnvNames();
+  if (!names.length) return '';
+  return [
+    '[YTM_IDENTITY_ENV_REMOVED] 检测到旧身份环境变量: ' + names.join(', '),
+    '0.16.0 已删除身份 env：HTTP / 远程 MCP 只用请求头 Authorization + X-Agent-Id + X-Agent-Key；stdio MCP 只用显式参数 --agent-id <id> + --agent-key-file <path>。',
+    'CLI 仍使用 --agent <id> + --agent-key/--agent-key-file。请从宿主 MCP 配置中移除身份 env 后重试。',
+  ].join('\n');
 }
 function resolveIdentity(opts) {
   opts = opts || {};
-  const explicit = String(opts.agent || opts.selfAgent || '').trim();
+  const explicitAgent = String(opts.agent || opts.selfAgent || '').trim();
+  const explicitAgentId = String(opts.agentId || '').trim();
+  if (explicitAgent && explicitAgentId && explicitAgent !== explicitAgentId) {
+    return { id: '', agentKey: '', source: 'conflict', error: '身份冲突：--agent ' + explicitAgent + ' 与 --agent-id ' + explicitAgentId + ' 不一致，请只保留一个身份参数。' };
+  }
+  const explicit = explicitAgent || explicitAgentId;
   let explicitKey = String(opts.agentKey || '').trim();
   const keyFile = String(opts.agentKeyFile || '').trim();
-  const env = String(rawEnvAgent() || '').trim();
-  const trusted = envAgentTrusted();
   if (keyFile) {
     let fileKey = '';
     try { fileKey = fs.readFileSync(path.resolve(keyFile), 'utf8').trim(); } catch (e) {
@@ -135,27 +148,7 @@ function resolveIdentity(opts) {
     return { id: '', agentKey: '', source: 'invalid', error: '非法 agent ID：只允许单段名称，禁止 /、\\、.. 和控制字符。' };
   }
   if (explicit) {
-    if (trusted && env) {
-      if (!isSafeAgentId(env)) {
-        return { id: '', agentKey: '', source: 'invalid-env', error: '受信任环境中的 agent ID 非法：只允许单段名称，禁止 /、\\、.. 和控制字符。' };
-      }
-      if (explicit !== env) {
-        return {
-          id: '',
-          agentKey: '',
-          source: 'conflict',
-          error: '身份冲突：显式身份 ' + explicit + ' 与受信任环境身份 ' + env + ' 不一致。请只保留一个明确身份。',
-        };
-      }
-      if (!explicitKey) explicitKey = trustedEnvAgentKey();
-    }
     return { id: explicit, agentKey: explicitKey, source: 'explicit', error: '' };
-  }
-  if (env && trusted) {
-    if (!isSafeAgentId(env)) {
-      return { id: '', agentKey: '', source: 'invalid-env', error: '受信任环境中的 agent ID 非法：只允许单段名称，禁止 /、\\、.. 和控制字符。' };
-    }
-    return { id: env, agentKey: explicitKey || trustedEnvAgentKey(), source: 'trusted-env', error: '' };
   }
   return { id: '', agentKey: '', source: 'none', error: '' };
 }
@@ -860,24 +853,32 @@ function unwrapAgentBinding(root, owner, agentKey) {
   if (buf.slice(0, AGENT_MAGIC.length).toString('utf8') !== AGENT_MAGIC) throw new Error('agent binding 文件格式错误: ' + p);
   return aesDecryptBytes(agentKey, buf.slice(AGENT_MAGIC.length), Buffer.from('agent:' + owner, 'utf8'));
 }
-function getOwnerKeyFor(root, owner) {
+function getOwnerKeyFor(root, owner, identity) {
   if (!owner) return null;
   if (!isEncrypted(root)) return null;
-  if (!RUNTIME_AGENT.id || RUNTIME_AGENT.id !== owner || !RUNTIME_AGENT.agentKey) return null;
-  const agentKey = Buffer.from(RUNTIME_AGENT.agentKey, 'base64');
+  const current = identity || currentRuntimeIdentity();
+  if (!current.id || current.id !== owner || !current.agentKey) return null;
+  const agentKey = Buffer.from(current.agentKey, 'base64');
   return unwrapAgentBinding(root, owner, agentKey);
 }
 function validatePrivateIdentity(root, ident, owner) {
   if (!ident || !ident.id) return '私密操作必须先声明显式身份。';
   if (!isSafeAgentId(owner || ident.id)) return '非法 owner ID：只允许单段名称，禁止 /、\\、.. 和控制字符。';
   if (!isEncrypted(root)) return '';
-  const agentKey = ident.agentKey || (RUNTIME_AGENT.id === ident.id ? RUNTIME_AGENT.agentKey : '');
+  const current = currentRuntimeIdentity();
+  const agentKey = ident.agentKey || (current.id === ident.id ? current.agentKey : '');
   if (!agentKey) {
-    return '记忆库已加密，但缺少 agent_key。请使用 --agent-key <key>，或在 MCP 配置中设置 YOTTA_MEMORY_AGENT_KEY + YOTTA_MEMORY_TRUST_ENV_AGENT=1。若该 agent 尚未绑定，请执行 yotta-memory key bind ' + (owner || ident.id) + '。';
+    return '记忆库已加密，但缺少 agent_key。CLI 请使用 --agent-key <key> 或 --agent-key-file <path>；stdio MCP 请使用 --agent-id <id> + --agent-key-file <path>；HTTP MCP 请发送 X-Agent-Key 请求头。若该 agent 尚未绑定，请执行 yotta-memory key bind ' + (owner || ident.id) + '。';
   }
-  setRuntimeAgent(ident.id, agentKey);
+  const context = IDENTITY_CONTEXT.getStore();
+  if (context) {
+    context.id = ident.id;
+    context.agentKey = agentKey;
+  } else {
+    setRuntimeAgent(ident.id, agentKey);
+  }
   try {
-    if (!getOwnerKeyFor(root, owner || ident.id)) {
+    if (!getOwnerKeyFor(root, owner || ident.id, { id: ident.id, agentKey: agentKey })) {
       return 'agent_key 校验失败：未找到 ' + (owner || ident.id) + ' 的 agent binding（可能已吊销）。请由用户重新授权，或由用户执行 yotta-memory key bind ' + (owner || ident.id) + '。';
     }
   } catch (e) {
@@ -1359,7 +1360,7 @@ function hasGrant(userAgent, ownerAgent) {
   return false;
 }
 // 三态读取判定：'read' | 'denied'
-// selfAgent 为可信身份（env 声明 / 调用方上下文）；--agent 仅供授权与展示，不得授予跨智能体私密读取。
+// selfAgent 为调用方显式声明的可信身份（CLI 参数 / stdio 参数 / HTTP 请求头）；--owner 仅供授权与展示，不得授予跨智能体私密读取。
 function classifyRead(entry, agent, ownerFilter, unsafe, selfAgent) {
   if (entry.scope === 'public') return 'read';
   const owner = entry.owner || '';
@@ -2549,7 +2550,7 @@ function rememberCore(type, subject, statement, opts) {
     if (keyError) return { error: true, text: keyError };
   }
   if (scope === 'private' && !owner) {
-    return { error: true, text: '私密记忆必须显式声明归属智能体：请传 --agent <id>；MCP 场景需由宿主在配置中设置 YOTTA_AGENT_ID=<id> + YOTTA_MEMORY_TRUST_ENV_AGENT=1。公共记忆(FACT)不受影响。' };
+    return { error: true, text: '私密记忆必须显式声明归属智能体：CLI 传 --agent <id>；stdio MCP 传 --agent-id <id> + --agent-key-file <path>；HTTP MCP 发送 X-Agent-Id + X-Agent-Key。公共记忆(FACT)不受影响。' };
   }
   if (scope === 'private' && owner && selfAgent && owner !== selfAgent && !opts.unsafe) {
     return { error: true, text: '拒绝: 当前显式身份 ' + selfAgent + ' 不能写入其它智能体 ' + owner + ' 的私密区。请传正确的 --agent <id>，或加 --unsafe（用户显式授权）。' };
@@ -2671,7 +2672,7 @@ function recallCore(query, opts) {
     return {
       error: true,
       exitCode: 3,
-      text: '显式跨智能体读取必须先声明身份：请传 --agent <id>；MCP 场景需设置 YOTTA_AGENT_ID=<id> + YOTTA_MEMORY_TRUST_ENV_AGENT=1。',
+      text: '显式跨智能体读取必须先声明身份：CLI 传 --agent <id>；stdio MCP 传 --agent-id <id> + --agent-key-file <path>；HTTP MCP 发送 X-Agent-Id + X-Agent-Key。',
     };
   }
   if (selfAgent && !allSafe) {
@@ -2857,7 +2858,7 @@ function forgetCore(fileRef, opts) {
   if (seg[0] === 'private') {
     const owner = seg[1] || '';
     if (!opts.unsafe && (owner && (selfAgent ? owner !== selfAgent : true))) {
-      return { error: true, text: '拒绝: 不能删除其它智能体 ' + owner + ' 的私密记忆（当前身份 ' + (selfAgent || '未声明') + '）。请用 YOTTA_AGENT_ID 声明自己的身份，或加 --unsafe（用户显式授权）。' };
+      return { error: true, text: '拒绝: 不能删除其它智能体 ' + owner + ' 的私密记忆（当前身份 ' + (selfAgent || '未声明') + '）。请用 --agent / --agent-id 声明自己的身份，或加 --unsafe（用户显式授权）。' };
     }
   }
   const trashFile = path.join(
@@ -2954,7 +2955,7 @@ function checkOwnerWritable(targetRoot, targetRel, selfAgent, unsafe) {
   if (seg[0] === PRIVATE_DIR) {
     const owner = seg[1] || '';
     if (!unsafe && (owner && (selfAgent ? owner !== selfAgent : true))) {
-      return '拒绝: 不能操作其它智能体 ' + owner + ' 的私密记忆（当前身份 ' + (selfAgent || '未声明') + '）。请用 YOTTA_AGENT_ID 声明自己的身份，或加 --unsafe（用户显式授权）。';
+      return '拒绝: 不能操作其它智能体 ' + owner + ' 的私密记忆（当前身份 ' + (selfAgent || '未声明') + '）。请用 --agent / --agent-id 声明自己的身份，或加 --unsafe（用户显式授权）。';
     }
   }
   return null;
@@ -4322,8 +4323,8 @@ function cmdWhoami(opts) {
   }
   const id = ident.id;
   if (!id) {
-    console.log('当前未声明可信智能体身份（未传 --agent，且没有受信任的 MCP 环境身份）。');
-    console.log('CLI：请显式传 --agent <唯一ID>。MCP：在客户端配置中同时设置 YOTTA_AGENT_ID=<唯一ID> 与 YOTTA_MEMORY_TRUST_ENV_AGENT=1。');
+    console.log('当前未声明显式智能体身份（身份不再从环境变量读取）。');
+    console.log('CLI：请传 --agent <唯一ID>。stdio MCP：使用 --agent-id <唯一ID> + --agent-key-file <path>。HTTP MCP：发送 X-Agent-Id + X-Agent-Key。');
     console.log('远端：token + X-Agent-Id + X-Agent-Key（token new --agent <id>；agent_key 由 view 授权生成）。');
     return;
   }
@@ -4380,14 +4381,14 @@ function profileCore(opts) {
     return {
       error: true,
       exitCode: 3,
-      text: '生成私密画像必须先声明身份：请传 --agent <id>；MCP 场景需设置 YOTTA_AGENT_ID=<id> + YOTTA_MEMORY_TRUST_ENV_AGENT=1。',
+      text: '生成私密画像必须先声明身份：CLI 传 --agent <id>；stdio MCP 传 --agent-id <id> + --agent-key-file <path>；HTTP MCP 发送 X-Agent-Id + X-Agent-Key。',
     };
   }
   const selfAgent = ident.id;
   const owner = opts.owner || selfAgent;
   const keyError = validatePrivateIdentity(root, ident, owner);
   if (keyError) return { error: true, exitCode: 3, text: keyError };
-  if (!owner) return { error: true, exitCode: 2, text: '请先声明身份（YOTTA_AGENT_ID / AGENT_ID）或传 --owner <id>，再生成画像。' };
+  if (!owner) return { error: true, exitCode: 2, text: '请先声明身份（--agent / --agent-id）或传 --owner <id>，再生成画像。' };
   if (selfAgent && owner !== selfAgent && owner !== 'user' && !opts.unsafe && !hasGrant(selfAgent, owner)) {
     return { error: true, exitCode: 3, text: '拒绝: 不能生成其它智能体 ' + owner + ' 的画像（private/' + owner + '/ 为私密区）。如需读取请 --owner user 或 --unsafe（用户显式授权）。' };
   }
@@ -4461,7 +4462,7 @@ function contextCore(opts) {
     return {
       error: true,
       exitCode: 3,
-      text: '开工上下文包含私密画像 / 边界 / 承诺，必须先声明身份：请传 --agent <id>；MCP 场景需设置 YOTTA_AGENT_ID=<id> + YOTTA_MEMORY_TRUST_ENV_AGENT=1。',
+      text: '开工上下文包含私密画像 / 边界 / 承诺，必须先声明身份：CLI 传 --agent <id>；stdio MCP 传 --agent-id <id> + --agent-key-file <path>；HTTP MCP 发送 X-Agent-Id + X-Agent-Key。',
     };
   }
   const selfAgent = ident.id;
@@ -4501,7 +4502,7 @@ function contextCore(opts) {
   lines.push('## 1. 身份');
   lines.push('');
   if (!owner) {
-    lines.push('- 未声明智能体身份（无 YOTTA_AGENT_ID / --owner）。私密记忆与画像不可用；请先 whoami / iam。');
+    lines.push('- 未声明智能体身份（无 --agent / --agent-id / X-Agent-Id）。私密记忆与画像不可用；请先 whoami / iam。');
   } else {
     lines.push('- agent_id: ' + owner);
     const kv = selfProfileKv(root, owner);
@@ -4718,7 +4719,7 @@ function mcpTools(profile) {
     { name: 'reindex', description: '重建索引（手动改 .md 后校正；扫描 facts/prefs/bounds/commits 四目录）', inputSchema: { type: 'object', properties: {} } },
     { name: 'export', description: '导出全部记忆到记忆库内的 JSON 文件。out 可选（默认 <记忆库>/yottamemory-export-<日期>.json；仅限记忆库内路径）', inputSchema: { type: 'object', properties: { out: { type: 'string' } } } },
     { name: 'import', description: '从记忆库内的 JSON 文件导入记忆。src 为文件路径（相对记忆库目录，或记忆库内绝对路径；仅限记忆库内）', inputSchema: { type: 'object', properties: { src: { type: 'string' } }, required: ['src'] } },
-    { name: 'agent_info', description: '查看当前智能体身份与登记状态（远端读经 token 校验的 X-Agent-Id；本机读 YOTTA_AGENT_ID）。开工先确认「我是谁」，禁止从记忆里抄别人的 ID', inputSchema: { type: 'object', properties: {} } },
+    { name: 'agent_info', description: '查看当前智能体身份与登记状态（HTTP 读经 token 校验的 X-Agent-Id；stdio 读 --agent-id 显式参数）。开工先确认「我是谁」，禁止从记忆里抄别人的 ID', inputSchema: { type: 'object', properties: {} } },
     { name: 'profile', description: '生成当前智能体的用户画像（只读聚合 private/<owner>/ 下 PREF/BOUND/COMMIT 原文，零推断，写入 private/<owner>/profile.md）。owner 默认当前智能体', inputSchema: { type: 'object', properties: { owner: { type: 'string' } } } },
     { name: 'feedback', description: '显式使用反馈（自我学习）：useful/useless 调整记忆 weight/confidence/feedback_net。file 为记忆文件路径或文件名', inputSchema: { type: 'object', properties: { file: { type: 'string' }, useful: { type: 'boolean' }, useless: { type: 'boolean' }, reason: { type: 'string' } }, required: ['file'] } },
     { name: 'maintain', description: '记忆自组织（自我进化）：规则层归档/遗忘/去重预览。默认 dry-run；apply 才执行，purge 才真删', inputSchema: { type: 'object', properties: { apply: { type: 'boolean' }, purge: { type: 'boolean' }, dedup: { type: 'boolean' }, threshold: { type: 'number' }, age: { type: 'number' } } } },
@@ -4731,6 +4732,14 @@ function mcpTools(profile) {
     .filter(Boolean);
 }
 function callTool(name, args, ctx) {
+  return runWithIdentity({
+    id: ctx && ctx.agent,
+    agentKey: ctx && ctx.agentKey,
+  }, function () {
+    return callToolInner(name, args, ctx);
+  });
+}
+function callToolInner(name, args, ctx) {
   const agent = (ctx && ctx.agent) || '';
   const toolProfile = normalizeMcpToolProfile(ctx && ctx.toolProfile);
   if (toolProfile === 'core' && MCP_CORE_TOOL_NAMES.indexOf(name) === -1) {
@@ -4805,7 +4814,7 @@ function callTool(name, args, ctx) {
     if (name === 'agent_info') {
       const root = userRoot();
       const id = agent || '';
-      if (!id) return { text: '当前未声明智能体身份（无 X-Agent-Id / YOTTA_AGENT_ID）。本机请在 MCP 配置 env 设 YOTTA_AGENT_ID=<唯一ID> 并 iam 登记。', error: false };
+      if (!id) return { text: '当前未声明智能体身份（无 X-Agent-Id / --agent-id）。stdio 请使用 --agent-id <唯一ID> + --agent-key-file <path>；HTTP 请发送 X-Agent-Id + X-Agent-Key。', error: false };
       const agents = loadAgents(root).agents || {};
       const tokens = loadTokens(root).tokens || {};
       let reg = '未登记';
@@ -4863,7 +4872,6 @@ function unsupportedVersion(id, pv) {
   return { jsonrpc: '2.0', id: id, error: { code: -32022, message: 'Unsupported protocol version', data: { supported: [MCP_PROTOCOL_MODERN], requested: pv } } };
 }
 function handleMessage(msg, ctx) {
-  setRuntimeAgent(ctx && ctx.agent, ctx && ctx.agentKey);
   if (!msg || msg.jsonrpc !== '2.0') return { jsonrpc: '2.0', id: msg && msg.id, error: { code: -32600, message: 'invalid request' } };
   const id = msg.id;
   if (id === undefined || id === null) return null;
@@ -4905,16 +4913,26 @@ function handleMessage(msg, ctx) {
 }
 function cmdServe(opts) {
   if (opts.stdio) { cmdServeStdio(opts); return; }
+  const legacyEnvError = legacyIdentityEnvError();
+  if (legacyEnvError) {
+    console.error(legacyEnvError);
+    process.exit(2);
+  }
+  if (opts.agent || opts.agentId) {
+    console.error('HTTP MCP 不接受 --agent/--agent-id 启动参数：身份只从请求头 Authorization + X-Agent-Id + X-Agent-Key 读取。');
+    process.exit(2);
+  }
   const host = opts.host || '0.0.0.0';
   const port = opts.port || 8787;
   const noAuth = !!opts.noAuth;
   const root = userRoot();
   ensureInit(root);
   function authorize(req) {
-    const agentId = String(req.headers['x-agent-id'] || '');
+    const agentId = String(req.headers['x-agent-id'] || '').trim();
     const agentKey = String(req.headers['x-agent-key'] || '').trim();
     const toolProfile = normalizeMcpToolProfile(opts.toolProfile);
     if (noAuth) return { agent: agentId, agentKey: agentKey, toolProfile: toolProfile };
+    if (!agentId || !agentKey) return null;
     const auth = req.headers['authorization'] || '';
     const m = /^Bearer\s+(.+)$/i.exec(auth);
     if (!m) return null;
@@ -5000,9 +5018,31 @@ function cmdServe(opts) {
 }
 // ---- stdio 本地零进程模式（客户端按需拉起 CLI）----
 function cmdServeStdio(opts) {
+  const legacyEnvError = legacyIdentityEnvError();
+  if (legacyEnvError) {
+    console.error(legacyEnvError);
+    process.exit(2);
+  }
+  if (opts.agent) {
+    console.error('stdio MCP 不接受 --agent：请使用显式参数 --agent-id <id> + --agent-key-file <path>。');
+    process.exit(2);
+  }
+  if (opts.agentKey) {
+    console.error('stdio MCP 不接受 --agent-key：命令行会暴露 key；请使用 --agent-key-file <path>。');
+    process.exit(2);
+  }
+  const ident = resolveIdentity(opts);
+  if (ident.error) {
+    console.error(ident.error);
+    process.exit(2);
+  }
   const root = userRoot();
   ensureInit(root);
-  const ctx = { agent: currentAgent(), agentKey: trustedEnvAgentKey(), toolProfile: normalizeMcpToolProfile(opts && opts.toolProfile) };
+  const ctx = {
+    agent: ident.id,
+    agentKey: ident.agentKey,
+    toolProfile: normalizeMcpToolProfile(opts && opts.toolProfile),
+  };
   let buf = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', function (chunk) {
@@ -6003,7 +6043,7 @@ function usage() {
     lines.push('');
   }
   lines.push('类型: FACT(公共共享) / PREF(偏好) / BOUND(边界) / COMMIT(承诺)');
-  lines.push('环境变量: YOTTA_MEMORY_HOME 临时覆盖用户级位置; MCP 身份必须同时设置 YOTTA_AGENT_ID + YOTTA_MEMORY_AGENT_KEY + YOTTA_MEMORY_TRUST_ENV_AGENT=1；CLI 用 --agent + --agent-key/--agent-key-file');
+  lines.push('环境变量: YOTTA_MEMORY_HOME 临时覆盖用户级位置; 身份不再读取 env；CLI 用 --agent + --agent-key/--agent-key-file，stdio MCP 用 --agent-id + --agent-key-file，HTTP MCP 用请求头');
   lines.push('隔离: 公共 FACT 在 facts/；私密 PREF/BOUND/COMMIT 物理分目录 private/<agent_id>/<type>/，禁止 shell 直读写记忆库，一律走本命令');
   lines.push('远端接入: MCP url http://<主机IP>:8787/mcp；请求头 Authorization: Bearer <token> + X-Agent-Id: <id> + X-Agent-Key: <agent_key>');
   console.log(lines.join('\n'));
@@ -6013,7 +6053,7 @@ async function main() {
   if (!args.length) { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-key', '--agent-key-file', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools']);
+  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools']);
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--version' || a === '-v') { console.log(VERSION); return; }
@@ -6053,6 +6093,7 @@ async function main() {
       else if (a === '--out') opts.out = v;
       else if (a === '--owner') opts.owner = v;
       else if (a === '--agent') opts.agent = v;
+      else if (a === '--agent-id') opts.agentId = v;
       else if (a === '--agent-key') opts.agentKey = v;
       else if (a === '--agent-key-file') opts.agentKeyFile = v;
       else if (a === '--scope') opts.scope = v;

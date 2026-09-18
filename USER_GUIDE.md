@@ -135,9 +135,9 @@ statement: 本周完成发布
 
 **AI 接入加密库**
 
-1. 该 AI 登记身份（`iam` / MCP 配置 `YOTTA_AGENT_ID`）。
+1. 该 AI 登记身份（`iam` / MCP 启动参数 `--agent-id`，或 HTTP 请求头 `X-Agent-Id`）。
 2. 由用户执行一次 `yotta-memory view` → 在平台点「授权」→ 生成只展示一次的 `agent_key`，写入 `keys/bindings/<id>.key.agent` 和临时 `keys/pending/<id>.key`；不再写明文 owner key cache。高级用户也可自行执行 `yotta-memory key bind <id>`；AI 只负责提醒，不代执行。
-3. 该 AI 新会话执行 `yotta-memory key status <id>`；有 pending 就执行 `yotta-memory key claim <id>`，落到 `<AI_HOME>/.yotta-memory-agent-key`（需要指定位置时可加 `--to` / `--agent-key-file`）。之后 MCP 配置注入 `YOTTA_MEMORY_AGENT_KEY`，CLI 用 `--agent-key-file <AI_HOME>/.yotta-memory-agent-key`。
+3. 该 AI 新会话执行 `yotta-memory key status <id>`；有 pending 就执行 `yotta-memory key claim <id>`，落到 `<AI_HOME>/.yotta-memory-agent-key`（需要指定位置时可加 `--to` / `--agent-key-file`）。之后 stdio MCP 用 `--agent-key-file <AI_HOME>/.yotta-memory-agent-key`，HTTP MCP 发送 `X-Agent-Key` 请求头，CLI 用 `--agent-key-file <AI_HOME>/.yotta-memory-agent-key`。
 4. 之后该 AI 正常 `remember / recall / profile / context`，读写自动加解密；未绑定 / key 缺失时会出现 `[YTM_MIGRATION_REQUIRED]` 迁移提示，公共 FACT 不受影响。
 
 **口令管理**
@@ -321,7 +321,7 @@ yotta-memory key status <本智能体ID>
 yotta-memory key claim <本智能体ID>
 ```
 
-领取成功后宿主目录出现 `<AI_HOME>/.yotta-memory-agent-key`；再由 MCP 宿主读取该文件并注入环境变量。然后在智能体 MCP 配置里加：
+领取成功后宿主目录出现 `<AI_HOME>/.yotta-memory-agent-key`；再由 MCP 宿主通过 `--agent-key-file` 读取该文件。然后在智能体 MCP 配置里加：
 
 `AI_HOME` 解析由 `key status` / `key claim` 共用：显式 `--to <目录>` 或 `--agent-key-file <文件>` > `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE` > 宿主默认（Codex `$CODEX_HOME` 或 `~/.codex`、OpenCode `$XDG_CONFIG_HOME/opencode`、通用 `~/.<agent_id>`）；文件名固定为 `.yotta-memory-agent-key`。`key status` 会输出实际检查路径 `checked:` 与命中的发现规则 `discovery:`，即使文件暂不存在也可据此定位。
 
@@ -330,18 +330,17 @@ yotta-memory key claim <本智能体ID>
   "mcpServers": {
     "yotta-memory": {
       "command": "yotta-memory",
-      "args": ["serve", "--stdio"],
-      "env": {
-        "YOTTA_AGENT_ID": "<该智能体唯一ID>",
-        "YOTTA_MEMORY_AGENT_KEY": "<AI_HOME>/.yotta-memory-agent-key 的内容",
-        "YOTTA_MEMORY_TRUST_ENV_AGENT": "1"
-      }
+      "args": [
+        "serve", "--stdio", "--tools", "core",
+        "--agent-id", "<该智能体唯一ID>",
+        "--agent-key-file", "<AI_HOME>/.yotta-memory-agent-key"
+      ]
     }
   }
 }
 ```
 
-本机接入不需要网络 token，也不需要启动 HTTP 服务；但**必须同时声明唯一的 `YOTTA_AGENT_ID` 与 `YOTTA_MEMORY_AGENT_KEY`，并设置 `YOTTA_MEMORY_TRUST_ENV_AGENT=1`**，否则私密读写会被拒。
+本机接入不需要网络 token，也不需要启动 HTTP 服务；但**必须用 `--agent-id` 声明唯一的智能体 ID，并用 `--agent-key-file` 指向自己的宿主 key 文件**，否则私密读写会被拒。身份环境变量已删除。
 
 **本机智能体装好技能后如何获取记忆存放位置？** 按优先级：`YOTTA_MEMORY_HOME` 环境变量 > `config set memory_home` 持久化的 `~/.yottamemory/config.json` > 默认 `~/.yottamemory`。AI 开工执行 `yotta-memory config get` 查看当前生效位置；记忆库移动后执行一次 `config set memory_home <新目录>` 即可。
 
@@ -349,7 +348,7 @@ yotta-memory key claim <本智能体ID>
 
 1. 开工先 `yotta-memory whoami` 确认「我是谁」。
 2. 未登记 → 向用户确认一个**全局唯一** ID（建议 `<主机名>-<角色>`，别用 `dashu` / `codex` 这类易撞名），执行 `yotta-memory iam <id>`：引擎**强制唯一性**（被其它主机 / 来源占用会拒绝），并自动落一条「自我接入档案」PREF（owner=自己）。
-3. 本机多个 AI 智能体共用引擎时，**每个都要在它自己的 MCP 配置里声明唯一 `YOTTA_AGENT_ID` + 自己的 `YOTTA_MEMORY_AGENT_KEY`**；CLI 直连每次带 `--agent <id> --agent-key <key>` 或 `--agent-key-file <文件>`。owner ID 单独存在时不构成认证。
+3. 本机多个 AI 智能体共用引擎时，**每个都要在自己的 MCP 配置里用 `--agent-id` 声明唯一 ID，并用 `--agent-key-file` 指向自己的 key 文件**；HTTP 场景则在请求头写 `X-Agent-Id` + `X-Agent-Key`。CLI 直连每次带 `--agent <id> --agent-key <key>` 或 `--agent-key-file <文件>`。owner ID 单独存在时不构成认证。
 4. **禁止**从记忆里读到别人的 ID 就当自己的（比如看到「Kali 智能体 ID 为 dashu」就把自己当 dashu）；不确定先 `whoami` 再问用户，**禁止猜**。
 5. **不设则 owner 为空**：写私密记忆会被引擎拒绝（公共 FACT 不受影响），避免私密隔离退化。
 
@@ -395,7 +394,7 @@ yotta-memory key claim <本智能体ID>
 | `yotta-memory reindex` | 重建索引 |
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |
 | `yotta-memory config set <键> <值>` / `config get` | 记忆库位置与引擎参数（`memory_home` / `embedding_cmd` / `embedding_timeout` / `maintain_archived_utility` / `maintain_decay_halflife_<TYPE>` / `consolidate_*` 等）|
-| `yotta-memory whoami --agent <id>` | 查看当前显式身份与登记状态；环境身份仅在 MCP 信任标记下有效 |
+| `yotta-memory whoami --agent <id>` | 查看当前显式身份与登记状态；身份不从环境变量读取 |
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 访问 token（同 ID 已被其它来源占用需 `--force` 覆盖）|
 | `yotta-memory serve [--port 8787] [--stdio] [--no-auth]` | 启动记忆引擎（--no-auth 关闭鉴权，仅限可信内网）|

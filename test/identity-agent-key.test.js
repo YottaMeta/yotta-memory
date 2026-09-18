@@ -28,9 +28,9 @@ function run(args, home, extraEnv) {
   });
 }
 
-function runStdio(messages, home, extraEnv) {
+function runStdio(messages, home, extraEnv, serveArgs) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI, 'serve', '--stdio'], {
+    const child = spawn(process.execPath, [CLI].concat(serveArgs || ['serve', '--stdio']), {
       env: cleanEnv(home, extraEnv),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -184,18 +184,16 @@ test('agent id path traversal is rejected', (t) => {
   assert.ok(!fs.existsSync(path.join(path.dirname(home), 'evil.key.agent')));
 });
 
-test('MCP stdio uses the trusted env agent_key for encrypted private access', async (t) => {
+test('MCP stdio uses explicit --agent-id and --agent-key-file for encrypted private access', async (t) => {
   const home = tmpHome(t);
   initEncrypted(home);
   const key = bindCodex(home);
+  const keyFile = path.join(home, 'codex.agent-key');
+  fs.writeFileSync(keyFile, key + '\n', 'utf8');
   const result = await runStdio([
     { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'remember', arguments: { type: 'PREF', subject: 'mcp-key', statement: '加密私密写入' } } },
     { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'context', arguments: { limit: 5 } } },
-  ], home, {
-    YOTTA_AGENT_ID: 'codex',
-    YOTTA_MEMORY_AGENT_KEY: key,
-    YOTTA_MEMORY_TRUST_ENV_AGENT: '1',
-  });
+  ], home, undefined, ['serve', '--stdio', '--agent-id', 'codex', '--agent-key-file', keyFile]);
   assert.strictEqual(result.code, 0, result.stderr || result.stdout);
   const responses = result.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
   assert.strictEqual(responses[0].result.isError, false, JSON.stringify(responses[0]));
@@ -233,7 +231,7 @@ test('key bind refuses to replace owner keys when recovery material is also miss
   assert.ok(!fs.existsSync(ownerKeyPath));
 });
 
-test('HTTP MCP accepts X-Agent-Key and fails private access without it', async (t) => {
+test('HTTP MCP accepts X-Agent-Key and rejects requests without it', async (t) => {
   const home = tmpHome(t);
   initEncrypted(home);
   const key = bindCodex(home);
@@ -272,9 +270,7 @@ test('HTTP MCP accepts X-Agent-Key and fails private access without it', async (
     method: 'tools/call',
     params: { name: 'context', arguments: { limit: 5 } },
   });
-  assert.strictEqual(noKey.status, 200, logs);
-  assert.strictEqual(noKey.json.result.isError, true, JSON.stringify(noKey.json));
-  assert.match(noKey.json.result.content[0].text, /缺少 agent_key/);
+  assert.strictEqual(noKey.status, 401, JSON.stringify(noKey));
 });
 
 test('key bind rejects traversal before writing outside the key store', (t) => {

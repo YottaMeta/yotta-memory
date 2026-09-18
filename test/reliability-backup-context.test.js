@@ -4,8 +4,6 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-process.env.YOTTA_AGENT_ID = 'codex';
-process.env.YOTTA_MEMORY_TRUST_ENV_AGENT = '1';
 const memory = require('../bin/yotta-memory.js');
 
 function tmpdir(prefix) {
@@ -38,11 +36,7 @@ function withConfigDir(fn) {
   const configDir = tmpdir('ytm-context-config-');
   const oldConfigDir = process.env.YOTTA_MEMORY_CONFIG_DIR;
   const oldHome = process.env.YOTTA_MEMORY_HOME;
-  const oldAgent = process.env.YOTTA_AGENT_ID;
-  const oldTrust = process.env.YOTTA_MEMORY_TRUST_ENV_AGENT;
   process.env.YOTTA_MEMORY_CONFIG_DIR = configDir;
-  process.env.YOTTA_AGENT_ID = 'codex';
-  process.env.YOTTA_MEMORY_TRUST_ENV_AGENT = '1';
   try {
     return fn(configDir);
   } finally {
@@ -50,10 +44,6 @@ function withConfigDir(fn) {
     else process.env.YOTTA_MEMORY_CONFIG_DIR = oldConfigDir;
     if (oldHome === undefined) delete process.env.YOTTA_MEMORY_HOME;
     else process.env.YOTTA_MEMORY_HOME = oldHome;
-    if (oldAgent === undefined) delete process.env.YOTTA_AGENT_ID;
-    else process.env.YOTTA_AGENT_ID = oldAgent;
-    if (oldTrust === undefined) delete process.env.YOTTA_MEMORY_TRUST_ENV_AGENT;
-    else process.env.YOTTA_MEMORY_TRUST_ENV_AGENT = oldTrust;
   }
 }
 

@@ -4,8 +4,6 @@ const fs = require('fs');
 const home = path.join(os.tmpdir(), 'yottamem-v09-' + Date.now());
 fs.mkdirSync(home, { recursive: true });
 process.env.YOTTA_MEMORY_HOME = home;
-process.env.YOTTA_AGENT_ID = 'codex';
-process.env.YOTTA_MEMORY_TRUST_ENV_AGENT = '1';
 const engine = require(path.join(process.cwd(), 'bin/yotta-memory.js'));
 
 if (typeof engine.runEmbeddingPlugin !== 'function') {
@@ -32,7 +30,7 @@ console.log('PASS: recall embedding integration');
 
 engine.rememberCore('FACT', 'task', 'v0.9 recall design');
 engine.rememberCore('FACT', 'noise', 'unrelated memory');
-const contextResult = engine.contextCore({ focus: 'v0.9 recall design', limit: 10, explain: true });
+const contextResult = engine.contextCore({ selfAgent: 'codex', focus: 'v0.9 recall design', limit: 10, explain: true });
 if (!/v0\.9 recall design/.test(contextResult.text)) {
   console.error('FAIL: contextCore did not include focused memory');
   process.exit(1);

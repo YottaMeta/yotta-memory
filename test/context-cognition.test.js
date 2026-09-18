@@ -36,13 +36,9 @@ function withMemory(t, entries, fn) {
   const previous = {
     home: process.env.YOTTA_MEMORY_HOME,
     config: process.env.YOTTA_MEMORY_CONFIG_DIR,
-    agent: process.env.YOTTA_AGENT_ID,
-    trust: process.env.YOTTA_MEMORY_TRUST_ENV_AGENT,
   };
   process.env.YOTTA_MEMORY_HOME = root;
   process.env.YOTTA_MEMORY_CONFIG_DIR = configDir;
-  process.env.YOTTA_AGENT_ID = 'codex';
-  process.env.YOTTA_MEMORY_TRUST_ENV_AGENT = '1';
 
   for (const entry of entries) writeEntry(root, entry.rel, entry.meta);
 
@@ -52,8 +48,6 @@ function withMemory(t, entries, fn) {
     for (const [key, value] of Object.entries({
       YOTTA_MEMORY_HOME: previous.home,
       YOTTA_MEMORY_CONFIG_DIR: previous.config,
-      YOTTA_AGENT_ID: previous.agent,
-      YOTTA_MEMORY_TRUST_ENV_AGENT: previous.trust,
     })) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;

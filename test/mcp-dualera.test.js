@@ -10,7 +10,6 @@ const tmpRoot = path.join(os.tmpdir(), 'yottamem-dualera-' + Date.now());
 fs.mkdirSync(tmpRoot, { recursive: true });
 process.env.USERPROFILE = tmpRoot;
 if (process.platform !== 'win32') process.env.HOME = tmpRoot;
-process.env.YOTTA_AGENT_ID = 'codex';
 process.env.YOTTA_MEMORY_HOME = path.join(tmpRoot, 'lib-main');
 const engine = require(path.join(process.cwd(), 'bin/yotta-memory.js'));
 

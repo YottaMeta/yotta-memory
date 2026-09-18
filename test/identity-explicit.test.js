@@ -55,7 +55,7 @@ test('explicit --agent works as the CLI identity source', (t) => {
   assert.match(r.stdout, /当前智能体身份: codex/);
 });
 
-test('trusted MCP env is accepted for whoami', (t) => {
+test('legacy trusted MCP env is no longer accepted for whoami', (t) => {
   const home = tmpHome(t);
   initPlain(home);
   const r = run(['whoami'], home, {
@@ -63,7 +63,8 @@ test('trusted MCP env is accepted for whoami', (t) => {
     YOTTA_MEMORY_TRUST_ENV_AGENT: '1',
   });
   assert.strictEqual(r.status, 0, r.stderr || r.stdout);
-  assert.match(r.stdout, /当前智能体身份: win-opencode-a1/);
+  assert.doesNotMatch(r.stdout, /当前智能体身份: win-opencode-a1/);
+  assert.match(r.stdout, /未声明显式智能体身份/);
 });
 
 test('explicit identity wins over an untrusted ambient environment identity', (t) => {
@@ -78,15 +79,16 @@ test('explicit identity wins over an untrusted ambient environment identity', (t
   assert.doesNotMatch(r.stdout, /gon-mimo/);
 });
 
-test('trusted environment identity conflicting with explicit identity is rejected', (t) => {
+test('legacy environment identity no longer conflicts with explicit identity', (t) => {
   const home = tmpHome(t);
   initPlain(home);
   const r = run(['whoami', '--agent', 'codex'], home, {
     YOTTA_AGENT_ID: 'gon-mimo',
     YOTTA_MEMORY_TRUST_ENV_AGENT: '1',
   });
-  assert.strictEqual(r.status, 2);
-  assert.match(r.stdout, /身份冲突/);
+  assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+  assert.match(r.stdout, /当前智能体身份: codex/);
+  assert.doesNotMatch(r.stdout, /身份冲突/);
 });
 
 test('private remember requires explicit identity while FACT stays public', (t) => {

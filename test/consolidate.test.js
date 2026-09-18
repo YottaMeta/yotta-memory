@@ -9,10 +9,9 @@ fs.mkdirSync(tmpRoot, { recursive: true });
 const SNAPSHOT_OPTS = { snapshotDir: path.join(tmpRoot, 'snapshots'), allowSameVolumeForTest: true };
 process.env.USERPROFILE = tmpRoot;
 if (process.platform !== 'win32') process.env.HOME = tmpRoot;
-process.env.YOTTA_AGENT_ID = 'codex';
-process.env.YOTTA_MEMORY_TRUST_ENV_AGENT = '1';
 process.env.YOTTA_MEMORY_HOME = path.join(tmpRoot, 'lib-main');
 const engine = require(path.join(process.cwd(), 'bin/yotta-memory.js'));
+const CODEX = { selfAgent: 'codex' };
 
 let pass = 0, fail = 0;
 function chk(name, cond) { if (cond) { pass++; console.log('PASS:', name); } else { fail++; console.log('FAIL:', name); } }
@@ -109,15 +108,15 @@ chk('consolidate undo idempotent (2nd refused)', /已回滚过/.test(un2.text));
 
 // ============ S3 consolidate private: owner-scoped path + rollback ============
 const priv = useLib('priv');
-engine.rememberCore('PREF', '界面偏好', '偏好深色主题与紧凑布局', { owner: 'codex' });
-engine.rememberCore('PREF', '界面偏好', '偏好键盘快捷键操作', { owner: 'codex' });
-engine.rememberCore('PREF', '界面偏好', '偏好中文本地化界面', { owner: 'codex' });
+engine.rememberCore('PREF', '界面偏好', '偏好深色主题与紧凑布局', Object.assign({}, CODEX, { owner: 'codex' }));
+engine.rememberCore('PREF', '界面偏好', '偏好键盘快捷键操作', Object.assign({}, CODEX, { owner: 'codex' }));
+engine.rememberCore('PREF', '界面偏好', '偏好中文本地化界面', Object.assign({}, CODEX, { owner: 'codex' }));
 ageAll(priv, 700);
-const apPriv = engine.consolidateCore(Object.assign({}, SNAPSHOT_OPTS, { apply: true }));
+const apPriv = engine.consolidateCore(Object.assign({}, CODEX, SNAPSHOT_OPTS, { apply: true }));
 const batchPriv = findBatch(apPriv.text);
 chk('consolidate private archives into .archive/private/codex/prefs', mdCountDeep(path.join(priv, '.archive', 'private', 'codex', 'prefs')) === 3);
 chk('consolidate private summary lives in private/codex/prefs', activeOf(priv, 'private/codex/prefs/').length === 1 && hasSummary(priv));
-const unPriv = engine.consolidateCore({ undo: batchPriv });
+const unPriv = engine.consolidateCore(Object.assign({}, CODEX, { undo: batchPriv }));
 chk('consolidate private undo restores prefs', activeOf(priv, 'private/codex/prefs/').length === 3 && mdCountDeep(path.join(priv, '.archive', 'private', 'codex', 'prefs')) === 0 && !hasSummary(priv));
 
 // ============ S4 exemptions: immutable + BOUND + group<min-group ============
@@ -126,7 +125,7 @@ writeMem(ex, 'facts/2020-01-01-0001.md', { type: 'FACT', subject: '红线主题'
 writeMem(ex, 'facts/2020-01-01-0002.md', { type: 'FACT', subject: '红线主题', statement: '不可变红线二', confidence: 1, created: '2020-01-01', updated: '2020-01-01', tags: [], immutable: true, scope: 'public', owner: '', source: '', weight: 1, access_count: 0, feedback_net: 0 });
 writeMem(ex, 'private/codex/bounds/2020-01-01-0001.md', { type: 'BOUND', subject: '边界主题', statement: '边界一', confidence: 1, created: '2020-01-01', updated: '2020-01-01', tags: [], immutable: false, scope: 'private', owner: 'codex', source: '', weight: 0.5, access_count: 0, feedback_net: 0 });
 writeMem(ex, 'private/codex/bounds/2020-01-01-0002.md', { type: 'BOUND', subject: '边界主题', statement: '边界二', confidence: 1, created: '2020-01-01', updated: '2020-01-01', tags: [], immutable: false, scope: 'private', owner: 'codex', source: '', weight: 0.5, access_count: 0, feedback_net: 0 });
-engine.consolidateCore(Object.assign({}, SNAPSHOT_OPTS, { apply: true }));
+engine.consolidateCore(Object.assign({}, CODEX, SNAPSHOT_OPTS, { apply: true }));
 chk('consolidate exempts immutable + BOUND (nothing archived)', engine.collectEntryFiles(ex).length === 4 && !hasSummary(ex) && mdCountDeep(path.join(ex, '.archive')) === 0);
 
 const solo = useLib('solo');
@@ -138,10 +137,10 @@ chk('consolidate group < min-group -> no summary (leave to maintain)', /无可�
 // ============ S5 maintain archive owner-scoped path + BOUND archive skip ============
 const mnt = useLib('mnt');
 engine.rememberCore('FACT', '旧事实', '很久以前的事实记录', { weight: 0.4 });
-engine.rememberCore('PREF', '旧偏好', '很久以前的偏好记录', { owner: 'codex', weight: 0.4 });
-engine.rememberCore('BOUND', '旧边界', '很久以前的边界记录', { owner: 'codex', weight: 0.4 });
+engine.rememberCore('PREF', '旧偏好', '很久以前的偏好记录', Object.assign({}, CODEX, { owner: 'codex', weight: 0.4 }));
+engine.rememberCore('BOUND', '旧边界', '很久以前的边界记录', Object.assign({}, CODEX, { owner: 'codex', weight: 0.4 }));
 ageAll(mnt, 400);
-const maint = engine.maintainCore(Object.assign({}, SNAPSHOT_OPTS, { apply: true }));
+const maint = engine.maintainCore(Object.assign({}, CODEX, SNAPSHOT_OPTS, { apply: true }));
 chk('maintain --apply archives public FACT to .archive/facts', mdCountDeep(path.join(mnt, '.archive', 'facts')) === 1);
 chk('maintain --apply archives private PREF to .archive/private/codex/prefs', mdCountDeep(path.join(mnt, '.archive', 'private', 'codex', 'prefs')) === 1);
 chk('maintain --apply skips BOUND (stays active, no legacy flat dir)', activeOf(mnt, 'private/codex/bounds/').length === 1 && !fs.existsSync(path.join(mnt, '.archive', 'bounds')));
@@ -151,16 +150,16 @@ const dup = useLib('dup');
 engine.rememberCore('FACT', '重复主题', 'Alpha 使用 Node 与 Python 编写核心服务', {});
 engine.rememberCore('FACT', '重复主题', 'Alpha 使用 Node 与 Python 编写核心服务与测试', {});
 engine.rememberCore('FACT', '重复主题', 'Alpha 使用 Node 与 Python 编写核心服务与测试文档', {});
-engine.rememberCore('PREF', '私有偏好主题', '喜欢简约设计与快速迭代', { owner: 'codex' });
-engine.rememberCore('PREF', '私有偏好主题', '喜欢简约设计与快速迭代发布', { owner: 'codex' });
-engine.rememberCore('PREF', '他者偏好主题', '他者喜欢简约设计与快速迭代', { owner: 'alice', unsafe: true });
-const dedupDry = engine.maintainCore({ dedup: true });
+engine.rememberCore('PREF', '私有偏好主题', '喜欢简约设计与快速迭代', Object.assign({}, CODEX, { owner: 'codex' }));
+engine.rememberCore('PREF', '私有偏好主题', '喜欢简约设计与快速迭代发布', Object.assign({}, CODEX, { owner: 'codex' }));
+engine.rememberCore('PREF', '他者偏好主题', '他者喜欢简约设计与快速迭代', Object.assign({}, CODEX, { owner: 'alice', unsafe: true }));
+const dedupDry = engine.maintainCore(Object.assign({}, CODEX, { dedup: true }));
 chk('maintain --dedup lists duplicates with confidence', /置信度 \d/.test(dedupDry.text) && !/已合并/.test(dedupDry.text));
-const dedupAp = engine.maintainCore(Object.assign({}, SNAPSHOT_OPTS, { dedup: true, apply: true }));
+const dedupAp = engine.maintainCore(Object.assign({}, CODEX, SNAPSHOT_OPTS, { dedup: true, apply: true }));
 const batchDup = findBatch(dedupAp.text);
 chk('maintain --dedup --apply auto-merges same-owner high-confidence groups', activeOf(dup, 'facts/').length === 1 && mdCountDeep(path.join(dup, '.archive', 'facts')) === 2);
 chk('maintain --dedup --apply leaves other-owner private untouched', activeOf(dup, 'private/alice/prefs/').length === 1);
-const unDup = engine.consolidateCore({ undo: batchDup });
+const unDup = engine.consolidateCore(Object.assign({}, CODEX, { undo: batchDup }));
 chk('auto-merge undo restores merged facts', activeOf(dup, 'facts/').length === 3 && mdCountDeep(path.join(dup, '.archive', 'facts')) === 0);
 
 // ============ S7 maintain archive NOT executed in --dedup mode (mutual exclusion) ============
