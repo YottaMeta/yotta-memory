@@ -8,6 +8,7 @@ const path = require('node:path');
 
 const CLI = path.join(__dirname, '..', 'bin', 'yotta-memory.js');
 const memory = require(CLI);
+const pkg = require('../package.json');
 
 function cleanEnv(runtimeHome, extra) {
   const env = Object.assign({}, process.env);
@@ -73,14 +74,14 @@ test('runtime install --from-current creates runtime.json and a stable current l
   assert.strictEqual(result.status, 0, result.stderr || result.stdout);
 
   const manifest = readManifest(runtimeHome);
-  assert.strictEqual(manifest.current, '0.16.0');
-  assert.ok(manifest.versions['0.16.0']);
-  assert.match(manifest.versions['0.16.0'].treeHash, /^[a-f0-9]{64}$/);
-  assert.strictEqual(currentVersion(runtimeHome), '0.16.0');
+  assert.strictEqual(manifest.current, pkg.version);
+  assert.ok(manifest.versions[pkg.version]);
+  assert.match(manifest.versions[pkg.version].treeHash, /^[a-f0-9]{64}$/);
+  assert.strictEqual(currentVersion(runtimeHome), pkg.version);
 
   const status = run(['runtime', 'status'], runtimeHome);
   assert.strictEqual(status.status, 0, status.stderr || status.stdout);
-  assert.match(status.stdout, /current:\s*0\.16\.0/);
+  assert.match(status.stdout, new RegExp('current:\\s*' + pkg.version.replace(/\./g, '\\.')));
   assert.match(status.stdout, /current path:/);
 });
 
@@ -89,23 +90,24 @@ test('runtime install tarball, use and rollback switch the stable current pointe
   let result = run(['runtime', 'install', '--from-current'], runtimeHome);
   assert.strictEqual(result.status, 0, result.stderr || result.stdout);
 
-  const tarball = makeTarball(runtimeHome, '0.16.1');
+  const altVersion = '9.9.8';
+  const tarball = makeTarball(runtimeHome, altVersion);
   result = run(['runtime', 'install', tarball], runtimeHome);
   assert.strictEqual(result.status, 0, result.stderr || result.stdout);
-  result = run(['runtime', 'use', '0.16.1'], runtimeHome);
+  result = run(['runtime', 'use', altVersion], runtimeHome);
   assert.strictEqual(result.status, 0, result.stderr || result.stdout);
-  assert.strictEqual(currentVersion(runtimeHome), '0.16.1');
+  assert.strictEqual(currentVersion(runtimeHome), altVersion);
 
   let manifest = readManifest(runtimeHome);
-  assert.strictEqual(manifest.current, '0.16.1');
-  assert.strictEqual(manifest.previous, '0.16.0');
+  assert.strictEqual(manifest.current, altVersion);
+  assert.strictEqual(manifest.previous, pkg.version);
 
   result = run(['runtime', 'rollback'], runtimeHome);
   assert.strictEqual(result.status, 0, result.stderr || result.stdout);
-  assert.strictEqual(currentVersion(runtimeHome), '0.16.0');
+  assert.strictEqual(currentVersion(runtimeHome), pkg.version);
   manifest = readManifest(runtimeHome);
-  assert.strictEqual(manifest.current, '0.16.0');
-  assert.strictEqual(manifest.previous, '0.16.1');
+  assert.strictEqual(manifest.current, pkg.version);
+  assert.strictEqual(manifest.previous, altVersion);
 
   result = run(['runtime', 'use', '9.9.9'], runtimeHome);
   assert.notStrictEqual(result.status, 0);
@@ -116,23 +118,24 @@ test('runtime use --restart rolls back the current pointer when restart fails', 
   const runtimeHome = tmpRuntime(t);
   let result = run(['runtime', 'install', '--from-current'], runtimeHome);
   assert.strictEqual(result.status, 0, result.stderr || result.stdout);
-  const tarball = makeTarball(runtimeHome, '0.16.1');
+  const altVersion = '9.9.8';
+  const tarball = makeTarball(runtimeHome, altVersion);
   result = run(['runtime', 'install', tarball], runtimeHome);
   assert.strictEqual(result.status, 0, result.stderr || result.stdout);
-  result = run(['runtime', 'use', '0.16.1'], runtimeHome);
+  result = run(['runtime', 'use', altVersion], runtimeHome);
   assert.strictEqual(result.status, 0, result.stderr || result.stdout);
 
   const previousRuntimeHome = process.env.YOTTA_MEMORY_RUNTIME_HOME;
   process.env.YOTTA_MEMORY_RUNTIME_HOME = runtimeHome;
   try {
-    const switched = memory.runtimeUseCore('0.16.0', {
+    const switched = memory.runtimeUseCore(pkg.version, {
       restart: true,
       restartFn: () => ({ error: true, text: 'restart failed by test' }),
     });
     assert.strictEqual(switched.error, true);
     assert.match(switched.text, /回滚|restart failed/);
-    assert.strictEqual(readManifest(runtimeHome).current, '0.16.1');
-    assert.strictEqual(currentVersion(runtimeHome), '0.16.1');
+    assert.strictEqual(readManifest(runtimeHome).current, altVersion);
+    assert.strictEqual(currentVersion(runtimeHome), altVersion);
   } finally {
     if (previousRuntimeHome === undefined) delete process.env.YOTTA_MEMORY_RUNTIME_HOME;
     else process.env.YOTTA_MEMORY_RUNTIME_HOME = previousRuntimeHome;

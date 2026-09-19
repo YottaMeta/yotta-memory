@@ -8,6 +8,7 @@ const path = require('node:path');
 
 const CLI = path.join(__dirname, '..', 'bin', 'yotta-memory.js');
 const memory = require(CLI);
+const pkg = require('../package.json');
 
 function tmpdir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -86,7 +87,7 @@ test('MCP handshakes expose runtimePath, identityMode and toolProfile', () => {
     method: 'initialize',
     params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 't', version: '1' } },
   }, { agent: 'codex', identityMode: 'stdio-args', toolProfile: 'core' });
-  assert.strictEqual(legacy.result.serverInfo.version, '0.16.0');
+  assert.strictEqual(legacy.result.serverInfo.version, pkg.version);
   assert.match(legacy.result.serverInfo.runtimePath.replace(/\\/g, '/'), /bin\/yotta-memory\.js$/);
   assert.strictEqual(legacy.result.serverInfo.identityMode, 'stdio-args');
   assert.strictEqual(legacy.result.serverInfo.toolProfile, 'core');
@@ -102,7 +103,7 @@ test('MCP handshakes expose runtimePath, identityMode and toolProfile', () => {
     },
   }, { agent: 'codex', identityMode: 'headers', toolProfile: 'full' });
   const info = modern.result._meta['io.modelcontextprotocol/serverInfo'];
-  assert.strictEqual(info.version, '0.16.0');
+  assert.strictEqual(info.version, pkg.version);
   assert.match(info.runtimePath.replace(/\\/g, '/'), /bin\/yotta-memory\.js$/);
   assert.strictEqual(info.identityMode, 'headers');
   assert.strictEqual(info.toolProfile, 'full');
@@ -136,7 +137,7 @@ test('stdio serverInfo reports the current launcher path', (t) => {
   });
   assert.strictEqual(result.status, 0, result.stderr || result.stdout);
   const response = JSON.parse(result.stdout.trim().split(/\r?\n/)[0]);
-  assert.strictEqual(response.result.serverInfo.version, '0.16.0');
+  assert.strictEqual(response.result.serverInfo.version, pkg.version);
   assert.strictEqual(response.result.serverInfo.identityMode, 'stdio-args');
   assert.strictEqual(response.result.serverInfo.toolProfile, 'core');
   assert.match(response.result.serverInfo.runtimePath.replace(/\\/g, '/'), /\/current\/bin\/yotta-memory\.js$/);
@@ -164,8 +165,8 @@ test('doctor --runtime reports a clean aligned runtime', (t) => {
     });
     assert.strictEqual(report.ok, true, report.text);
     assert.ok(report.checks.runtime);
-    assert.strictEqual(report.checks.runtime.cli.version, '0.16.0');
-    assert.strictEqual(report.checks.runtime.current.version, '0.16.0');
+    assert.strictEqual(report.checks.runtime.cli.version, pkg.version);
+    assert.strictEqual(report.checks.runtime.current.version, pkg.version);
     assert.deepStrictEqual(report.checks.runtime.drifts, []);
   });
 });
@@ -198,7 +199,7 @@ test('doctor --runtime reports current runtime drift with repair commands', (t) 
     const drift = report.checks.runtime.drifts.find((item) => item.kind === 'current-runtime');
     assert.ok(drift, JSON.stringify(report.checks.runtime.drifts));
     assert.strictEqual(drift.actual, '9.9.9');
-    assert.strictEqual(drift.expected, '0.16.0');
+    assert.strictEqual(drift.expected, pkg.version);
     assert.match(drift.fix, /runtime/);
     assert.strictEqual(drift.blocking, true);
   });
@@ -244,7 +245,7 @@ test('doctor --runtime reports MCP config, running server and skill copy drift',
     const skillDrift = drifts.find((item) => item.kind === 'skill-copy');
     assert.ok(mcpDrift, JSON.stringify(drifts));
     assert.strictEqual(mcpDrift.actual, '0.15.0');
-    assert.strictEqual(mcpDrift.expected, '0.16.0');
+    assert.strictEqual(mcpDrift.expected, pkg.version);
     assert.strictEqual(mcpDrift.blocking, true);
     assert.ok(processDrift, JSON.stringify(drifts));
     assert.strictEqual(processDrift.actual, '0.15.0');
@@ -268,8 +269,8 @@ test('doctor --runtime --json is exposed through the CLI', (t) => {
   const parsed = JSON.parse(result.stdout);
   assert.ok(parsed.checks.runtime);
   assert.ok(Array.isArray(parsed.checks.runtime.drifts));
-  assert.strictEqual(parsed.checks.runtime.cli.version, '0.16.0');
-  assert.strictEqual(parsed.checks.runtime.current.version, '0.16.0');
+  assert.strictEqual(parsed.checks.runtime.cli.version, pkg.version);
+  assert.strictEqual(parsed.checks.runtime.current.version, pkg.version);
   for (const drift of parsed.checks.runtime.drifts) {
     assert.ok(drift.kind);
     assert.ok(drift.actual);
