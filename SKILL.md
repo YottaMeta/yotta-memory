@@ -230,7 +230,8 @@ yotta-memory doctor --json
    - 输出 `memory_home: <目录>`（已显式设置）→ 直接用该位置。
    - 输出 `memory_home: (未设置，默认 ~/.yottamemory)` → 🔒 征得同意后引导设置：问用户用默认还是指定目录（项目级 `<repo>/.yottamemory`、记忆盘等），确认后 AI 执行 `yotta-memory config set memory_home <目录>`，回读 `config get` 验证。
 2. **已有记忆**：目标目录已存在 `facts/` 等子目录或 `index.json` → 直接 recall；全新目录 → 按「便携记忆盘模式 §0.3」初始化。
-3. **私密区已加密（存在 `keys/`）**：先 `yotta-memory key list` 确认本智能体是否有 agent binding；没有 → 告知用户由用户自己执行 `yotta-memory view` → 浏览器打开平台 → 输入主口令 → 点「授权」并保存只展示一次的 `agent_key`。用户授权后服务端会写 `keys/pending/<id>.key`；AI 在新会话执行 `yotta-memory key status <id>`（需要时显式加 `--to <AI_HOME>` 或 `--agent-key-file <文件>`；默认发现规则见下），有 pending 就执行 `yotta-memory key claim <id>`，落到 `<AI_HOME>/.yotta-memory-agent-key` 后再使用 `--agent-key-file`。**升级后首次调用元忆 / 重启会话时**，若输出 `[YTM_MIGRATION_REQUIRED]`，必须主动把 marker、受影响 agent 和处理步骤转达给用户。**AI 不得代替用户执行 `migrate` / `key bind` 迁移**，只负责提醒和讲解（marker 只列仍有私密数据、未绑定的 agent；仅有 legacy cache、无迁移数据的 owner 会单独提示，不进入迁移清单；公共 FACT 不受影响）。
+3. **私密区为明文（无 `keys/`；`doctor` 显示「加密: 否」）**：首次使用即主动告知风险——明文私密记忆（PREF / BOUND / COMMIT）可被同机任何能读文件的进程或用户直接看到；然后给出《明文库转加密（第一次最短路径）》。口令与迁移必须由用户本人执行，AI 只讲解并负责后续 `key claim`。用户明确拒绝加密时，记录其选择并复述明文风险，不反复打扰。
+4. **私密区已加密（存在 `keys/`）**：先 `yotta-memory key list` 确认本智能体是否有 agent binding；没有 → 告知用户由用户自己执行 `yotta-memory view` → 浏览器打开平台 → 输入主口令 → 点「授权」并保存只展示一次的 `agent_key`。用户授权后服务端会写 `keys/pending/<id>.key`；AI 在新会话执行 `yotta-memory key status <id>`（需要时显式加 `--to <AI_HOME>` 或 `--agent-key-file <文件>`；默认发现规则见下），有 pending 就执行 `yotta-memory key claim <id>`，落到 `<AI_HOME>/.yotta-memory-agent-key` 后再使用 `--agent-key-file`。**升级后首次调用元忆 / 重启会话时**，若输出 `[YTM_MIGRATION_REQUIRED]`，必须主动把 marker、受影响 agent 和处理步骤转达给用户。**AI 不得代替用户执行 `migrate` / `key bind` 迁移**，只负责提醒和讲解（marker 只列仍有私密数据、未绑定的 agent；仅有 legacy cache、无迁移数据的 owner 会单独提示，不进入迁移清单；公共 FACT 不受影响）。
 
 **B. 确认本智能体唯一身份（强制，写私密记忆前必做）**：
 
@@ -311,6 +312,17 @@ yotta-memory doctor --json
 echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out "%USERPROFILE%\yotta-memory-recovery.key"
 ```
 
+口令传递方式（同一迁移命令，按终端选择一种；不要把口令写进 `--password` 参数）：
+
+| 场景 | 命令 |
+|---|---|
+| 非 TTY / 管道（推荐） | `echo 主口令 \| yotta-memory migrate --password-stdin --recovery-key-out "<钥匙文件>"` |
+| 交互终端 | `yotta-memory migrate --recovery-key-out "<钥匙文件>"`，按提示输入口令 |
+| PowerShell 环境变量 | `$env:YOTTA_MEMORY_PASS='<主口令>'; yotta-memory migrate --recovery-key-out "<钥匙文件>"; Remove-Item Env:\YOTTA_MEMORY_PASS` |
+| cmd 环境变量 | `set "YOTTA_MEMORY_PASS=<主口令>"`，执行 `yotta-memory migrate --recovery-key-out "<钥匙文件>"`，最后 `set "YOTTA_MEMORY_PASS="` |
+
+常见报错：`当前为非交互环境` = 没有 stdin 也没有 `YOTTA_MEMORY_PASS`；`'"..."' is not recognized` = 在 `cmd.exe` 里用了 PowerShell 的管道写法。口令含非 ASCII 时，PowerShell 可先设置 `$OutputEncoding=[Text.Encoding]::UTF8`。
+
 恢复钥匙文件必须离线保存，不要和记忆库或备份放在一起。
 
 2. **授权 AI（二选一，完全等价）**：
@@ -335,10 +347,21 @@ yotta-memory key bind <id>
 
 ```cmd
 yotta-memory key status <id>
-yotta-memory key claim <id>
+yotta-memory key claim <id> --to "<AI_HOME>"
 ```
 
 默认写入 `<AI_HOME>/.yotta-memory-agent-key`。
+
+4. **重建加密索引并验证**：
+
+```cmd
+yotta-memory reindex --agent <id> --agent-key-file "<AI_HOME>/.yotta-memory-agent-key"
+yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-memory-agent-key"
+```
+
+必须在授权并领取 agent_key 后执行 `reindex`。`migrate` 在没有 agent_key 时无法建立每 owner 加密索引；跳过这步会让私密 `recall` 看起来像“无匹配记忆”。
+
+5. **MCP 自检**：宿主 MCP 配置必须带 `--agent-key-file <AI_HOME>/.yotta-memory-agent-key`；只有 `--agent-id` 时，加密库的私密 MCP 调用会报缺少 agent_key，而 CLI 可能仍正常。补参后重启 MCP / 会话并回读验证。
 
 > 加密范围：`private/` 下的 PREF / BOUND / COMMIT 与画像索引；公共 `facts/` 仍为明文。
 

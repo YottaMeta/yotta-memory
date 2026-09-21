@@ -4345,6 +4345,7 @@ function migrateCore(root, password, recoveryKeyIn) {
   tail += '\n  推荐：yotta-memory view → 浏览器解锁 → 授权 <id> → 保存一次性 agent_key';
   tail += '\n  高级：yotta-memory key bind <id>';
   tail += '\n授权后 AI 执行：yotta-memory key status <id> → yotta-memory key claim <id> → <AI_HOME>/.yotta-memory-agent-key';
+  tail += '\n然后带 agent-key-file 重建加密索引：yotta-memory reindex --agent <id> --agent-key-file <AI_HOME>/.yotta-memory-agent-key';
   if (self && owners.indexOf(self) !== -1) tail += '\n你的身份：' + self + '。推荐直接在 yotta-memory view 页面授权它。';
   return { error: false, text: tail };
 }

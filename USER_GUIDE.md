@@ -140,6 +140,8 @@ statement: 本周完成发布
 echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out "%USERPROFILE%\yotta-memory-recovery.key"
 ```
 
+非 TTY 也可以使用 `YOTTA_MEMORY_PASS`（PowerShell / cmd 语法不同）；交互终端直接运行 `yotta-memory migrate --recovery-key-out "<钥匙文件>"` 并按提示输入口令。不要把口令写进 `--password` 参数。
+
 2. 授权 AI（二选一，等价）：
 
 - 推荐：`yotta-memory view` → 浏览器输入主口令 → 点「授权 <id>」→ 保存一次性 `agent_key`。
@@ -149,8 +151,19 @@ echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out "%USER
 
 ```cmd
 yotta-memory key status <id>
-yotta-memory key claim <id>
+yotta-memory key claim <id> --to "<AI_HOME>"
 ```
+
+4. 授权并领取 key 后，重建加密索引：
+
+```cmd
+yotta-memory reindex --agent <id> --agent-key-file "<AI_HOME>/.yotta-memory-agent-key"
+yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-memory-agent-key"
+```
+
+顺序必须是：迁移 → `view` / `key bind` → `key claim` → `reindex`。没有 agent_key 时 `reindex` 无法建立每 owner 加密索引。
+
+5. MCP 配置必须包含 `--agent-key-file <AI_HOME>/.yotta-memory-agent-key`；只有 `--agent-id` 时，加密库的私密 MCP 会报缺少 agent_key。
 
 **用户查看平台（看所有 AI 的记忆）**
 

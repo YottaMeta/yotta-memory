@@ -14,7 +14,7 @@
 echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out "%USERPROFILE%\yotta-memory-recovery.key"
 ```
 
-迁移后授权二选一（等价）：推荐 `yotta-memory view` 页面授权；高级用户可 `yotta-memory key bind <id>`。
+迁移后授权二选一（等价）：推荐 `yotta-memory view` 页面授权；高级用户可 `yotta-memory key bind <id>`。授权并 `key claim` 后，带 `--agent-key-file` 执行 `yotta-memory reindex` 重建每 owner 加密索引，再做 `recall` 验证。
 
 ## 2.1 非 TTY / GUI 宿主怎么初始化？
 不要依赖交互提示。用 `--password-stdin` 从管道读主口令（不进 argv），或用 `YOTTA_MEMORY_PASS`；恢复钥匙用 `--recovery-key-out <文件>` 写文件，避免 GUI 宿主吞掉 stdout。非 TTY 且未提供口令时会明确提示改用哪种方式，不会静默「已取消」。
@@ -27,6 +27,16 @@ v0.16.2 起，空加密库（没有 owner key）可用恢复钥匙校验主口�
 
 ## 2.4 迁移后必须 `key bind` 吗？
 不必。`yotta-memory view` 页面授权和 `yotta-memory key bind <id>` 是两条等价路径：两条都会写 `binding + pending`，随后 AI 都执行 `yotta-memory key status <id>` → `yotta-memory key claim <id>`，再落到 `<AI_HOME>/.yotta-memory-agent-key`。普通用户推荐 `view`，高级用户或无可视化环境再用 `key bind`。
+
+## 2.5 迁移后 `recall` 读不到私密怎么办？
+先确认已经完成授权和 `key claim`，再带 agent key 重建加密索引：
+
+```cmd
+yotta-memory reindex --agent <id> --agent-key-file "<AI_HOME>/.yotta-memory-agent-key"
+yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-memory-agent-key"
+```
+
+`migrate` 在没有 agent_key 时无法建立每 owner 加密索引，所以 `reindex` 必须在授权 / claim 之后执行。MCP 场景还要确认宿主配置带 `--agent-key-file`，只有 `--agent-id` 会报缺少 agent_key。
 
 ## 3. 多智能体权限怎么隔离？
 公共 FACT 所有智能体可读；PREF / BOUND / COMMIT 按 owner 物理隔离，调用方必须持有匹配的 `agent_key`（用户执行 `key bind <id>`，或在 `view` 平台授权获得）。owner ID 单独存在不构成认证，不授权 / 无 key 读不到。私密操作缺 key 时会输出 `[YTM_MIGRATION_REQUIRED]`；授权完成后该标记消失。AI 新会话用 `key status <id>` 检查，pending 存在则 `key claim <id>` 落到 `<AI_HOME>/.yotta-memory-agent-key`；`AI_HOME` 默认规则由 claim / status 共用（显式 `--to` / `--agent-key-file` > `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE` > Codex / OpenCode / 通用宿主默认），status 会显示 `checked` 与 `discovery`。吊销后旧 key 立即校验失败，需重新授权。
