@@ -8,6 +8,15 @@
 ## 2. 私密区加密怎么用？
 `init` 默认初始化加密库（需主口令 + 恢复钥匙，请妥善保存）；明文库可用 `migrate` 升级为加密。私密区文件为 `.md.enc`，可 git 版本化。查看/授权用 `yotta-memory view`（口令解锁，浏览/授权/吊销 AI）；授权时一次性展示的 `agent_key` 请立即保存，服务端同时写 `keys/pending/<id>.key` 供该 AI 新会话用 `key claim` 领取。出现 `[YTM_MIGRATION_REQUIRED]` 说明还有 agent 未绑定，请由你在 `view` 平台逐个点「授权」完成重新授权（AI 只提醒、不代执行）。
 
+## 2.1 非 TTY / GUI 宿主怎么初始化？
+不要依赖交互提示。用 `--password-stdin` 从管道读主口令（不进 argv），或用 `YOTTA_MEMORY_PASS`；恢复钥匙用 `--recovery-key-out <文件>` 写文件，避免 GUI 宿主吞掉 stdout。非 TTY 且未提供口令时会明确提示改用哪种方式，不会静默「已取消」。
+
+## 2.2 空加密库 `view` 打不开？
+v0.16.2 起，空加密库（没有 owner key）可用恢复钥匙校验主口令进入 `view`。如果页面显示「无 owner」，先在终端执行 `yotta-memory iam <id>` 登记身份，再回页面授权；也可以由用户在终端执行 `yotta-memory key bind <id>`。
+
+## 2.3 `--agent-key-file` 指向的文件不存在？
+文件不存在时不再致命：元忆降级为未授权模式，公共 FACT 仍可读；私密操作 fail-closed，并提示 `key bind <id>`。文件存在但为空或不可读仍会报错。推荐用 `YOTTA_MEMORY_AGENT_HOME` 指定宿主目录，授权后 key 原地生效。
+
 ## 3. 多智能体权限怎么隔离？
 公共 FACT 所有智能体可读；PREF / BOUND / COMMIT 按 owner 物理隔离，调用方必须持有匹配的 `agent_key`（用户执行 `key bind <id>`，或在 `view` 平台授权获得）。owner ID 单独存在不构成认证，不授权 / 无 key 读不到。私密操作缺 key 时会输出 `[YTM_MIGRATION_REQUIRED]`；授权完成后该标记消失。AI 新会话用 `key status <id>` 检查，pending 存在则 `key claim <id>` 落到 `<AI_HOME>/.yotta-memory-agent-key`；`AI_HOME` 默认规则由 claim / status 共用（显式 `--to` / `--agent-key-file` > `YOTTA_MEMORY_AGENT_HOME` / `YOTTA_MEMORY_AGENT_KEY_FILE` > Codex / OpenCode / 通用宿主默认），status 会显示 `checked` 与 `discovery`。吊销后旧 key 立即校验失败，需重新授权。
 

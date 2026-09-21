@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
 description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照
-version: 0.16.1
+version: 0.16.2
 license: MIT
 ---
 
@@ -264,11 +264,11 @@ yotta-memory doctor --json
 
 | 命令 | 作用 |
 |---|---|
-| `yotta-memory init [--project] [--dir <目录>] [--attach] [--encrypt|--no-encrypt]` | 初始化（**新建默认加密**：设主口令 + 抄下恢复钥匙；已有库必须用 `--attach`，默认拒绝覆盖；`--no-encrypt` 降级明文；老明文库用 `migrate`）|
-| `yotta-memory migrate` | 明文私密区 → 密文迁移（**由用户执行**；需主口令；迁移后打印恢复钥匙；不写明文授权缓存，授权由用户在 `view` 平台完成）|
-| `yotta-memory view [--port 8788] [--host 127.0.0.1]` | 用户查看平台（本机 Web：口令解锁浏览 / 搜索 / 导出全部 AI 记忆 + 授权 / 吊销 AI + 重设口令 + 显示恢复钥匙）|
+| `yotta-memory init [--project] [--dir <目录>] [--attach] [--encrypt|--no-encrypt] [--password-stdin] [--recovery-key-out <文件>]` | 初始化（**新建默认加密**：设主口令 + 抄下恢复钥匙；已有库必须用 `--attach`，默认拒绝覆盖；`--no-encrypt` 降级明文；老明文库用 `migrate`；非 TTY 用 `--password-stdin`；恢复钥匙可写文件）|
+| `yotta-memory migrate [--password-stdin] [--recovery-key-out <文件>]` | 明文库 → 密文迁移（**由用户执行**；需主口令；空明文库同样可启用加密；迁移后打印/写文件恢复钥匙；不写明文授权缓存，授权由用户在 `view` 平台完成）|
+| `yotta-memory view [--port 8788] [--host 127.0.0.1]` | 用户查看平台（本机 Web：口令解锁浏览 / 搜索 / 导出全部 AI 记忆 + 授权 / 吊销 AI + 重设口令 + 显示恢复钥匙；已在运行则复用 URL，端口占用给明确提示）|
 | `yotta-memory reset-password [--password <当前> | --recovery-key <钥匙>] [--new-password <新>]` | 重设主口令（忘口令用恢复钥匙）|
-| `yotta-memory key list / bind <id> / rotate <id> / claim <id> [--to <AI_HOME> | --agent-key-file <文件>] / status <id> [--to <AI_HOME> | --agent-key-file <文件>] / revoke <id>` | 管理 agent_key binding（**bind/rotate 由用户执行**，需主口令或恢复钥匙；claim/status 由 AI 读取 pending 并落到宿主目录，按同一 AI_HOME 发现规则；revoke 立即吊销该 AI 解密能力，旧 key 随即校验失败；`key list` 输出 `[YTM_MIGRATION_REQUIRED]` 时提醒用户走 `view` 重新授权）|
+| `yotta-memory key list / bind <id> / rotate <id> / claim <id> [--to <AI_HOME> | --agent-key-file <文件>] / status <id> [--to <AI_HOME> | --agent-key-file <文件>] / revoke <id>` | 管理 agent_key binding（**bind/rotate 由用户执行**，需主口令或恢复钥匙；claim/status 由 AI 读取 pending 并落到宿主目录，按同一 AI_HOME 发现规则；revoke 立即吊销该 AI 解密能力，旧 key 随即校验失败；`key list` 合并 `keys/*.key.enc`，显示仅有钥、尚未写记忆的 owner；输出 `[YTM_MIGRATION_REQUIRED]` 时提醒用户走 `view` 重新授权）|
 | `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入（同 subject+statement 自动更新；--owner 标注归属；--source 记录来源；--weight 重要性权重默认 1.0、去重取 max；--verify 写后回读校验；--no-hint 关闭类型启发式提示）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain] [--semantic] [--embedding <command>] [--embedding-timeout N]` | 检索（v0.8.0 默认语义检索：同义词 / 拼音全拼+首字母 / 字段加权 / 模糊匹配 + 效用分融合排序；v0.9.0 支持可选本地 embedding 插件，失败自动降级；`--explain` 显示命中理由与效用分项；`--semantic` 显式开启；读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 只作身份声明/展示，不授予跨读——读他人私密同样要授权；项目级优先）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
@@ -276,7 +276,7 @@ yotta-memory doctor --json
 | `yotta-memory forget <文件>` | 移入 `.trash/<时间>/` 回收区并写审计（v0.12.0；不再物理删除）|
 | `yotta-memory backup volumes / setup --dir <目录> / status / ensure-daily / schedule enable|disable|status` | 每日自动备份（v0.12.0；只展示实际枚举的异卷、用户确认一次位置后默认每日执行，Windows Task Scheduler / systemd timer / launchd 调度，`serve` 补跑）|
 | `yotta-memory backup create / list / doctor / restore <ID> --to <目录> / drill [<ID>]` | 备份、恢复与恢复演练（v0.12.0；独立盘校验、SHA-256 清单、排除 `keys/cache`、恢复默认只写新目录；drill 验证 manifest / 索引 / 测试私密解密）|
-| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（v0.12.2；根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）；加 `--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移 |
+| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（v0.12.2；根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）；全新空库的缺失 index / agents 降为 info；输出 agent home 发现规则与 `YOTTA_MEMORY_AGENT_HOME` 提示；加 `--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移 |
 | `yotta-memory archive [--days 180] [--threshold 0.35]` | 归档旧记忆（v0.8.0 统一效用分 + v0.10.0 分类型衰减；immutable / BOUND 豁免；私密归档入 `.archive/private/<owner>/<type>/`；阈值默认读 config `maintain_archived_utility`）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
@@ -292,6 +292,15 @@ yotta-memory doctor --json
 | `yotta-memory consolidate [--min-age N] [--min-idle N] [--max-utility N] [--min-group N] [--period N] [--type T] [--model <cmd>] [--apply] [--undo <batch>] [--batches]` | 周期摘要压缩（v0.10.0 压缩遗忘：把超龄 + 长期闲置 + 低效用的同主题旧记忆归纳成**带溯源**的周期摘要并留在活跃区，原文整体进 `.archive/`；默认 dry-run；immutable / BOUND 豁免，活跃 / 高效用记忆不动；`--apply` 执行并写批次审计，`--undo <batch>` 一键回滚（幂等），`--batches` 查近期批次；`--model` 仅本地 CLI）|
 | `yotta-memory distill [--owner <id>] [--subject <主题>] [--model <cmd>] [--out <路径>]` | 心理日志蒸馏（v0.8.0 自我提升：统计摘要 / 主题画像 / 知识地图；启发式零依赖，`--model` 可选外部模型 stdin→stdout 提炼；私密产物入 `private/<owner>/distills/`，公共入 `facts/distills/`）|
 | `yotta-memory explain <文件|主题>` | 查看单条记忆效用分项与归档 / 遗忘状态判定（v0.8.0）|
+
+### 首启（非 TTY / GUI 宿主）
+
+- **非 TTY 初始化 / 迁移**：用 `--password-stdin` 从管道读主口令（不进 argv），或设 `YOTTA_MEMORY_PASS`；不要依赖交互提示，非 TTY 下会给出可操作错误而不是静默「已取消」。
+- **恢复钥匙写文件**：`--recovery-key-out <文件>`（`init` / `migrate`）把恢复钥匙写入文件，适配 Windows GUI 宿主 stdout 不可捕获；不要把钥匙粘贴到对话。
+- **缺 `--agent-key-file`**：文件不存在时降级为未授权模式（公共 FACT 可读，私密操作 fail-closed 并提示 `key bind <id>`）；文件存在但为空 / 不可读仍报错。
+- **空明文库启用加密**：`yotta-memory migrate --password-stdin` 可直接为空的明文库创建加密层（不创建 owner key），随后为每个 agent 执行 `yotta-memory key bind <id>`。
+- **空加密库授权**：`yotta-memory view` 在无 owner key 时可用恢复钥匙校验主口令进入平台；无 owner 时先 `yotta-memory iam <id>`，再回页面授权。
+- **view 端口**：启动前做健康检查；已在运行则打印 URL 复用，端口被占用给明确提示，不再抛未处理的 `EADDRINUSE`。
 
 ## 存储格式（摘要）
 
