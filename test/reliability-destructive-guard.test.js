@@ -59,7 +59,9 @@ function makeStore() {
 }
 
 function auditText(root) {
-  const file = path.join(root, '.archive', 'audit-' + new Date().toISOString().slice(0, 10) + '.jsonl');
+  const now = new Date();
+  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const file = path.join(root, '.archive', 'audit-' + localDate + '.jsonl');
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
 }
 

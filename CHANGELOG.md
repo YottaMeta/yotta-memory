@@ -1,3 +1,13 @@
+## v0.16.3 (2026-09-22)
+
+**迁移最短路径与授权引导修复**
+
+- `migrate` 成功输出不再只提示 `key bind`：现在明确输出“授权二选一（等价）”——推荐 `yotta-memory view` 页面授权，高级 CLI 方式为 `yotta-memory key bind <id>`，随后 AI 统一执行 `key status` → `key claim`。
+- `SKILL.md`、`USER_GUIDE.md`、`references/faq.md`、中英 README 统一加入明文库第一次转加密命令：`echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out ...`，不再在首启 / 加密流程 / CLI 速查里分散写半截步骤。
+- `--help` 的 `migrate` 行同步给出首次迁移命令与两条等价授权路径。
+- 新增 `test/migration-guidance.test.js`，锁定迁移命令、`view` / `key bind` 等价关系和 CLI 帮助口径。
+- 版本对齐：package.json / SKILL.md frontmatter / skill-manifest.json / CHANGELOG / 引擎 VERSION = 0.16.3。
+
 ## v0.16.2 (2026-09-21)
 
 **首启修复：空加密库可解锁、非 TTY 可自举、缺 key 降级未授权**

@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
 description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照
-version: 0.16.2
+version: 0.16.3
 license: MIT
 ---
 
@@ -265,7 +265,7 @@ yotta-memory doctor --json
 | 命令 | 作用 |
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>] [--attach] [--encrypt|--no-encrypt] [--password-stdin] [--recovery-key-out <文件>]` | 初始化（**新建默认加密**：设主口令 + 抄下恢复钥匙；已有库必须用 `--attach`，默认拒绝覆盖；`--no-encrypt` 降级明文；老明文库用 `migrate`；非 TTY 用 `--password-stdin`；恢复钥匙可写文件）|
-| `yotta-memory migrate [--password-stdin] [--recovery-key-out <文件>]` | 明文库 → 密文迁移（**由用户执行**；需主口令；空明文库同样可启用加密；迁移后打印/写文件恢复钥匙；不写明文授权缓存，授权由用户在 `view` 平台完成）|
+| `yotta-memory migrate [--password-stdin] [--recovery-key-out <文件>]` | 明文库 → 密文迁移（**由用户执行**；首次迁移命令、`view` 授权与 `key bind` 等价关系见《明文库转加密（第一次最短路径）》）|
 | `yotta-memory view [--port 8788] [--host 127.0.0.1]` | 用户查看平台（本机 Web：口令解锁浏览 / 搜索 / 导出全部 AI 记忆 + 授权 / 吊销 AI + 重设口令 + 显示恢复钥匙；已在运行则复用 URL，端口占用给明确提示）|
 | `yotta-memory reset-password [--password <当前> | --recovery-key <钥匙>] [--new-password <新>]` | 重设主口令（忘口令用恢复钥匙）|
 | `yotta-memory key list / bind <id> / rotate <id> / claim <id> [--to <AI_HOME> | --agent-key-file <文件>] / status <id> [--to <AI_HOME> | --agent-key-file <文件>] / revoke <id>` | 管理 agent_key binding（**bind/rotate 由用户执行**，需主口令或恢复钥匙；claim/status 由 AI 读取 pending 并落到宿主目录，按同一 AI_HOME 发现规则；revoke 立即吊销该 AI 解密能力，旧 key 随即校验失败；`key list` 合并 `keys/*.key.enc`，显示仅有钥、尚未写记忆的 owner；输出 `[YTM_MIGRATION_REQUIRED]` 时提醒用户走 `view` 重新授权）|
@@ -295,12 +295,52 @@ yotta-memory doctor --json
 
 ### 首启（非 TTY / GUI 宿主）
 
-- **非 TTY 初始化 / 迁移**：用 `--password-stdin` 从管道读主口令（不进 argv），或设 `YOTTA_MEMORY_PASS`；不要依赖交互提示，非 TTY 下会给出可操作错误而不是静默「已取消」。
+- **非 TTY 初始化 / 迁移**：完整步骤见下一节《明文库转加密（第一次最短路径）》。
 - **恢复钥匙写文件**：`--recovery-key-out <文件>`（`init` / `migrate`）把恢复钥匙写入文件，适配 Windows GUI 宿主 stdout 不可捕获；不要把钥匙粘贴到对话。
 - **缺 `--agent-key-file`**：文件不存在时降级为未授权模式（公共 FACT 可读，私密操作 fail-closed 并提示 `key bind <id>`）；文件存在但为空 / 不可读仍报错。
-- **空明文库启用加密**：`yotta-memory migrate --password-stdin` 可直接为空的明文库创建加密层（不创建 owner key），随后为每个 agent 执行 `yotta-memory key bind <id>`。
 - **空加密库授权**：`yotta-memory view` 在无 owner key 时可用恢复钥匙校验主口令进入平台；无 owner 时先 `yotta-memory iam <id>`，再回页面授权。
 - **view 端口**：启动前做健康检查；已在运行则打印 URL 复用，端口被占用给明确提示，不再抛未处理的 `EADDRINUSE`。
+
+### 明文库转加密（第一次最短路径）
+
+> 适用于 `yotta-memory 0.16.2+`。迁移前先完整备份。
+
+1. **迁移**：
+
+```cmd
+echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out "%USERPROFILE%\yotta-memory-recovery.key"
+```
+
+恢复钥匙文件必须离线保存，不要和记忆库或备份放在一起。
+
+2. **授权 AI（二选一，完全等价）**：
+
+推荐：网页授权
+
+```cmd
+yotta-memory view
+```
+
+浏览器输入主口令，点击 `授权 <id>`，保存只显示一次的 `agent_key`。
+
+高级：CLI 等价方式
+
+```cmd
+yotta-memory key bind <id>
+```
+
+两种方式都会写 binding + pending，效果相同。
+
+3. **AI 领取 key**：
+
+```cmd
+yotta-memory key status <id>
+yotta-memory key claim <id>
+```
+
+默认写入 `<AI_HOME>/.yotta-memory-agent-key`。
+
+> 加密范围：`private/` 下的 PREF / BOUND / COMMIT 与画像索引；公共 `facts/` 仍为明文。
 
 ## 存储格式（摘要）
 
@@ -340,8 +380,8 @@ yotta-memory doctor --json
 
 ### 流程
 1. **建加密库**：`yotta-memory init --encrypt`（新建默认加密）→ 设主口令 → 抄下恢复钥匙离线保存。
-2. **老库迁移**：由用户执行 `yotta-memory migrate`（需主口令）→ 明文私密逐文件加密后删除明文 → 打印恢复钥匙。迁移不写明文授权缓存；每个 AI 的重新授权由用户自己在 `yotta-memory view` 平台完成并自行备份弹窗 `agent_key`；AI 随后用 `key status` / `key claim` 领取（AI 只提醒授权，不代执行 `migrate` / `key bind`）。
-3. **AI 读写自己的私密（v0.16.0）**：用户侧完成一次 `yotta-memory view` 授权（或用户自行执行 `yotta-memory key bind <id>`），生成只展示一次的 `agent_key`，并写入 `keys/bindings/<id>.key.agent` 与临时 `keys/pending/<id>.key`。AI 新会话用 `key status` / `key claim` 将 pending 落到 `<AI_HOME>/.yotta-memory-agent-key`，之后 CLI 用 `--agent <id> --agent-key-file <宿主key文件>`；stdio MCP 用 `--agent-id <id> --agent-key-file <宿主key文件>`；HTTP MCP 用 `X-Agent-Id` + `X-Agent-Key` 请求头。owner ID 单独存在时不能解密私密；legacy `keys/cache/<id>.key` 不再加载。
+2. **老库迁移 / 重新授权**：完整步骤见《明文库转加密（第一次最短路径）》。迁移与授权由用户执行，AI 只提醒，不代执行 `migrate` / `key bind`。
+3. **AI 读写自己的私密（v0.16.0）**：授权入口为 `yotta-memory view` 或等价的 `yotta-memory key bind <id>`；生成只展示一次的 `agent_key`，并写入 `keys/bindings/<id>.key.agent` 与临时 `keys/pending/<id>.key`。AI 新会话用 `key status` / `key claim` 将 pending 落到 `<AI_HOME>/.yotta-memory-agent-key`，之后 CLI 用 `--agent <id> --agent-key-file <宿主key文件>`；stdio MCP 用 `--agent-id <id> --agent-key-file <宿主key文件>`；HTTP MCP 用 `X-Agent-Id` + `X-Agent-Key` 请求头。owner ID 单独存在时不能解密私密；legacy `keys/cache/<id>.key` 不再加载。
 4. **用户查看全部 AI 记忆**：`yotta-memory view` → 输口令 → 浏览 / 搜索 / 导出全部（含各 AI 私密明文，仅用户可见）。口令只在本地内存派生，不落盘、不发远端；默认仅 127.0.0.1，远程需 `--host` 显式开启。
 5. **口令管理**：`yotta-memory reset-password`（当前口令或恢复钥匙）；`key revoke <id>` 立即吊销某 AI 的 agent binding（该 AI 随即失去解密能力）。`view` 平台的「授权」只对未绑定 agent 生成新 key；已绑定的 agent 需先「吊销」再授权，避免误打断在用的 agent_key。
 

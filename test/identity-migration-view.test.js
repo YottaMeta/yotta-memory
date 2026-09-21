@@ -98,7 +98,9 @@ test('migrate survives a plaintext store and reports the rebind step', (t) => {
   const r = run(['migrate', '--password', PASS, '--agent', 'codex'], home);
   assert.strictEqual(r.status, 0, r.stderr || r.stdout);
   assert.match(r.stdout, /已迁移 \d+ 个私密文件/);
-  assert.match(r.stdout, /key bind codex/);
+  assert.match(r.stdout, /yotta-memory view/);
+  assert.match(r.stdout, /yotta-memory key bind <id>/);
+  assert.match(r.stdout, /你的身份：codex/);
   assert.ok(MOD.isEncrypted(home), 'store should be encrypted after migrate');
   assert.ok(!fs.existsSync(path.join(home, 'keys', 'cache', 'codex.key')));
 });

@@ -127,9 +127,30 @@ statement: 本周完成发布
 **启用与迁移**
 
 - **新库**：`yotta-memory init`（新建默认加密）→ 输入主口令两次 → **抄下打印的恢复钥匙**（44 位 base64，离线保存；忘口令时用它重设）。不要加密用 `--no-encrypt`。
-- **老明文库升级**：`yotta-memory migrate` → 输入主口令 → 私密文件逐个加密、明文删除 → 抄下恢复钥匙。**空明文库也可以直接 migrate**（只创建加密层，不创建 owner key），随后为每个 agent 执行 `key bind <id>`。
-- **非 TTY / GUI 宿主**：不要依赖交互口令——用 `--password-stdin` 从管道读主口令（推荐，不进 argv），或设 `YOTTA_MEMORY_PASS`；用 `--recovery-key-out <文件>` 把恢复钥匙写文件，避免 stdout 被 GUI 宿主吞掉。当前为非交互环境且未提供口令时，命令会给出可操作错误，不再静默「已取消」。
+- **老明文库升级 / 非 TTY**：见下方《明文库转加密（第一次最短路径）》，只保留一套步骤。
 - **缺 `--agent-key-file`**：文件不存在时降级为未授权模式——公共 FACT 可读，私密操作 fail-closed 并提示 `key bind <id>`；文件存在但为空 / 不可读仍报错。
+
+**明文库转加密（第一次最短路径）**
+
+> 适用于 `yotta-memory 0.16.2+`。迁移前先完整备份。
+
+1. 迁移：
+
+```cmd
+echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out "%USERPROFILE%\yotta-memory-recovery.key"
+```
+
+2. 授权 AI（二选一，等价）：
+
+- 推荐：`yotta-memory view` → 浏览器输入主口令 → 点「授权 <id>」→ 保存一次性 `agent_key`。
+- 高级：`yotta-memory key bind <id>`。
+
+3. AI 领取 key：
+
+```cmd
+yotta-memory key status <id>
+yotta-memory key claim <id>
+```
 
 **用户查看平台（看所有 AI 的记忆）**
 
