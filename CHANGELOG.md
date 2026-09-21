@@ -5,11 +5,12 @@
 - 修复空加密库 `view` 授权死锁：`/api/unlock` 在无 owner key 时用恢复钥匙校验主口令，空库可进入授权平台；无 owner 时页面提示先执行 `yotta-memory iam <id>`。
 - 非 TTY 环境不再静默「已取消」：`init --encrypt` / `migrate` / `reset-password` / `key bind` 给出可操作错误；新增 `--password-stdin`（管道读口令，不进 argv）。
 - `--agent-key-file` 指向不存在的文件时降级为未授权模式：公共 FACT 可读，私密操作 fail-closed 并提示 `key bind`；文件存在但为空 / 不可读仍报错。
+- 空加密库 `iam` 先登记身份、不因自我档案写失败而退出；授权后带 `--agent-key-file` 重新执行 `iam --force` 写入加密档案。
 - `migrate` 支持空明文库直接启用加密（创建 salt + recovery，不创建 owner key），迁移后提示 `key bind`。
 - 新增 `--recovery-key-out <文件>`：恢复钥匙写文件（`init` / `migrate`），不在 stdout 打印完整钥匙，适配 GUI 宿主 stdout 不可捕获场景。
 - `init --attach` / `init --no-encrypt` 明确输出当前模式（明文 / 加密）与下一步。
 - `isExistingStore` 不再把 `agents.json` 单独视为现有库；`key list` 合并 `keys/*.key.enc`，显示仅有钥、尚未写记忆的 owner。
-- `doctor` 对全新空库的缺失 index / agents 降为 info（不再误报），输出 agent home 发现规则与 `YOTTA_MEMORY_AGENT_HOME` 提示。
+- `doctor` 对全新空库的缺失 index / agents 降为 info（不再误报）；只有私密数据、没有公共 FACT 的库不再误报公共索引缺失；输出 agent home 发现规则与 `YOTTA_MEMORY_AGENT_HOME` 提示。
 - `view` 启动前做端口健康检查：已在运行则复用并打印 URL；端口被占用给明确错误；`server.on('error')` 不再抛未处理异常。
 - 明文库 `view` 提示改写 stdout，GUI 宿主可感知。
 - 新增 `test/firstboot-0.16.2.test.js`（15 项首启回归）；全量 `npm test` 148/148 PASS。
