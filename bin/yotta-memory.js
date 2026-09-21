@@ -2938,6 +2938,15 @@ function storeHasMemoryData(root) {
   }
   return false;
 }
+function storeHasPublicFacts(root) {
+  const factsDir = path.join(root, PUBLIC_DIR);
+  if (!fs.existsSync(factsDir)) return false;
+  try {
+    return fs.readdirSync(factsDir).some(function (f) { return /\.md(\.enc)?$/.test(f); });
+  } catch (e) {
+    return false;
+  }
+}
 // 开工可靠性检查：只读检查根目录、密钥库、索引、身份登记与最近备份。
 function doctorCore(opts) {
   opts = opts || {};
@@ -2948,6 +2957,7 @@ function doctorCore(opts) {
   const critical = [];
   const exists = isExistingStore(root);
   const hasData = storeHasMemoryData(root);
+  const hasPublicFacts = storeHasPublicFacts(root);
   checks.root = { ok: exists, path: root };
   if (!exists) critical.push('记忆库不存在或基本结构缺失: ' + root);
 
@@ -2969,7 +2979,7 @@ function doctorCore(opts) {
   const idxFile = indexPath(root);
   if (!fs.existsSync(idxFile)) {
     checks.index = { exists: false, valid: false };
-    if (hasData) warnings.push('公共索引缺失；可运行 yotta-memory reindex 重建。');
+    if (hasPublicFacts) warnings.push('公共索引缺失；可运行 yotta-memory reindex 重建。');
     else checks.index.fresh = true;
   } else if (!loadIndex(root)) {
     checks.index = { exists: true, valid: false };
@@ -5319,12 +5329,28 @@ function cmdIam(agentId, opts) {
   const existed = data.agents[agentId];
   data.agents[agentId] = { host: host, created: (existed && existed.created) || today() };
   saveAgents(root, data);
-  const file = writeSelfProfile(root, agentId, { mcpMode: 'stdio', name: opts.name, userName: opts.user, relationship: opts.relationship });
+  const profileIdentity = resolveIdentity({ agent: agentId, agentKey: opts.agentKey, agentKeyFile: opts.agentKeyFile });
+  if (profileIdentity && !profileIdentity.error && profileIdentity.id) {
+    setRuntimeAgent(profileIdentity.id, profileIdentity.agentKey);
+  }
+  let profile = '';
+  let profileWarning = '';
+  try {
+    profile = writeSelfProfile(root, agentId, { mcpMode: 'stdio', name: opts.name, userName: opts.user, relationship: opts.relationship });
+  } catch (e) {
+    const message = e && e.message ? e.message : String(e);
+    if (isEncrypted(root) && /授权密钥|加密/.test(message)) {
+      profileWarning = '自我档案暂未写入：当前加密库还没有 ' + agentId + ' 的授权密钥。请先完成授权（yotta-memory view 或 yotta-memory key bind ' + agentId + '），再在已授权的会话中执行 yotta-memory iam ' + agentId + ' --force --agent-key-file <宿主key文件> 写入档案。';
+    } else {
+      throw e;
+    }
+  }
   console.log('已登记智能体身份: ' + agentId + '（host=' + host + '，' + (conflict ? '--force 覆盖' : '新建') + '）');
   if (opts.name || opts.user || opts.relationship) {
     console.log('自我档案扩展: ' + [opts.name && '显示名=' + opts.name, opts.user && '用户=' + opts.user, opts.relationship && '关系=' + opts.relationship].filter(Boolean).join(' / '));
   }
-  console.log('已写入自我档案: ' + file);
+  if (profile) console.log('已写入自我档案: ' + profile);
+  if (profileWarning) console.log(profileWarning);
   console.log('本机免 token：以后用 whoami 确认身份；远端接入需 token new --agent ' + agentId);
 }
 function cmdWhoami(opts) {

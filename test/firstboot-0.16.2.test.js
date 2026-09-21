@@ -222,3 +222,41 @@ test('migrate enables encryption on an empty plaintext store and points to key b
   assert.ok(MOD.isEncrypted(home), 'empty plaintext store should become encrypted');
   assert.match(migrate.stdout + migrate.stderr, /key bind/);
 });
+
+test('iam registers an identity on a fresh encrypted store without an owner key', (t) => {
+  const home = tmpHome(t);
+  const init = run(['init', '--encrypt'], home, { YOTTA_MEMORY_PASS: PASS });
+  assert.strictEqual(init.status, 0, init.stderr || init.stdout);
+  const iam = run(['iam', 'yottacode-desktop', '--name', 'YottaCode Desktop'], home);
+  assert.strictEqual(iam.status, 0, iam.stderr || iam.stdout);
+  assert.match(iam.stdout + iam.stderr, /已登记智能体身份/);
+  const agents = JSON.parse(fs.readFileSync(path.join(home, 'agents.json'), 'utf8'));
+  assert.ok(agents.agents['yottacode-desktop']);
+  assert.match(iam.stdout + iam.stderr, /授权|key bind|自我档案/);
+});
+
+test('iam writes the self profile after the owner key exists', (t) => {
+  const home = tmpHome(t);
+  assert.strictEqual(run(['init', '--encrypt'], home, { YOTTA_MEMORY_PASS: PASS }).status, 0);
+  assert.strictEqual(run(['iam', 'yottacode-desktop'], home).status, 0);
+  const bind = run(['key', 'bind', 'yottacode-desktop', '--password', PASS], home);
+  assert.strictEqual(bind.status, 0, bind.stderr || bind.stdout);
+  const aiHome = path.join(home, 'aihome');
+  const claim = run(['key', 'claim', 'yottacode-desktop', '--to', aiHome], home);
+  assert.strictEqual(claim.status, 0, claim.stderr || claim.stdout);
+  const keyFile = path.join(aiHome, '.yotta-memory-agent-key');
+  const again = run(['iam', 'yottacode-desktop', '--force', '--agent-key-file', keyFile], home);
+  assert.strictEqual(again.status, 0, again.stderr || again.stdout);
+  assert.match(again.stdout, /已写入自我档案/);
+});
+
+test('doctor does not warn about the public index for a private-only store', (t) => {
+  const home = tmpHome(t);
+  const init = run(['init', '--no-encrypt'], home);
+  assert.strictEqual(init.status, 0, init.stderr || init.stdout);
+  const dir = path.join(home, 'private', 'codex', 'prefs');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '2026-09-21-0001.md'), '# PREF\n', 'utf8');
+  const report = MOD.doctorCore({ root: home });
+  assert.doesNotMatch(report.text, /公共索引缺失/);
+});
