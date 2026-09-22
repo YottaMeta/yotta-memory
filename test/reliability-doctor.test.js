@@ -35,7 +35,27 @@ test('doctorCore reports a healthy plaintext store with a backup warning', () =>
     assert.strictEqual(report.error, false);
     assert.strictEqual(report.ok, true);
     assert.strictEqual(report.level, 'warning');
+    assert.strictEqual(report.schemaVersion, 1);
+    assert.strictEqual(report.encryption, false);
+    assert.deepStrictEqual(report.migration_required, []);
     assert.match(report.text, /备份/);
+  });
+});
+
+test('doctorCore exposes stable encrypted and migration contract fields', () => {
+  withConfigDir(() => {
+    const root = tmpdir('ytm-doctor-contract-');
+    fs.mkdirSync(path.join(root, 'private', 'codex'), { recursive: true });
+    memory.initEncryptionCore(root, 'doctor-contract-pass', null);
+
+    const report = memory.doctorCore({ root, backupSetupChoice: 'manual' });
+
+    assert.strictEqual(report.schemaVersion, 1);
+    assert.strictEqual(report.encryption, true);
+    assert.deepStrictEqual(report.migration_required, [
+      { agent: 'codex', reason: 'no_agent_binding' },
+    ]);
+    assert.ok(report.warnings.some((item) => item.includes('[YTM_MIGRATION_REQUIRED]')));
   });
 });
 

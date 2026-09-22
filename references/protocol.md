@@ -192,6 +192,7 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 - `runtime.json` 记录 `current / previous / versions[].treeHash / installedAt`；`runtime status` 报告 current 指针与版本目录漂移。
 - stdio MCP、`lan enable`、备份调度只引用 `<runtimeRoot>/current/bin/yotta-memory.js`；`runtime use --restart` 尝试重启受管 server，失败时把 current 切回旧版本。
 - `doctor --runtime` 检查 CLI / current / `runtime.json` / MCP 配置 / 运行中 server / 技能副本 / 身份模式；漂移项包含 actual / expected / fix / blocking。
+- `doctor --json` 稳定顶层字段（v0.16.5）：`schemaVersion`（当前 `1`）、`encryption`（布尔）、`migration_required`（`[{agent, reason}]`）；原有 `checks` / `warnings` / `identity` / `text` 保持兼容。
 - MCP `initialize` / `server/discover` 的 `serverInfo` 返回 `runtimePath` / `identityMode`（`headers` / `stdio-args`）/ `toolProfile`（`core` / `full`）。
 
 ### MCP 工具分组（v0.15.0）

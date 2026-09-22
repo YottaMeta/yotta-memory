@@ -1,3 +1,13 @@
+## v0.16.5 (2026-09-22)
+
+**doctor --json 稳定契约补齐**
+
+- `doctor --json` 顶层新增 `schemaVersion: 1`、`encryption: boolean`、`migration_required: [{ agent, reason }]`。
+- 保留 `checks`、`warnings`、`identity`、`text` 等既有字段；旧消费方无需改动。
+- `migrationRequiredInfo()` 同步返回逐 owner 的 `entries`，供 CLI JSON 与宿主契约共用。
+- 回归覆盖明文库空迁移数组、加密库未绑定 owner 迁移条目及 warning 兼容。
+- 版本对齐：package.json / SKILL.md frontmatter / skill-manifest.json / CHANGELOG / 引擎 VERSION = 0.16.5。
+
 ## v0.16.4 (2026-09-22)
 
 **agent-key 缺文件提示范围修复**

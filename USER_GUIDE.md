@@ -270,7 +270,7 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 
 ## 3.9 开工 doctor 与事务快照（v0.12.2）
 
-- `yotta-memory doctor`：只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份；加 `--json` 可输出机器可读结果与 `identity.mode` / `identity.agentKeyStatus`。
+- `yotta-memory doctor`：只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份；加 `--json` 可输出机器可读结果，顶层含 `schemaVersion` / `encryption` / `migration_required`，并保留 `identity.mode` / `identity.agentKeyStatus`。
 - 严重异常（根目录缺失、密钥库缺文件、备份目录同卷）会返回非零退出码；此时 `context` 也会显示“破坏性写入已锁定”。
 - `maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在写入前自动创建新的整库事务快照，并在 `.archive/audit-<日期>.jsonl` 记录 transaction / operation / snapshot。
 - 未配置独立备份目录、doctor critical 或快照失败时，命令直接拒绝执行，原记忆保持不变；`forget` 仍只移入 `.trash/`，不重复创建整库快照。
