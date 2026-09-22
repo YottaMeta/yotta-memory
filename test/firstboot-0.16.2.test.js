@@ -58,7 +58,7 @@ async function viewApi(port, pathname, body) {
   return { status: res.status, data: await res.json() };
 }
 
-test('missing --agent-key-file degrades to unauthenticated public-only mode', (t) => {
+test('missing --agent-key-file is quiet for public reads', (t) => {
   const home = tmpHome(t);
   const init = run(['init', '--no-encrypt'], home);
   assert.strictEqual(init.status, 0, init.stderr || init.stdout);
@@ -68,22 +68,89 @@ test('missing --agent-key-file degrades to unauthenticated public-only mode', (t
   const missing = path.join(home, 'keys', 'missing.key');
   const who = run(['whoami', '--agent', 'codex', '--agent-key-file', missing], home);
   assert.strictEqual(who.status, 0, who.stderr || who.stdout);
-  assert.match(who.stdout + who.stderr, /未授权|key 文件.*不存在|降级/);
+  assert.strictEqual(who.stderr, '');
+  assert.doesNotMatch(who.stdout, /未找到 agent-key 文件|已降级为未授权模式/);
 
   const recall = run(['recall', 'firstboot-public', '--agent', 'codex', '--agent-key-file', missing], home);
   assert.strictEqual(recall.status, 0, recall.stderr || recall.stdout);
+  assert.strictEqual(recall.stderr, '');
   assert.match(recall.stdout, /public fact survives/);
 });
 
-test('missing --agent-key-file fails closed for private writes', (t) => {
+test('non-private commands keep stderr clean when --agent-key-file is missing', (t) => {
+  const home = tmpHome(t);
+  const init = run(['init', '--no-encrypt'], home);
+  assert.strictEqual(init.status, 0, init.stderr || init.stdout);
+  const missing = path.join(home, 'keys', 'missing.key');
+
+  const doctor = run(['doctor', '--agent', 'codex', '--agent-key-file', missing], home);
+  assert.strictEqual(doctor.status, 0, doctor.stderr || doctor.stdout);
+  assert.strictEqual(doctor.stderr, '');
+  assert.doesNotMatch(doctor.stdout + doctor.stderr, /未找到 agent-key 文件|已降级为未授权模式/);
+
+  const config = run(['config', 'get', '--agent', 'codex', '--agent-key-file', missing], home);
+  assert.strictEqual(config.status, 0, config.stderr || config.stdout);
+  assert.strictEqual(config.stderr, '');
+  assert.doesNotMatch(config.stdout + config.stderr, /未找到 agent-key 文件|已降级为未授权模式/);
+});
+
+test('migrate keeps stderr clean when --agent-key-file is missing', (t) => {
+  const home = tmpHome(t);
+  const init = run(['init', '--no-encrypt'], home);
+  assert.strictEqual(init.status, 0, init.stderr || init.stdout);
+  const missing = path.join(home, 'keys', 'missing.key');
+  const migrate = run(['migrate', '--password', PASS, '--agent', 'codex', '--agent-key-file', missing], home);
+  assert.strictEqual(migrate.status, 0, migrate.stderr || migrate.stdout);
+  assert.strictEqual(migrate.stderr, '');
+  assert.doesNotMatch(migrate.stdout + migrate.stderr, /未找到 agent-key 文件|已降级为未授权模式/);
+});
+
+test('identity JSON diagnostics expose missing agent-key state without stderr noise', (t) => {
+  const home = tmpHome(t);
+  const init = run(['init', '--no-encrypt'], home);
+  assert.strictEqual(init.status, 0, init.stderr || init.stdout);
+  const missing = path.join(home, 'keys', 'missing.key');
+
+  const who = run(['whoami', '--agent', 'codex', '--agent-key-file', missing, '--json'], home);
+  assert.strictEqual(who.status, 0, who.stderr || who.stdout);
+  assert.strictEqual(who.stderr, '');
+  const whoJson = JSON.parse(who.stdout);
+  assert.strictEqual(whoJson.identity.mode, 'unauthenticated');
+  assert.strictEqual(whoJson.identity.agentKeyStatus, 'missing');
+  assert.strictEqual(path.resolve(whoJson.identity.keyFile), path.resolve(missing));
+
+  const doctor = run(['doctor', '--json', '--agent', 'codex', '--agent-key-file', missing], home);
+  assert.strictEqual(doctor.status, 0, doctor.stderr || doctor.stdout);
+  assert.strictEqual(doctor.stderr, '');
+  const doctorJson = JSON.parse(doctor.stdout);
+  assert.strictEqual(doctorJson.identity.mode, 'unauthenticated');
+  assert.strictEqual(doctorJson.identity.agentKeyStatus, 'missing');
+
+  const config = run(['config', 'get', '--json', '--agent', 'codex', '--agent-key-file', missing], home);
+  assert.strictEqual(config.status, 0, config.stderr || config.stdout);
+  assert.strictEqual(config.stderr, '');
+  const configJson = JSON.parse(config.stdout);
+  assert.strictEqual(configJson.identity.mode, 'unauthenticated');
+  assert.strictEqual(configJson.identity.agentKeyStatus, 'missing');
+});
+
+test('missing --agent-key-file fails closed with an actionable private-access error', (t) => {
   const home = tmpHome(t);
   const init = run(['init', '--encrypt'], home, { YOTTA_MEMORY_PASS: PASS });
   assert.strictEqual(init.status, 0, init.stderr || init.stdout);
   const missing = path.join(home, 'keys', 'missing.key');
   const write = run(['remember', 'PREF', 'firstboot-private', 'must not be written', '--agent', 'codex', '--agent-key-file', missing], home);
   assert.notStrictEqual(write.status, 0);
+  assert.strictEqual(write.stderr, '');
   assert.doesNotMatch(write.stdout + write.stderr, /无法读取 agent-key 文件/);
-  assert.match(write.stdout + write.stderr, /未授权|授权|key/);
+  assert.match(write.stdout + write.stderr, /未找到 agent-key 文件/);
+  assert.match(write.stdout + write.stderr, /key status|key claim|key bind|view/);
+
+  const context = run(['context', '--agent', 'codex', '--agent-key-file', missing], home);
+  assert.strictEqual(context.status, 3, context.stderr || context.stdout);
+  assert.strictEqual(context.stderr, '');
+  assert.match(context.stdout, /未找到 agent-key 文件/);
+  assert.match(context.stdout, /key status|key claim|key bind|view/);
 });
 
 test('non-TTY init --encrypt gives an actionable error instead of silent cancel', (t) => {

@@ -128,11 +128,11 @@ statement: 本周完成发布
 
 - **新库**：`yotta-memory init`（新建默认加密）→ 输入主口令两次 → **抄下打印的恢复钥匙**（44 位 base64，离线保存；忘口令时用它重设）。不要加密用 `--no-encrypt`。
 - **老明文库升级 / 非 TTY**：见下方《明文库转加密（第一次最短路径）》，只保留一套步骤。
-- **缺 `--agent-key-file`**：文件不存在时降级为未授权模式——公共 FACT 可读，私密操作 fail-closed 并提示 `key bind <id>`；文件存在但为空 / 不可读仍报错。
+- **缺 `--agent-key-file`**：文件不存在时进入未授权模式——公共 FACT 可读；公共 / 维护命令保持安静。只有私密操作 fail-closed，并提示缺失文件、`view` / `key bind <id>`、`key status` / `key claim`；文件存在但为空 / 不可读仍报错。
 
 **明文库转加密（第一次最短路径）**
 
-> 适用于 `yotta-memory 0.16.2+`。迁移前先完整备份。
+> 适用于 `yotta-memory 0.16.4+`。迁移前先完整备份。
 
 1. 迁移：
 
@@ -270,7 +270,7 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 
 ## 3.9 开工 doctor 与事务快照（v0.12.2）
 
-- `yotta-memory doctor`：只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份；加 `--json` 可输出机器可读结果。
+- `yotta-memory doctor`：只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份；加 `--json` 可输出机器可读结果与 `identity.mode` / `identity.agentKeyStatus`。
 - 严重异常（根目录缺失、密钥库缺文件、备份目录同卷）会返回非零退出码；此时 `context` 也会显示“破坏性写入已锁定”。
 - `maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在写入前自动创建新的整库事务快照，并在 `.archive/audit-<日期>.jsonl` 记录 transaction / operation / snapshot。
 - 未配置独立备份目录、doctor critical 或快照失败时，命令直接拒绝执行，原记忆保持不变；`forget` 仍只移入 `.trash/`，不重复创建整库快照。
@@ -441,8 +441,8 @@ yotta-memory key claim <本智能体ID>
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；私密入 `.archive/private/<owner>/<type>/`）|
 | `yotta-memory reindex` | 重建索引 |
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |
-| `yotta-memory config set <键> <值>` / `config get` | 记忆库位置与引擎参数（`memory_home` / `embedding_cmd` / `embedding_timeout` / `maintain_archived_utility` / `maintain_decay_halflife_<TYPE>` / `consolidate_*` 等）|
-| `yotta-memory whoami --agent <id>` | 查看当前显式身份与登记状态；身份不从环境变量读取 |
+| `yotta-memory config set <键> <值>` / `config get [--json]` | 记忆库位置与引擎参数（`memory_home` / `embedding_cmd` / `embedding_timeout` / `maintain_archived_utility` / `maintain_decay_halflife_<TYPE>` / `consolidate_*` 等；`get --json` 同时返回身份状态）|
+| `yotta-memory whoami --agent <id> [--json]` | 查看当前显式身份与登记状态；身份不从环境变量读取；`--json` 返回结构化身份状态 |
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 访问 token（同 ID 已被其它来源占用需 `--force` 覆盖）|
 | `yotta-memory serve [--port 8787] [--stdio] [--no-auth]` | 启动记忆引擎（--no-auth 关闭鉴权，仅限可信内网）|

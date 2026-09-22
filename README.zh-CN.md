@@ -23,6 +23,7 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
+> 🆕 **v0.16.4（agent-key 提示范围）**：`--agent-key-file` 不存在时不再为公共 / 维护命令输出全局 `stderr` 警告；只有真正访问私密区才 fail-closed，并给出缺失路径、`view` / `key bind`、`key status` / `key claim` 步骤。`whoami --json`、`doctor --json`、`config get --json` 返回结构化 `identity.mode` / `identity.agentKeyStatus`。
 > 🆕 **v0.16.2（首启修复）**：空加密库 `view` 可用恢复钥匙解锁；非 TTY 支持 `--password-stdin`；恢复钥匙支持 `--recovery-key-out <文件>`；`--agent-key-file` 不存在时降级未授权（公共 FACT 可读、私密 fail-closed）；空明文库可直接 `migrate` 启用加密；`view` 端口占用给明确提示。
 > 🆕 **v0.16.3（迁移最短路径）**：明文库第一次转加密：
 > `echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out "%USERPROFILE%\yotta-memory-recovery.key"`

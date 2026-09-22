@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
 description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照
-version: 0.16.3
+version: 0.16.4
 license: MIT
 ---
 
@@ -18,6 +18,7 @@ license: MIT
 - **越用越懂（v0.14.0）**：`context` 一键生成开工上下文包——长期理解摘要优先（复用 `consolidate` 产物）+ 用户画像（引擎零推断，只归组原文）+ 近期走廊（按更新时间取样）+ 近期高价值补位 + 边界 + 承诺 + 会话闭环契约；SKILL「记忆守则」规则层只注入规则与机制，不注入人格数据（出厂零数据）。
 - **MCP 工具分组（v0.15.0）**：`serve --tools core|full` 控制工具暴露面。`core` 固定为 `context / recall / search / remember`，适合常驻；`full` 为现有 16 工具，适合维护与诊断。未指定时默认 `full`，保持现有配置兼容。
 - **身份模型（v0.16.0）**：身份不再从环境变量读取。HTTP / 远程 MCP 只认请求头 `Authorization` + `X-Agent-Id` + `X-Agent-Key`；stdio MCP 只认显式参数 `--agent-id` + `--agent-key-file`；CLI 用 `--agent` + `--agent-key` / `--agent-key-file`。旧身份 env 会在 MCP 启动时被明确拒绝。
+- **未授权提示边界（v0.16.4）**：`--agent-key-file` 不存在时不再由主入口向全局 `stderr` 告警。公共 / 维护命令保持安静；只有真正访问私密区时才 fail-closed，并给出缺失文件、`view` / `key bind`、`key status` / `key claim` 的可操作步骤。`whoami --json`、`doctor --json`、`config get --json` 返回 `identity.mode` / `identity.agentKeyStatus`。
 - **运行时稳定入口（v0.16.0 M2）**：`runtime install --from-current` 把当前引擎安装到 `<runtimeRoot>/versions/<version>/` 并创建 `<runtimeRoot>/current` 稳定指针；`runtime use <version>` 原子切换、`runtime rollback` 回滚、`runtime status` 查看漂移。stdio MCP、`lan enable` 与备份调度只指向 `<runtimeRoot>/current/bin/yotta-memory.js`，不写版本目录。
 - **运行时诊断与握手（v0.16.0 M3）**：`doctor --runtime` 检查 CLI / current / runtime.json / MCP 配置 / 运行中 server / 技能副本 / 身份模式漂移，逐项给出实际版本、期望版本、修复命令和是否阻断；MCP `initialize` / `server/discover` 的 `serverInfo` 返回 `runtimePath` / `identityMode` / `toolProfile`。
 - **自我学习 / 自我进化 / 自我提升（v0.8.0）**：`recall` 语义检索（同义词 / 拼音 / 字段加权 / 模糊匹配，零依赖）；`feedback` 显式使用反馈闭环（useful / useless → weight / confidence / feedback_net 演化，越用越懂）；`maintain` 规则层自组织（统一效用分 + 年龄自动归档 / 遗忘候选 / 去重，默认 dry-run，immutable / BOUND 豁免）；`distill` 心理日志蒸馏（统计摘要 / 主题画像 / 知识地图，可选 `--model` 外部模型增强）；`explain` 查看单条记忆效用分项。
@@ -277,12 +278,12 @@ yotta-memory doctor --json
 | `yotta-memory forget <文件>` | 移入 `.trash/<时间>/` 回收区并写审计（v0.12.0；不再物理删除）|
 | `yotta-memory backup volumes / setup --dir <目录> / status / ensure-daily / schedule enable|disable|status` | 每日自动备份（v0.12.0；只展示实际枚举的异卷、用户确认一次位置后默认每日执行，Windows Task Scheduler / systemd timer / launchd 调度，`serve` 补跑）|
 | `yotta-memory backup create / list / doctor / restore <ID> --to <目录> / drill [<ID>]` | 备份、恢复与恢复演练（v0.12.0；独立盘校验、SHA-256 清单、排除 `keys/cache`、恢复默认只写新目录；drill 验证 manifest / 索引 / 测试私密解密）|
-| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（v0.12.2；根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）；全新空库的缺失 index / agents 降为 info；输出 agent home 发现规则与 `YOTTA_MEMORY_AGENT_HOME` 提示；加 `--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移 |
+| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（v0.12.2；根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）；全新空库的缺失 index / agents 降为 info；输出 agent home 发现规则与 `YOTTA_MEMORY_AGENT_HOME` 提示；加 `--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；v0.16.4 起 `--json` 含身份 / agent-key 状态 |
 | `yotta-memory archive [--days 180] [--threshold 0.35]` | 归档旧记忆（v0.8.0 统一效用分 + v0.10.0 分类型衰减；immutable / BOUND 豁免；私密归档入 `.archive/private/<owner>/<type>/`；阈值默认读 config `maintain_archived_utility`）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
-| `yotta-memory config set memory_home <目录>` / `config set backup_dir <目录>` / `config get` | 持久记住 / 查看记忆库位置与备份目录（`~/.yottamemory/config.json`）|
-| `yotta-memory whoami --agent <id> [--agent-key <key>]` | 查看当前显式身份与登记状态；身份不从环境变量读取 |
+| `yotta-memory config set memory_home <目录>` / `config set backup_dir <目录>` / `config get [--json]` | 持久记住 / 查看记忆库位置与备份目录（`~/.yottamemory/config.json`；`get --json` 同时返回身份状态）|
+| `yotta-memory whoami --agent <id> [--agent-key <key>] [--json]` | 查看当前显式身份与登记状态；身份不从环境变量读取；`--json` 返回 `identity` 结构化状态 |
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 每智能体访问 token：生成 / 列出 / 吊销（登记 `<记忆库>/.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
 | `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio] [--tools core|full]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id + X-Agent-Key 鉴权；工具分组默认 full）|
@@ -298,7 +299,7 @@ yotta-memory doctor --json
 
 - **非 TTY 初始化 / 迁移**：完整步骤见下一节《明文库转加密（第一次最短路径）》。
 - **恢复钥匙写文件**：`--recovery-key-out <文件>`（`init` / `migrate`）把恢复钥匙写入文件，适配 Windows GUI 宿主 stdout 不可捕获；不要把钥匙粘贴到对话。
-- **缺 `--agent-key-file`**：文件不存在时降级为未授权模式（公共 FACT 可读，私密操作 fail-closed 并提示 `key bind <id>`）；文件存在但为空 / 不可读仍报错。
+- **缺 `--agent-key-file`**：文件不存在时进入未授权模式（公共 FACT 可读）；公共 / 维护命令不再输出全局 `stderr` 告警。只有私密操作 fail-closed，并提示缺失文件、`view` / `key bind <id>`、`key status` / `key claim`；文件存在但为空 / 不可读仍报错。
 - **空加密库授权**：`yotta-memory view` 在无 owner key 时可用恢复钥匙校验主口令进入平台；无 owner 时先 `yotta-memory iam <id>`，再回页面授权。
 - **view 端口**：启动前做健康检查；已在运行则打印 URL 复用，端口被占用给明确提示，不再抛未处理的 `EADDRINUSE`。
 

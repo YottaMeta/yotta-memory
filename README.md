@@ -23,6 +23,7 @@
 
 > 📖 The user-facing operations manual lives in [USER_GUIDE.md](USER_GUIDE.md).
 
+> 🆕 **v0.16.4 (agent-key prompt scope)**: a missing `--agent-key-file` no longer prints a global `stderr` warning for public or maintenance commands. Only real private-data access fails closed, with the missing path, `view` / `key bind`, and `key status` / `key claim` guidance. `whoami --json`, `doctor --json`, and `config get --json` expose structured `identity.mode` / `identity.agentKeyStatus` fields.
 > 🆕 **v0.16.2 (first-boot fixes)**: an empty encrypted store can unlock `view` with the recovery key; non-TTY hosts can use `--password-stdin`; recovery keys can be written with `--recovery-key-out <file>`; a missing `--agent-key-file` degrades to unauthenticated public-only mode; an empty plaintext store can be migrated to encryption; `view` reports port reuse/conflicts clearly.
 > 🆕 **v0.16.3 (migration quick path)**: convert a plaintext store to encryption with
 > `echo <master-password> | yotta-memory migrate --password-stdin --recovery-key-out "%USERPROFILE%\yotta-memory-recovery.key"`.

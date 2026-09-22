@@ -1,3 +1,13 @@
+## v0.16.4 (2026-09-22)
+
+**agent-key 缺文件提示范围修复**
+
+- 主入口不再对 `--agent-key-file` 不存在无条件输出全局 `stderr` 警告；`migrate`、`doctor`、`config` 等公共 / 维护命令保持安静。
+- 未授权提示下沉到真实私密访问边界：私密读写仍 fail-closed，并明确给出缺失文件、`view` / `key bind`、`key status` / `key claim` 的可操作步骤。
+- `whoami --json`、`doctor --json`、`config get --json` 新增 `identity.mode` / `identity.agentKeyStatus` / `identity.source` / `identity.keyFile` / `identity.action`，默认人类输出不加全局警告。
+- 回归覆盖公共命令安静、私密命令 fail-closed、JSON 身份状态三组行为；全量 `npm test` 158/158 PASS。
+- 版本对齐：package.json / SKILL.md frontmatter / skill-manifest.json / CHANGELOG / 引擎 VERSION = 0.16.4。
+
 ## v0.16.3 (2026-09-22)
 
 **迁移最短路径与授权引导修复**

@@ -23,7 +23,7 @@ echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out "%USER
 v0.16.2 起，空加密库（没有 owner key）可用恢复钥匙校验主口令进入 `view`。如果页面显示「无 owner」，先在终端执行 `yotta-memory iam <id>` 登记身份，再回页面授权；也可以由用户在终端执行 `yotta-memory key bind <id>`。
 
 ## 2.3 `--agent-key-file` 指向的文件不存在？
-文件不存在时不再致命：元忆降级为未授权模式，公共 FACT 仍可读；私密操作 fail-closed，并提示 `key bind <id>`。文件存在但为空或不可读仍会报错。推荐用 `YOTTA_MEMORY_AGENT_HOME` 指定宿主目录，授权后 key 原地生效。
+文件不存在时不再致命：元忆进入未授权模式，公共 FACT 仍可读；`migrate` / `doctor` / `config` 等公共或维护命令不会再向 `stderr` 打印降级警告。只有私密读写 fail-closed，并提示缺失文件、`view` / `key bind <id>`、`key status` / `key claim`。需要程序化判断时，使用 `whoami --json`、`doctor --json` 或 `config get --json` 的 `identity.mode` / `identity.agentKeyStatus`。文件存在但为空或不可读仍会报错。推荐用 `YOTTA_MEMORY_AGENT_HOME` 指定宿主目录，授权后 key 原地生效。
 
 ## 2.4 迁移后必须 `key bind` 吗？
 不必。`yotta-memory view` 页面授权和 `yotta-memory key bind <id>` 是两条等价路径：两条都会写 `binding + pending`，随后 AI 都执行 `yotta-memory key status <id>` → `yotta-memory key claim <id>`，再落到 `<AI_HOME>/.yotta-memory-agent-key`。普通用户推荐 `view`，高级用户或无可视化环境再用 `key bind`。
