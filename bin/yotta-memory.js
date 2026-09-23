@@ -339,16 +339,13 @@ function runtimeValidateTarballEntries(entries) {
   }
   if (normalized.indexOf('package/package.json') === -1) throw new Error('runtime tarball 缺少 package/package.json');
 }
-function tarPathArg(value) {
-  const abs = path.resolve(String(value));
-  return process.platform === 'win32' ? abs.replace(/\\/g, '/') : abs;
-}
 function runtimeListTarballEntries(tarball) {
   const tarBin = process.env.YOTTA_RUNTIME_TAR || 'tar';
-  const tarArgs = process.platform === 'win32'
-    ? ['--force-local', '-tzf', tarPathArg(tarball)]
-    : ['-tzf', tarPathArg(tarball)];
-  const listed = child_process.spawnSync(tarBin, tarArgs, { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  const listed = child_process.spawnSync(tarBin, ['-tzf', path.basename(tarball)], {
+    cwd: path.dirname(tarball),
+    encoding: 'utf8',
+    maxBuffer: 8 * 1024 * 1024,
+  });
   if (listed.error) throw new Error('无法执行 tar: ' + listed.error.message);
   if (listed.status !== 0) throw new Error('读取 runtime tarball 失败: ' + String(listed.stderr || listed.stdout || '').trim());
   return String(listed.stdout || '').split(/\r?\n/).filter(Boolean);
@@ -356,10 +353,8 @@ function runtimeListTarballEntries(tarball) {
 function runtimeExtractTarball(tarball, tempDir) {
   runtimeValidateTarballEntries(runtimeListTarballEntries(tarball));
   const tarBin = process.env.YOTTA_RUNTIME_TAR || 'tar';
-  const tarArgs = process.platform === 'win32'
-    ? ['--force-local', '-xzf', tarPathArg(tarball), '-C', tarPathArg(tempDir)]
-    : ['-xzf', tarPathArg(tarball), '-C', tarPathArg(tempDir)];
-  const result = child_process.spawnSync(tarBin, tarArgs, { encoding: 'utf8' });
+  const relativeTarball = path.relative(tempDir, tarball).replace(/\\/g, '/');
+  const result = child_process.spawnSync(tarBin, ['-xzf', relativeTarball], { cwd: tempDir, encoding: 'utf8' });
   if (result.error) throw new Error('无法执行 tar: ' + result.error.message);
   if (result.status !== 0) throw new Error('解压 runtime tarball 失败: ' + String(result.stderr || result.stdout || '').trim());
   const packaged = path.join(tempDir, 'package');

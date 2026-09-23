@@ -54,10 +54,7 @@ function makeTarball(parent, version) {
     '',
   ].join('\n'), 'utf8');
   const tarball = path.join(parent, 'yotta-memory-' + version + '.tgz');
-  const tarArgs = process.platform === 'win32'
-    ? ['--force-local', '-czf', tarball, '-C', parent, 'package']
-    : ['-czf', tarball, '-C', parent, 'package'];
-  const packed = spawnSync('tar', tarArgs, { encoding: 'utf8' });
+  const packed = spawnSync('tar', ['-czf', path.basename(tarball), 'package'], { cwd: parent, encoding: 'utf8' });
   assert.strictEqual(packed.status, 0, packed.stderr || packed.stdout);
   return tarball;
 }
