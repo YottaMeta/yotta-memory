@@ -38,17 +38,21 @@ test('migrate output presents view and key bind as equivalent authorization path
 });
 
 test('migration quick-start command is documented in skill and user guides', () => {
-  const command = 'echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out';
+  const command = 'yotta-memory migrate --recovery-key-out';
   for (const rel of ['SKILL.md', 'USER_GUIDE.md', 'references/faq.md', 'README.zh-CN.md']) {
     assert.ok(read(rel).includes(command), rel + ' missing migration quick-start command');
+    assert.doesNotMatch(read(rel), /echo\s+主口令\s*\|/, rel + ' still contains unsafe Chinese pipe placeholder');
+    assert.match(read(rel), /YOTTA_MEMORY_PASS|交互/, rel + ' missing non-ASCII safe password guidance');
   }
   assert.ok(
-    read('README.md').includes('echo <master-password> | yotta-memory migrate --password-stdin --recovery-key-out'),
-    'README.md missing English migration quick-start command'
+    read('README.md').includes('yotta-memory migrate --recovery-key-out'),
+    'README.md missing English interactive migration command'
   );
+  assert.doesNotMatch(read('README.md'), /echo\s+<master-password>\s*\|/);
+  assert.match(read('README.md'), /ASCII|interactive|non-ASCII/i);
   const skill = read('SKILL.md');
   const section = skill.slice(skill.indexOf('### 明文库转加密（第一次最短路径）'));
-  const iMigrate = section.indexOf('yotta-memory migrate --password-stdin');
+  const iMigrate = section.indexOf('yotta-memory migrate --recovery-key-out');
   const iAuthorize = section.indexOf('yotta-memory view', iMigrate);
   const iClaim = section.indexOf('yotta-memory key claim <id>', iAuthorize);
   const iReindex = section.indexOf('yotta-memory reindex', iClaim);
@@ -64,6 +68,8 @@ test('CLI help describes migration authorization as view or key bind', () => {
   assert.match(r.stdout, /授权二选一/);
   assert.match(r.stdout, /yotta-memory view/);
   assert.match(r.stdout, /yotta-memory key bind/);
+  assert.doesNotMatch(r.stdout, /echo\s+主口令\s*\|/);
+  assert.match(r.stdout, /YOTTA_MEMORY_PASS|交互|非 ASCII/);
 });
 
 test('migrate -> bind -> claim -> reindex -> recall works in that order', (t) => {

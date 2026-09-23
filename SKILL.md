@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
 description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照
-version: 0.16.6
+version: 0.16.7
 license: MIT
 ---
 
@@ -280,7 +280,7 @@ yotta-memory doctor --json
 | 命令 | 作用 |
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>] [--attach] [--encrypt|--no-encrypt] [--password-stdin] [--recovery-key-out <文件>]` | 初始化（**新建默认加密**：设主口令 + 抄下恢复钥匙；已有库必须用 `--attach`，默认拒绝覆盖；`--no-encrypt` 降级明文；老明文库用 `migrate`；非 TTY 用 `--password-stdin`；恢复钥匙可写文件）|
-| `yotta-memory migrate [--password-stdin] [--recovery-key-out <文件>]` | 明文库 → 密文迁移（**由用户执行**；首次迁移命令、`view` 授权与 `key bind` 等价关系见《明文库转加密（第一次最短路径）》）|
+| `yotta-memory migrate [--password-stdin] [--recovery-key-out <文件>]` | 明文库 → 密文迁移（**由用户执行**；首次迁移推荐交互式，非 ASCII 口令勿用 Windows 管道；`view` 授权与 `key bind` 等价关系见《明文库转加密（第一次最短路径）》）|
 | `yotta-memory view [--port 8788] [--host 127.0.0.1]` | 用户查看平台（本机 Web：口令解锁浏览 / 搜索 / 导出全部 AI 记忆 + 授权 / 吊销 AI + 重设口令 + 显示恢复钥匙；已在运行则复用 URL，端口占用给明确提示）|
 | `yotta-memory reset-password [--password <当前> | --recovery-key <钥匙>] [--new-password <新>]` | 重设主口令（忘口令用恢复钥匙）|
 | `yotta-memory key list / bind <id> / rotate <id> / claim <id> [--to <AI_HOME> | --agent-key-file <文件>] / status <id> [--to <AI_HOME> | --agent-key-file <文件>] / revoke <id>` | 管理 agent_key binding（**bind/rotate 由用户执行**，需主口令或恢复钥匙；claim/status 由 AI 读取 pending 并落到宿主目录，按同一 AI_HOME 发现规则；revoke 立即吊销该 AI 解密能力，旧 key 随即校验失败；`key list` 合并 `keys/*.key.enc`，显示仅有钥、尚未写记忆的 owner；输出 `[YTM_MIGRATION_REQUIRED]` 时提醒用户走 `view` 重新授权）|
@@ -320,22 +320,22 @@ yotta-memory doctor --json
 
 > 适用于 `yotta-memory 0.16.2+`。迁移前先完整备份。
 
-1. **迁移**：
+1. **迁移**（推荐交互式；非 ASCII 口令不要走 Windows 管道）：
 
-```cmd
-echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out "%USERPROFILE%\yotta-memory-recovery.key"
+```powershell
+yotta-memory migrate --recovery-key-out "$env:USERPROFILE\yotta-memory-recovery.key"
 ```
 
-口令传递方式（同一迁移命令，按终端选择一种；不要把口令写进 `--password` 参数）：
+按提示输入主口令。自动化场景按终端选择一种；不要直接把中文占位符粘贴到命令里，也不要把口令写进 `--password` 参数：
 
 | 场景 | 命令 |
 |---|---|
-| 非 TTY / 管道（推荐） | `echo 主口令 \| yotta-memory migrate --password-stdin --recovery-key-out "<钥匙文件>"` |
-| 交互终端 | `yotta-memory migrate --recovery-key-out "<钥匙文件>"`，按提示输入口令 |
-| PowerShell 环境变量 | `$env:YOTTA_MEMORY_PASS='<主口令>'; yotta-memory migrate --recovery-key-out "<钥匙文件>"; Remove-Item Env:\YOTTA_MEMORY_PASS` |
-| cmd 环境变量 | `set "YOTTA_MEMORY_PASS=<主口令>"`，执行 `yotta-memory migrate --recovery-key-out "<钥匙文件>"`，最后 `set "YOTTA_MEMORY_PASS="` |
+| 交互终端（推荐，支持非 ASCII） | `yotta-memory migrate --recovery-key-out "<钥匙文件>"`，按提示输入口令 |
+| PowerShell 环境变量（自动化） | `$env:YOTTA_MEMORY_PASS='<ASCII-PASSWORD>'; yotta-memory migrate --recovery-key-out "<钥匙文件>"; Remove-Item Env:\YOTTA_MEMORY_PASS` |
+| cmd 环境变量（自动化） | `set "YOTTA_MEMORY_PASS=<ASCII-PASSWORD>"`，执行 `yotta-memory migrate --recovery-key-out "<钥匙文件>"`，最后 `set "YOTTA_MEMORY_PASS="` |
+| 纯 ASCII 管道（非 ASCII 不要用） | `"<ASCII-PASSWORD>" \| yotta-memory migrate --password-stdin --recovery-key-out "<钥匙文件>"` |
 
-常见报错：`当前为非交互环境` = 没有 stdin 也没有 `YOTTA_MEMORY_PASS`；`'"..."' is not recognized` = 在 `cmd.exe` 里用了 PowerShell 的管道写法。口令含非 ASCII 时，PowerShell 可先设置 `$OutputEncoding=[Text.Encoding]::UTF8`。
+常见报错：`当前为非交互环境` = 没有 stdin 也没有 `YOTTA_MEMORY_PASS`；`'"..."' is not recognized` = 在 `cmd.exe` 里用了 PowerShell 的管道写法。Windows 管道可能按控制台代码页编码非 ASCII 字符，导致实际入库口令与输入口令不一致；因此非 ASCII 口令请使用交互终端或环境变量，不要使用 `echo 中文 | ...`。若迁移后 `view` 报 `口令错误`，优先用恢复钥匙执行 `yotta-memory reset-password --recovery-key "<钥匙文件>"` 重设，不要继续猜口令。
 
 恢复钥匙文件必须离线保存，不要和记忆库或备份放在一起。
 

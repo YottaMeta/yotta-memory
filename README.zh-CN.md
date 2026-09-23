@@ -23,11 +23,12 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
+> 🆕 **v0.16.7（迁移口令安全 + view 根指纹）**：明文库转加密推荐交互式 `yotta-memory migrate --recovery-key-out "$env:USERPROFILE\yotta-memory-recovery.key"`，按提示输入主口令；自动化使用 `YOTTA_MEMORY_PASS`。非 ASCII 口令不要用 Windows 管道（`echo 中文 | ...` 可能改变实际口令）。`view` 复用端口前会校验 memory_home 指纹；跨库或旧版无指纹服务会拒绝复用并提示换端口。
 > 🆕 **v0.16.5（doctor JSON 契约）**：`doctor --json` 顶层新增稳定字段 `schemaVersion` / `encryption` / `migration_required`，同时保留原有 `checks` / `warnings` / `identity` 结构。
 > 🆕 **v0.16.4（agent-key 提示范围）**：`--agent-key-file` 不存在时不再为公共 / 维护命令输出全局 `stderr` 警告；只有真正访问私密区才 fail-closed，并给出缺失路径、`view` / `key bind`、`key status` / `key claim` 步骤。`whoami --json`、`doctor --json`、`config get --json` 返回结构化 `identity.mode` / `identity.agentKeyStatus`。
 > 🆕 **v0.16.2（首启修复）**：空加密库 `view` 可用恢复钥匙解锁；非 TTY 支持 `--password-stdin`；恢复钥匙支持 `--recovery-key-out <文件>`；`--agent-key-file` 不存在时降级未授权（公共 FACT 可读、私密 fail-closed）；空明文库可直接 `migrate` 启用加密；`view` 端口占用给明确提示。
-> 🆕 **v0.16.3（迁移最短路径）**：明文库第一次转加密：
-> `echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out "%USERPROFILE%\yotta-memory-recovery.key"`
+> 🆕 **v0.16.3（迁移最短路径）**：明文库第一次转加密推荐交互式：
+> `yotta-memory migrate --recovery-key-out "$env:USERPROFILE\yotta-memory-recovery.key"`
 > 迁移后用 `yotta-memory view` 授权 AI；`view` 与 `yotta-memory key bind <id>` 是等价路径，随后执行 `key status` / `key claim`，再带 `--agent-key-file` 执行 `reindex` 重建加密索引并 `recall` 验证。
 > 🆕 **v0.16.0（身份模型 + 稳定运行时）**：身份不再从环境变量读取。HTTP / 远程 MCP 用请求头 `Authorization` + `X-Agent-Id` + `X-Agent-Key`；stdio MCP 用显式参数 `--agent-id` + `--agent-key-file`；CLI 用 `--agent` + `--agent-key` / `--agent-key-file`。新增 `runtime install --from-current` / `use` / `rollback` / `status`，创建 `<runtimeRoot>/current` 稳定入口，受管 MCP、自启与备份任务不再写死版本目录。`doctor --runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；MCP `serverInfo` 返回 `runtimePath` / `identityMode` / `toolProfile`。
 > 🆕 **v0.15.0（MCP 工具分组）**：`serve --tools core|full` 控制 MCP 工具暴露面。`core` 常驻 `context / recall / search / remember`；`full` 保留现有 16 个诊断与维护工具。未指定参数时默认 `full`，保持现有配置兼容。

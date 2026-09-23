@@ -10,11 +10,11 @@
 
 **明文库第一次转加密**：
 
-```cmd
-echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out "%USERPROFILE%\yotta-memory-recovery.key"
+```powershell
+yotta-memory migrate --recovery-key-out "$env:USERPROFILE\yotta-memory-recovery.key"
 ```
 
-迁移后授权二选一（等价）：推荐 `yotta-memory view` 页面授权；高级用户可 `yotta-memory key bind <id>`。授权并 `key claim` 后，带 `--agent-key-file` 执行 `yotta-memory reindex` 重建每 owner 加密索引，再做 `recall` 验证。
+按提示输入主口令；非 ASCII 口令请交互输入，非 TTY 自动化可使用 `YOTTA_MEMORY_PASS`。不要使用 `echo 中文 | ...`，Windows 管道可能改变实际口令；若迁移后 `view` 报口令错误，用恢复钥匙 `reset-password` 重设。迁移后授权二选一（等价）：推荐 `yotta-memory view` 页面授权；高级用户可 `yotta-memory key bind <id>`。授权并 `key claim` 后，带 `--agent-key-file` 执行 `yotta-memory reindex` 重建每 owner 加密索引，再做 `recall` 验证。
 
 ## 2.1 非 TTY / GUI 宿主怎么初始化？
 不要依赖交互提示。用 `--password-stdin` 从管道读主口令（不进 argv），或用 `YOTTA_MEMORY_PASS`；恢复钥匙用 `--recovery-key-out <文件>` 写文件，避免 GUI 宿主吞掉 stdout。非 TTY 且未提供口令时会明确提示改用哪种方式，不会静默「已取消」。

@@ -136,11 +136,11 @@ statement: 本周完成发布
 
 1. 迁移：
 
-```cmd
-echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out "%USERPROFILE%\yotta-memory-recovery.key"
+```powershell
+yotta-memory migrate --recovery-key-out "$env:USERPROFILE\yotta-memory-recovery.key"
 ```
 
-非 TTY 也可以使用 `YOTTA_MEMORY_PASS`（PowerShell / cmd 语法不同）；交互终端直接运行 `yotta-memory migrate --recovery-key-out "<钥匙文件>"` 并按提示输入口令。不要把口令写进 `--password` 参数。
+交互终端按提示输入口令；非 ASCII 口令请使用交互输入。非 TTY 自动化可使用 `YOTTA_MEMORY_PASS`（PowerShell / cmd 语法不同），但不要使用 `echo 中文 | ...`，Windows 管道可能改变实际口令。不要把口令写进 `--password` 参数。若迁移后 `view` 报口令错误，用恢复钥匙执行 `yotta-memory reset-password --recovery-key "<钥匙文件>"` 重设。
 
 2. 授权 AI（二选一，等价）：
 

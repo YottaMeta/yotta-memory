@@ -1,3 +1,13 @@
+## v0.16.7 (2026-09-23)
+
+**迁移口令安全 + view 根指纹复用校验**
+
+- 明文库迁移文档与 CLI `--help` 不再给出可复制的中文占位符管道命令；推荐交互式输入，非 ASCII 口令明确禁止使用 Windows 管道，自动化改用 `YOTTA_MEMORY_PASS` + ASCII 口令。
+- `migrate` 后 `view` 报「口令错误」时，文档给出用恢复钥匙 `reset-password` 的安全恢复路径。
+- `view /api/status` 新增 memory-home `rootId`；`view` 复用已在运行的服务前必须校验根指纹，跨 memory_home 或旧版无指纹服务会拒绝复用并提示关闭进程或换端口。
+- 新增回归：`test/view-root-guard.test.js`（同库复用、跨库拒绝、旧版无指纹拒绝）+ `test/migration-guidance.test.js`（文档安全命令与 CLI help 检查）。
+- 版本对齐：package.json / SKILL.md frontmatter / skill-manifest.json / CHANGELOG / 引擎 VERSION = 0.16.7。
+
 ## v0.16.6 (2026-09-23)
 
 **插件 MCP 身份启动器（Agent Plugin 开箱可用）**
@@ -34,7 +44,7 @@
 **迁移最短路径与授权引导修复**
 
 - `migrate` 成功输出不再只提示 `key bind`：现在明确输出“授权二选一（等价）”——推荐 `yotta-memory view` 页面授权，高级 CLI 方式为 `yotta-memory key bind <id>`，随后 AI 统一执行 `key status` → `key claim`。
-- `SKILL.md`、`USER_GUIDE.md`、`references/faq.md`、中英 README 统一加入明文库第一次转加密命令：`echo 主口令 | yotta-memory migrate --password-stdin --recovery-key-out ...`，并补充交互终端 / PowerShell / cmd / 管道等口令传递方式和一个统一报错对照。
+- `SKILL.md`、`USER_GUIDE.md`、`references/faq.md`、中英 README 统一加入明文库第一次转加密命令（v0.16.7 已废弃原中文占位符管道写法）；后续补充交互终端 / PowerShell / cmd / 管道等口令传递方式和一个统一报错对照。
 - 修正迁移后的索引顺序：必须 **授权 → `key claim` → 带 `--agent-key-file` 执行 `reindex` → `recall` 验证**；`migrate` 在没有 agent_key 时无法建立每 owner 加密索引。MCP 自检同时要求配置带 `--agent-key-file`。
 - `--help` 的 `migrate` 行同步给出首次迁移命令与两条等价授权路径。
 - 新增 `test/migration-guidance.test.js`，锁定迁移命令、`view` / `key bind` 等价关系和 CLI 帮助口径。
