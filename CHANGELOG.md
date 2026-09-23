@@ -1,3 +1,14 @@
+## v0.16.6 (2026-09-23)
+
+**插件 MCP 身份启动器（Agent Plugin 开箱可用）**
+
+- 新增 `bin/plugin-mcp.js`：宿主只替换 `${PLUGIN_ROOT}`、不替换 `${AGENT_ID}` / `${AGENT_KEY_FILE}` 时，按「宿主替换值 → 环境变量 → `PLUGIN_DATA/identity.json` → 未授权可执行指引」解析身份。
+- 未装配身份时不再把字面量占位符传给引擎：以未授权模式启动（公共 FACT 可读、私密 fail-closed），并输出含 `key claim` 与 `identity.json` 的可执行指引。
+- `key claim <id> --plugin-data <PLUGIN_DATA>`：一条命令同时写入插件 key 与 `identity.json`；与 `--to` / `--agent-key-file` 互斥校验。
+- 插件 `mcp.json` 入口由 `yotta-memory.js` 改为 `plugin-mcp.js`；宿主替换占位符的旧路径继续有效。
+- 回归：`test/plugin-mcp-launcher.test.js`（身份优先级 / 无身份指引）+ `test/plugin-claim-binding.test.js`（claim → 插件身份 → 私密读取端到端）；全量 `npm test` 167/167 PASS。
+- 版本对齐：package.json / SKILL.md frontmatter / skill-manifest.json / CHANGELOG / 引擎 VERSION = 0.16.6。
+
 ## v0.16.5 (2026-09-22)
 
 **doctor --json 稳定契约补齐**
