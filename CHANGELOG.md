@@ -11,8 +11,10 @@
 - 去重与序号跨布局统一：序号在「类型目录 + owner」内全局唯一（平铺与分层不重复编号）；写入去重只扫当前年/月、同年平铺文件与类型根，避免大库每次写入全量遍历（跨月重复由既有的 `maintain --dedup` 与 `consolidate` 处理）。
 - 归档保留分层：`archive` / `maintain --apply --purge` / `consolidate` 移入 `.archive/` 时按原年/月路径落位，不同月份的同名文件不再互相覆盖；旧平铺文件仍落到归档根。
 - 明文库转加密（`migrate`）递归处理年/月子目录，不再漏掉分层私密文件。
+- 平铺 / 分层同序号：条目身份 = 类型 + owner + 文件名（`YYYY-MM-DD-NNNN.md`），与存放位置无关；公共 FACT 的 owner 取自 frontmatter，不同 owner 的同序号文件不误报。内容摘要相同 → 只索引一次；内容不同 → 两份都保留可读，`doctor` 新增 `checks.layout` 与路径告警；新写入永不复用已占用的序号。加密条目在当前密钥不可用时按「待核」处理，不静默丢弃任何一份。
 - `doctor` 新增规模体检：记忆条数 / 单目录最大文件数 / 索引总体积 / 索引冷启动耗时（多次取中位数）；阈值走 `config set scale_warn_entries` / `scale_warn_files_per_dir` / `scale_warn_index_bytes` / `scale_warn_cold_start_ms`，超阈值进 `checks.scale.warnings` 并计入 doctor warning，只读、不锁定破坏性写入。
 - 回归：`test/scale-layout.test.js` 8 项（新写入分层 / 跨布局序号 / 新旧混读 / 导出导入往返 / 私密归属 / 归档路径 / doctor 规模正常与告警）。
+- 升级提示：升到 0.17.0 后请用 **0.17.0 引擎**执行一次 `yotta-memory reindex`。0.16.7 及更早引擎不识别年/月分层目录，旧引擎重建索引会漏掉分层条目；本批去重只影响索引与告警，不自动删除、不移动、不覆盖磁盘文件。
 
 **索引按需加载 + 基准评测（B3 + A1）**
 
@@ -42,6 +44,7 @@
 - 权限边界：**只能由用户本人执行**。加密库要求提供主口令（能解开任一 owner key 或恢复材料）或 `--recovery-key`；明文库没有可校验的用户凭据，要求显式 `--agent user`；`view` 里已用主口令解锁的会话视为用户本人。AI 用自身身份调用一律拒绝——AI 不得删除自己或别的 AI 的身份。
 - 破坏性闸门：走既有 `doctor` + 独立备份 + 事务快照口径（未配置独立备份目录、或 doctor 严重项时直接拒绝），执行前写 `transaction_start`、执行后写 `identity_remove` 审计（含快照 id、授权方式、删除清单）。CLI 交互需输入完整 id 确认，或显式 `--yes`；`view` 侧要求确认串等于完整 agent ID。
 - 回归：新增 `test/identity-remove.test.js` 9 项（九步清单真删 / 公共明文与其它 owner 零变化 / `--dry-run` 只读 / 拒绝 AI 身份 / 加密库口令校验 / 明文库用户身份与备份闸门 / 幂等 / 两个保留开关 / view 端点确认串与闸门）；全量 `npm test` 221/221 PASS。
+- 回归：新增 `test/layout-collision.test.js` 5 项（相同摘要去重 / 冲突双保留与路径告警 / 不同日期不误报 / 不同 owner 不误报 / 加密待核不丢弃）；全量 `npm test` 226/226 PASS。
 
 ## v0.16.7 (2026-09-23)
 

@@ -304,6 +304,8 @@ bash install.sh --agent <智能体名称>
 
 升级后请核对 `yotta-memory --version` 和已安装的 `yotta-memory/SKILL.md` frontmatter 中的 `version:`。
 
+> **v0.17.0 升级提示**：升级后请用 0.17.0 引擎执行一次 `yotta-memory reindex`。0.16.7 及更早引擎不识别年/月分层目录，旧引擎重建索引会漏掉分层条目。`doctor` 会报告平铺 / 分层同序号：内容相同的两份只索引一次；内容不同的两份都保留可读并给出路径告警；新写入不复用已占用的序号。
+
 **v0.10.0 升级提示**——升级不碰数据：无需迁移 / reindex / 重新 init。v0.10.0 没有改记忆文件格式、`facts/` 与 `private/<owner>/<type>/` 布局，也没有改索引版本，旧库打开即用。
 
 需要知道的 4 条行为变化：

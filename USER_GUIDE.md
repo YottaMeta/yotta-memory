@@ -69,6 +69,8 @@
 
 > `npx -y @yottameta/yotta-memory` 只是临时运行引擎 CLI，不会安装技能；技能安装器必须使用上面的 `--package ... yotta-memory-install` 形式，或全局安装后的 `yotta-memory-install` 命令。
 
+> **v0.17.0 升级提示**：升级后请用 0.17.0 引擎执行一次 `yotta-memory reindex`。0.16.7 及更早引擎不识别年/月分层目录，旧引擎重建索引会漏掉分层条目。`doctor` 会报告平铺 / 分层同序号：内容相同的两份只索引一次；内容不同的两份都保留可读并给出路径告警；新写入不复用已占用的序号。
+
 **卸载：** `npm rm -g @yottameta/yotta-memory`，并从智能体的 skills 目录删除整个 `yotta-memory` 文件夹。
 
 ## 3. 本机单机使用

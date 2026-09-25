@@ -265,6 +265,8 @@ If you installed the CLI globally, `npm i -g @yottameta/yotta-memory` updates bo
 
 After updating, verify `yotta-memory --version` and the installed `yotta-memory/SKILL.md` frontmatter `version:`.
 
+> **v0.17.0 upgrade note**: run `yotta-memory reindex` once with the 0.17.0 engine after upgrading. Engines 0.16.7 and earlier do not understand the new year/month layout and will drop layered entries from a rebuilt index. `doctor` now reports flat/layered same-identity duplicates: identical copies are indexed once; conflicting copies stay readable and are listed with both paths, and new writes never reuse an occupied sequence number.
+
 **v0.10.0 upgrade notes** — upgrading touches no data: no migration, no reindex, no re-init needed. v0.10.0 does not change the memory file format, the `facts/` / `private/<owner>/<type>/` layout, or the index version, so existing stores open as-is.
 
 Behavior changes to be aware of:

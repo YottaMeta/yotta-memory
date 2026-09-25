@@ -2043,6 +2043,99 @@ function collectEntryFiles(root) {
   for (const dir of dirs) walkEntryFiles(dir, out);
   return out;
 }
+// v0.17.0：平铺 / 分层只影响存放位置，不改变条目身份。
+// 身份键 = 类型 + owner + 文件名（YYYY-MM-DD-NNNN.md），同身份先比较内容摘要。
+const LAYOUT_TYPE_BY_DIR = { facts: 'FACT', prefs: 'PREF', bounds: 'BOUND', commits: 'COMMIT' };
+function publicFrontmatterOwner(fp) {
+  try {
+    return String(parseFrontmatter(fs.readFileSync(fp, 'utf8')).meta.owner || '').trim();
+  } catch (e) {
+    return '';
+  }
+}
+function layoutEntryIdentity(root, fp) {
+  const rel = path.relative(root, fp).replace(/\\/g, '/');
+  const parts = entryRelParts(rel);
+  if (!parts) return null;
+  const type = LAYOUT_TYPE_BY_DIR[parts.type];
+  if (!type) return null;
+  const base = path.basename(rel).replace(/\.enc$/, '');
+  if (!/^\d{4}-\d{2}-\d{2}-\d{4}\.md$/.test(base)) return null;
+  const owner = parts.kind === 'public' ? publicFrontmatterOwner(fp) : parts.owner;
+  return {
+    key: [parts.kind, owner, type, base].join('\0'),
+    rel: rel,
+    owner: owner,
+  };
+}
+function normalizedLayoutDigest(buf) {
+  // latin1 往返保留原始字节，同时把 CRLF 归一，避免 Windows / Linux 检出差异制造假冲突。
+  const normalized = Buffer.from(buf.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
+  return crypto.createHash('sha256').update(normalized).digest('hex');
+}
+function layoutFileDigests(root, fp, owner) {
+  const buf = fs.readFileSync(fp);
+  const rawDigest = normalizedLayoutDigest(buf);
+  if (!isEncFile(fp)) return { rawDigest: rawDigest, plainDigest: rawDigest };
+  const key = getOwnerKeyFor(root, owner);
+  if (key) {
+    try {
+      return { rawDigest: rawDigest, plainDigest: normalizedLayoutDigest(Buffer.from(decryptMemoryText(buf, key), 'utf8')) };
+    } catch (e) { /* 密钥不可用或密文损坏时按待核处理 */ }
+  }
+  return { rawDigest: rawDigest, plainDigest: null };
+}
+function layoutCollisionReport(root) {
+  const grouped = new Map();
+  for (const fp of collectEntryFiles(root)) {
+    const info = layoutEntryIdentity(root, fp);
+    if (!info) continue;
+    if (!grouped.has(info.key)) grouped.set(info.key, []);
+    grouped.get(info.key).push({ fp: fp, rel: info.rel, owner: info.owner });
+  }
+  const report = { ok: true, duplicates: 0, conflicts: 0, unverified: 0, groups: [], warnings: [] };
+  for (const items of grouped.values()) {
+    if (items.length < 2) continue;
+    for (const item of items) {
+      try {
+        const digests = layoutFileDigests(root, item.fp, item.owner);
+        item.rawDigest = digests.rawDigest;
+        item.plainDigest = digests.plainDigest;
+      } catch (e) {
+        item.rawDigest = null;
+        item.plainDigest = null;
+      }
+    }
+    const plainDigests = items.map(function (item) { return item.plainDigest; });
+    const rawDigests = items.map(function (item) { return item.rawDigest; });
+    let status;
+    if (plainDigests.every(Boolean)) status = new Set(plainDigests).size === 1 ? 'duplicate' : 'conflict';
+    else if (rawDigests.every(Boolean) && new Set(rawDigests).size === 1) status = 'duplicate';
+    else status = 'unverified';
+    const sorted = items.slice().sort(function (a, b) {
+      const depth = b.rel.split('/').length - a.rel.split('/').length;
+      return depth !== 0 ? depth : a.rel.localeCompare(b.rel);
+    });
+    const paths = items.map(function (item) { return item.rel; }).sort();
+    const group = {
+      status: status,
+      paths: paths,
+      keep: sorted[0].rel,
+      drop: sorted.slice(1).map(function (item) { return item.rel; }),
+    };
+    report.groups.push(group);
+    if (status === 'duplicate') report.duplicates++;
+    else if (status === 'conflict') {
+      report.conflicts++;
+      report.warnings.push('布局: 平铺/分层同序号冲突（内容不同，两份均保留可读）: ' + paths.join(' ↔ '));
+    } else {
+      report.unverified++;
+      report.warnings.push('布局: 平铺/分层同序号待核（加密内容当前无法比较，两份均保留）: ' + paths.join(' ↔ '));
+    }
+  }
+  report.ok = report.conflicts === 0 && report.unverified === 0;
+  return report;
+}
 // 迁移：把根下旧平铺 prefs|bounds|commits/*.md 按 frontmatter owner 迁入 private/<owner>/<type>/
 function migrateLayout(root) {
   let moved = 0;
@@ -2065,10 +2158,17 @@ function migrateLayout(root) {
 }
 function buildIndex(root) {
   migrateLayout(root);
+  const layout = layoutCollisionReport(root);
+  const skip = new Set();
+  for (const group of layout.groups) {
+    if (group.status !== 'duplicate') continue;
+    for (const rel of group.drop) skip.add(rel);
+  }
   const publicEntries = [];
   const privateByOwner = {};
   for (const fp of collectEntryFiles(root)) {
     const rel = path.relative(root, fp).replace(/\\/g, '/');
+    if (skip.has(rel)) continue;
     if (rel.indexOf(PRIVATE_DIR + '/') === 0) {
       const owner = rel.split('/')[1] || '';
       if (!getOwnerKeyFor(root, owner)) continue;
@@ -3501,6 +3601,9 @@ function doctorCore(opts) {
     const scale = scaleReport(root, cfg);
     checks.scale = scale;
     for (const message of scale.warnings) warnings.push(message);
+    const layout = layoutCollisionReport(root);
+    checks.layout = layout;
+    for (const message of layout.warnings) warnings.push(message);
   }
 
   if (!fs.existsSync(agentsPath(root))) {
@@ -3615,6 +3718,9 @@ function doctorCore(opts) {
   ];
   if (checks.scale) {
     lines.push('- 规模: ' + checks.scale.entries + ' 条记忆 / 单目录最大 ' + checks.scale.files_per_dir + ' 个文件 / 索引 ' + checks.scale.index_bytes + ' 字节 / 冷启动 ' + checks.scale.cold_start_ms + 'ms（' + (checks.scale.level === 'warning' ? '有告警' : '正常') + '）');
+  }
+  if (checks.layout && (checks.layout.duplicates || checks.layout.conflicts || checks.layout.unverified)) {
+    lines.push('- 布局: 同序号重复 ' + checks.layout.duplicates + ' 组 / 冲突 ' + checks.layout.conflicts + ' 组 / 待核 ' + checks.layout.unverified + ' 组');
   }
   for (const message of critical) lines.push('- [严重] ' + message);
   for (const message of warnings) lines.push('- [警告] ' + message);
