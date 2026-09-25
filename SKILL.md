@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
 description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照
-version: 0.16.7
+version: 0.17.0
 license: MIT
 ---
 
@@ -137,7 +137,9 @@ yotta-memory doctor
 yotta-memory doctor --json
 ```
 
-- `doctor` 检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份。
+- `doctor` 检查记忆库根目录、加密库密钥文件、公共索引、`agents.json`、最近备份与**规模**（记忆条数 / 单目录最大文件数 / 索引总体积 / 索引冷启动耗时；只读，不产生写入）。
+- 规模阈值走 `config`：`scale_warn_entries`（默认 50000）/ `scale_warn_files_per_dir`（默认 500）/ `scale_warn_index_bytes`（默认 5242880）/ `scale_warn_cold_start_ms`（默认 2000）；超过阈值进 `checks.scale.warnings` 并计入 doctor warning，不锁定破坏性写入。
+- 规模明细在 `doctor --json` 的 `checks.scale`（`entries` / `files_per_dir` / `index_bytes` / `cold_start_ms` / `thresholds` / `level` / `warnings`）。
 - 严重异常（根目录缺失、密钥库缺文件、备份目录同卷）会返回非零退出码，并锁定破坏性写入。
 - `maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在执行前自动创建事务快照；未配置独立备份目录或快照失败时拒绝写入，原记忆保持不变。
 - 不提供 CLI 跳过快照的开关；`--allow-same-volume` 只用于 `backup create` 的显式临时备份，不会绕过破坏性写入门。
@@ -291,11 +293,11 @@ yotta-memory doctor --json
 | `yotta-memory forget <文件>` | 移入 `.trash/<时间>/` 回收区并写审计（v0.12.0；不再物理删除）|
 | `yotta-memory backup volumes / setup --dir <目录> / status / ensure-daily / schedule enable|disable|status` | 每日自动备份（v0.12.0；只展示实际枚举的异卷、用户确认一次位置后默认每日执行，Windows Task Scheduler / systemd timer / launchd 调度，`serve` 补跑）|
 | `yotta-memory backup create / list / doctor / restore <ID> --to <目录> / drill [<ID>]` | 备份、恢复与恢复演练（v0.12.0；独立盘校验、SHA-256 清单、排除 `keys/cache`、恢复默认只写新目录；drill 验证 manifest / 索引 / 测试私密解密）|
-| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（v0.12.2；根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）；全新空库的缺失 index / agents 降为 info；输出 agent home 发现规则与 `YOTTA_MEMORY_AGENT_HOME` 提示；加 `--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；v0.16.4 起 `--json` 含身份 / agent-key 状态；v0.16.5 起顶层含 `schemaVersion` / `encryption` / `migration_required` |
+| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（v0.12.2；根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）；全新空库的缺失 index / agents 降为 info；输出 agent home 发现规则与 `YOTTA_MEMORY_AGENT_HOME` 提示；加 `--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；v0.16.4 起 `--json` 含身份 / agent-key 状态；v0.16.5 起顶层含 `schemaVersion` / `encryption` / `migration_required`；v0.17.0 起 `checks.scale` 给规模体检（条数 / 单目录文件数 / 索引体积 / 冷启动耗时，阈值 `scale_*`）|
 | `yotta-memory archive [--days 180] [--threshold 0.35]` | 归档旧记忆（v0.8.0 统一效用分 + v0.10.0 分类型衰减；immutable / BOUND 豁免；私密归档入 `.archive/private/<owner>/<type>/`；阈值默认读 config `maintain_archived_utility`）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
-| `yotta-memory config set memory_home <目录>` / `config set backup_dir <目录>` / `config get [--json]` | 持久记住 / 查看记忆库位置与备份目录（`~/.yottamemory/config.json`；`get --json` 同时返回身份状态）|
+| `yotta-memory config set memory_home <目录>` / `config set backup_dir <目录>` / `config get [--json]` | 持久记住 / 查看记忆库位置与备份目录（`~/.yottamemory/config.json`；`get --json` 同时返回身份状态）；数值类键含 `maintain_*` / `consolidate_*` / `scale_*` / `backup_max_age_hours` |
 | `yotta-memory whoami --agent <id> [--agent-key <key>] [--json]` | 查看当前显式身份与登记状态；身份不从环境变量读取；`--json` 返回 `identity` 结构化状态 |
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 每智能体访问 token：生成 / 列出 / 吊销（登记 `<记忆库>/.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
@@ -385,17 +387,19 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 
 ```
 <root>/
-├── facts/                    # FACT 事实（公共可共享）
-├── private/<owner>/<type>/   # PREF / BOUND / COMMIT，按智能体隔离
+├── facts/<yyyy>/<mm>/         # FACT 事实（公共可共享），新写入按年/月分层
+├── private/<owner>/<type>/<yyyy>/<mm>/  # PREF / BOUND / COMMIT，按智能体隔离
 ├── private/<owner>/profile.md # 用户画像（明文库；加密库为 profile.md.enc）
 ├── private/<owner>/index.enc # 加密库：每 owner 加密索引（YTMIDX1，Owner Key 加密）
-├── .archive/                 # 归档区
+├── .archive/                 # 归档区（保留年/月分层，如 .archive/facts/2026/09/）
 ├── index.json                # 公共 FACT 检索索引（加密库只含公共条目）
 ├── keys/                     # 加密库密钥库：salt / <owner>.key.enc(UMK 包裹) / <owner>.key.recovery(恢复钥匙包裹) / recovery.key.enc / bindings/<id>.key.agent；legacy cache/<id>.key 不再加载
 └── agents.json               # 智能体身份登记表（唯一性）
 ```
 
-记忆文件 `<YYYY-MM-DD>-<NNNN>.md`，frontmatter 含 `type / subject / statement / confidence / created / updated / tags / immutable / scope / owner / source / weight / access_count / last_accessed`（`source` 记录来源、`weight` 重要性权重默认 1.0）；正文为记忆内容。旧版根下平铺的 `prefs/` `bounds/` `commits/` 会在 `reindex`（或首次 recall 建索引）时按 frontmatter `owner` 自动迁移到 `private/<owner>/<type>/`。
+记忆文件 `<YYYY-MM-DD>-<NNNN>.md`，frontmatter 含 `type / subject / statement / confidence / created / updated / tags / immutable / scope / owner / source / weight / access_count / last_accessed`（`source` 记录来源、`weight` 重要性权重默认 1.0）；正文为记忆内容。**新写入按年/月分层**（如 `facts/2026/09/2026-09-25-0001.md`），读取时新旧路径同时兼容：v0.16 及更早的平铺文件（`facts/*.md`、`private/<owner>/<type>/*.md`）保持原位继续可读，**不做自动迁移**；写入去重也只覆盖当前年/月与平铺根，不会在大库上全量扫描。旧版根下平铺的 `prefs/` `bounds/` `commits/`（更早的布局）仍会在 `reindex`（或首次 recall 建索引）时按 frontmatter `owner` 自动迁移到 `private/<owner>/<type>/`。
+
+归档保留分层：`archive` / `maintain --apply` 把记忆移入 `.archive/` 时按原年/月路径落位（不同月份的同名文件不会互相覆盖），旧平铺文件仍落到归档根。
 
 自我档案（本智能体身份，强制落盘）：PREF，`subject=自我接入档案`，`owner=<本智能体ID>`，statement 为 `; ` 分隔的 key:value——`agent_id / host / memory_home / mcp_mode（stdio|http）/ engine_url（仅远端）/ token（仅远端；本机不存 token）`，可含 `agent_name / user_name / relationship`（`iam --name/--user/--relationship` 写入）。
 

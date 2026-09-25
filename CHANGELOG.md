@@ -1,3 +1,14 @@
+## v0.17.0 (2026-09-25)
+
+**规模三项（B1 写入分层 + B2 规模体检）**
+
+- 记忆文件新写入按年/月分层：公共 `facts/<yyyy>/<mm>/`，私密 `private/<owner>/<type>/<yyyy>/<mm>/`。读取与索引递归兼容新旧两种布局，v0.16 及更早的平铺文件保持原位、不自动迁移。
+- 去重与序号跨布局统一：序号在「类型目录 + owner」内全局唯一（平铺与分层不重复编号）；写入去重只扫当前年/月、同年平铺文件与类型根，避免大库每次写入全量遍历（跨月重复由既有的 `maintain --dedup` 与 `consolidate` 处理）。
+- 归档保留分层：`archive` / `maintain --apply --purge` / `consolidate` 移入 `.archive/` 时按原年/月路径落位，不同月份的同名文件不再互相覆盖；旧平铺文件仍落到归档根。
+- 明文库转加密（`migrate`）递归处理年/月子目录，不再漏掉分层私密文件。
+- `doctor` 新增规模体检：记忆条数 / 单目录最大文件数 / 索引总体积 / 索引冷启动耗时（多次取中位数）；阈值走 `config set scale_warn_entries` / `scale_warn_files_per_dir` / `scale_warn_index_bytes` / `scale_warn_cold_start_ms`，超阈值进 `checks.scale.warnings` 并计入 doctor warning，只读、不锁定破坏性写入。
+- 回归：`test/scale-layout.test.js` 8 项（新写入分层 / 跨布局序号 / 新旧混读 / 导出导入往返 / 私密归属 / 归档路径 / doctor 规模正常与告警）；全量 `npm test` 182/182 PASS。
+
 ## v0.16.7 (2026-09-23)
 
 **迁移口令安全 + view 根指纹复用校验**

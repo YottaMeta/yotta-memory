@@ -211,7 +211,7 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 
 - `maintain`（默认 dry-run 预览）：列出归档候选与遗忘候选（v0.10.0 起按**分类型衰减后**的效用分 + 年龄判定；默认：utility < 0.35 且超 180 天 = 归档候选，utility < 0.12 且超 365 天 = 遗忘候选）。
 - **immutable / BOUND 豁免**：红线与边界不参与任何自动归档 / 遗忘。
-- `maintain --apply`：执行归档（公共 → `.archive/facts/`，私密 → `.archive/private/<owner>/<type>/`，可恢复）。
+- `maintain --apply`：执行归档（公共 → `.archive/facts/`，私密 → `.archive/private/<owner>/<type>/`，可恢复；年/月分层文件保留原分层，如 `.archive/facts/2025/01/`）。
 - `maintain --apply --purge`：真删遗忘候选（谨慎；硬删除不可回滚）。
 - `maintain --dedup`：查重复候选并给**置信度分档**——≥0.85 高置信（可自动合并）/ 0.65–0.85 建议手动 / 其余忽略。
 - `maintain --dedup --apply`：自动合并同归属（同类型 + 同 scope/owner）高置信组：保留 confidence 最高的一条，合并 tags / 使用次数 / 反馈，其余移入 `.archive/` 并写批次审计（可 `consolidate --undo <batch>` 回滚）。**注意 `--dedup` 与归档互斥**：`--dedup [--apply]` 只查重 / 自动合并，不会顺手归档单条旧记忆——要归档请单独跑 `maintain --apply`。
@@ -270,7 +270,7 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 
 ## 3.9 开工 doctor 与事务快照（v0.12.2）
 
-- `yotta-memory doctor`：只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份；加 `--json` 可输出机器可读结果，顶层含 `schemaVersion` / `encryption` / `migration_required`，并保留 `identity.mode` / `identity.agentKeyStatus`。
+- `yotta-memory doctor`：只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json`、最近备份与规模（记忆条数 / 单目录最大文件数 / 索引总体积 / 索引冷启动耗时）。规模阈值用 `config set scale_warn_entries 50000`、`scale_warn_files_per_dir`、`scale_warn_index_bytes`、`scale_warn_cold_start_ms` 调整；超阈值只告警，不锁定破坏性写入。加 `--json` 可输出机器可读结果，顶层含 `schemaVersion` / `encryption` / `migration_required`，规模明细在 `checks.scale`，并保留 `identity.mode` / `identity.agentKeyStatus`。
 - 严重异常（根目录缺失、密钥库缺文件、备份目录同卷）会返回非零退出码；此时 `context` 也会显示“破坏性写入已锁定”。
 - `maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在写入前自动创建新的整库事务快照，并在 `.archive/audit-<日期>.jsonl` 记录 transaction / operation / snapshot。
 - 未配置独立备份目录、doctor critical 或快照失败时，命令直接拒绝执行，原记忆保持不变；`forget` 仍只移入 `.trash/`，不重复创建整库快照。
@@ -344,7 +344,7 @@ yotta-memory token new --agent 我的智能体ID
 
 **第 6 步：备份与迁移**
 
-- 备份 = 复制整个记忆目录（`facts/` `private/` `.archive/` + `index.json` + `agents.json` + `.server/`），复制到哪、哪就是记忆库；迁移同理，整个目录拷走即可。
+- 备份 = 复制整个记忆目录（`facts/` `private/` `.archive/` + `index.json` + `agents.json` + `.server/`），其中 `facts/<年>/<月>/` 与 `private/<owner>/<type>/<年>/<月>/` 是分层后的新写入位置；复制到哪、哪就是记忆库，迁移同理，整个目录拷走即可。
 - `export` / `import` 是把记忆导出成单个 JSON 或从 JSON 导入，适合跨工具交换或归档，不是日常备份的必需步骤。
 
 ## 5. 智能体接入篇（本机 / 局域网其它主机）
@@ -437,11 +437,11 @@ yotta-memory key claim <本智能体ID>
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（零推断，写 `profile.md`）|
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 开工上下文包（身份+铁律+画像+长期摘要+任务相关记忆+近期走廊+近期高价值+边界+承诺+会话闭环契约；--budget 控制动态记忆字符预算；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆 |
-| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（v0.12.2：根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入；v0.16.0：`--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移）|
-| `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；私密入 `.archive/private/<owner>/<type>/`）|
+| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（v0.12.2：根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入；v0.16.0：`--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；v0.17.0：`checks.scale` 规模体检）|
+| `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；保留年/月分层，私密入 `.archive/private/<owner>/<type>/<年>/<月>/`）|
 | `yotta-memory reindex` | 重建索引 |
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |
-| `yotta-memory config set <键> <值>` / `config get [--json]` | 记忆库位置与引擎参数（`memory_home` / `embedding_cmd` / `embedding_timeout` / `maintain_archived_utility` / `maintain_decay_halflife_<TYPE>` / `consolidate_*` 等；`get --json` 同时返回身份状态）|
+| `yotta-memory config set <键> <值>` / `config get [--json]` | 记忆库位置与引擎参数（`memory_home` / `embedding_cmd` / `embedding_timeout` / `maintain_archived_utility` / `maintain_decay_halflife_<TYPE>` / `consolidate_*` / `scale_*` 等；`get --json` 同时返回身份状态）|
 | `yotta-memory whoami --agent <id> [--json]` | 查看当前显式身份与登记状态；身份不从环境变量读取；`--json` 返回结构化身份状态 |
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 访问 token（同 ID 已被其它来源占用需 `--force` 覆盖）|
@@ -454,7 +454,7 @@ yotta-memory key claim <本智能体ID>
 | `yotta-memory distill [--owner <id>] [--subject <主题>] [--model <cmd>] [--out <路径>]` | 心理日志蒸馏（v0.8.0：统计摘要 / 主题画像 / 知识地图）|
 | `yotta-memory explain <文件|主题>` | 查看单条记忆效用分项（v0.8.0）|
 
-类型：`FACT`（事实，共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺），后三类按智能体物理分目录隔离（`private/<owner>/<type>/`）。
+类型：`FACT`（事实，共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺），后三类按智能体物理分目录隔离（`private/<owner>/<type>/`）；v0.17.0 起新写入再按年/月分层（`facts/<年>/<月>/`、`private/<owner>/<type>/<年>/<月>/`），旧平铺文件留在原位继续可读，不做自动迁移。
 
 ## 7. 故障排查
 

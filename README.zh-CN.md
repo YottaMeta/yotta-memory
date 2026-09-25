@@ -23,7 +23,7 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
-> 🆕 **v0.16.7（迁移口令安全 + view 根指纹）**：明文库转加密推荐交互式 `yotta-memory migrate --recovery-key-out "$env:USERPROFILE\yotta-memory-recovery.key"`，按提示输入主口令；自动化使用 `YOTTA_MEMORY_PASS`。非 ASCII 口令不要用 Windows 管道（`echo 中文 | ...` 可能改变实际口令）。`view` 复用端口前会校验 memory_home 指纹；跨库或旧版无指纹服务会拒绝复用并提示换端口。
+> 🆕 **v0.17.0（规模：文件分层 + doctor 规模体检）**：新写入按年/月分层——公共 `facts/<年>/<月>/`、私密 `private/<owner>/<type>/<年>/<月>/`；v0.16 及更早的平铺文件留在原位继续可读，不做自动迁移。归档保留分层，不同月份的同名文件不会互相覆盖。`doctor` 新增规模段（记忆条数 / 单目录最大文件数 / 索引总体积 / 索引冷启动耗时），阈值用 `config set scale_warn_entries` / `scale_warn_files_per_dir` / `scale_warn_index_bytes` / `scale_warn_cold_start_ms` 调整，超阈值只告警，不锁定破坏性写入。上一版 v0.16.7：明文库转加密推荐交互式 `yotta-memory migrate --recovery-key-out "$env:USERPROFILE\yotta-memory-recovery.key"`，自动化使用 `YOTTA_MEMORY_PASS`；`view` 复用端口前校验 memory_home 指纹。
 > 🆕 **v0.16.5（doctor JSON 契约）**：`doctor --json` 顶层新增稳定字段 `schemaVersion` / `encryption` / `migration_required`，同时保留原有 `checks` / `warnings` / `identity` 结构。
 > 🆕 **v0.16.4（agent-key 提示范围）**：`--agent-key-file` 不存在时不再为公共 / 维护命令输出全局 `stderr` 警告；只有真正访问私密区才 fail-closed，并给出缺失路径、`view` / `key bind`、`key status` / `key claim` 步骤。`whoami --json`、`doctor --json`、`config get --json` 返回结构化 `identity.mode` / `identity.agentKeyStatus`。
 > 🆕 **v0.16.2（首启修复）**：空加密库 `view` 可用恢复钥匙解锁；非 TTY 支持 `--password-stdin`；恢复钥匙支持 `--recovery-key-out <文件>`；`--agent-key-file` 不存在时降级未授权（公共 FACT 可读、私密 fail-closed）；空明文库可直接 `migrate` 启用加密；`view` 端口占用给明确提示。

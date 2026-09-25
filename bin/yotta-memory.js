@@ -25,7 +25,7 @@ const net = require('net');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.16.7';
+const VERSION = '0.17.0';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir']);
 const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--explain', '--semantic', '--runtime']);
 
@@ -215,7 +215,7 @@ const HELP_MODEL = [
     ] },
     { name: 'config', usage: 'config <get | set <键> <值>>', what: '查看或修改元忆配置', when: '调整记忆位置、embedding 命令、备份或维护阈值时', subcommands: [
       helpSub('get', 'get', '查看当前配置', '想知道实际生效值 / 路径时', []),
-      helpSub('set', 'set <键> <值>', '修改配置键', '调整 memory_home / backup_dir / embedding_cmd / embedding_timeout / maintain_* / consolidate_* 时', []),
+      helpSub('set', 'set <键> <值>', '修改配置键', '调整 memory_home / backup_dir / embedding_cmd / embedding_timeout / maintain_* / consolidate_* / scale_* 时', []),
     ] },
   ] },
   { group: '平台与服务', commands: [
@@ -802,7 +802,8 @@ function runtimeRestartManagedServer() {
   }
   return { error: true, text: '未检测到可管理的 server 自启配置，未执行重启。' };
 }
-function today() {
+function today(override) {
+  if (override && /^\d{4}-\d{2}-\d{2}$/.test(String(override))) return String(override);
   const d = new Date();
   const p = (n) => String(n).padStart(2, '0');
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
@@ -915,6 +916,40 @@ function typeSubdir(type, owner) {
   if (t === 'FACT') return PUBLIC_DIR;
   const id = owner || '';
   return path.join(PRIVATE_DIR, id, TYPE_DIRS[t]);
+}
+// v0.17.0 规模：新写入按 <yyyy>/<mm> 分层（公共 facts/<yyyy>/<mm>/，私密 private/<owner>/<type>/<yyyy>/<mm>/）。
+// 只影响新写入；旧平铺文件保持原位继续可读，不自动迁移。
+function dateSubdir(dateStr) {
+  const d = String(dateStr || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return '';
+  return path.join(d.slice(0, 4), d.slice(5, 7));
+}
+function entryWriteDir(root, type, owner, dateStr) {
+  const base = path.join(root, typeSubdir(type, owner));
+  const sub = dateSubdir(dateStr);
+  return sub ? path.join(base, sub) : base;
+}
+// 归档保留年/月分层（不同月份的同名文件不再互相覆盖）；旧平铺文件仍按原样落到归档根。
+const MEMORY_FILE_RE = /\.md(\.enc)?$/;
+function entryRelParts(rel) {
+  const seg = String(rel || '').replace(/\\/g, '/').split('/').filter(Boolean);
+  if (seg[0] === PRIVATE_DIR) return { kind: 'private', owner: seg[1] || '', type: seg[2] || '' };
+  if (seg[0] === PUBLIC_DIR) return { kind: 'public', owner: '', type: 'facts' };
+  return null;
+}
+function archiveRelFor(root, rel, type, owner) {
+  const parts = entryRelParts(rel);
+  const t = String(type || (parts && parts.type) || 'FACT').toUpperCase();
+  const normalized = String(rel || '').replace(/\\/g, '/');
+  const seg = normalized.split('/');
+  const idx = seg.findIndex(function (s) { return /^\d{4}$/.test(s); });
+  const sub = (idx >= 0 && /^\d{2}$/.test(seg[idx + 1] || '')) ? seg[idx] + '/' + seg[idx + 1] : '';
+  const baseName = path.basename(normalized);
+  if (t === 'FACT' || (parts && parts.kind === 'public')) {
+    return path.posix.join(ARCHIVE_DIR, 'facts', sub, baseName);
+  }
+  const o = owner || (parts && parts.owner) || '';
+  return path.posix.join(ARCHIVE_DIR, PRIVATE_DIR, o, TYPE_DIRS[t] || 'facts', sub, baseName);
 }
 function defaultScope(type) {
   return PRIVATE_TYPES.indexOf(String(type).toUpperCase()) === -1 ? 'public' : 'private';
@@ -1315,18 +1350,61 @@ function ensureInit(root) {
   fs.mkdirSync(path.join(root, ARCHIVE_DIR), { recursive: true });
   const readme = path.join(root, 'README.md');
   if (!fs.existsSync(readme)) {
-    fs.writeFileSync(readme, '# yotta-memory（元忆）记忆库\n\n有权限边界的文件式智能体记忆存储目录。结构：facts/（公共 FACT） private/<agent_id>/{prefs,bounds,commits}/（各智能体私密，物理隔离） .archive/（归档）。\n', 'utf8');
+    fs.writeFileSync(readme, '# yotta-memory（元忆）记忆库\n\n有权限边界的文件式智能体记忆存储目录。结构：facts/<年>/<月>/（公共 FACT） private/<agent_id>/{prefs,bounds,commits}/<年>/<月>/（各智能体私密，物理隔离） .archive/（归档）。v0.16 及更早的平铺文件（facts/*.md、private/<agent_id>/<type>/*.md）继续可读，不做自动迁移。\n', 'utf8');
   }
 }
-function nextSeq(dir) {
+// 递归收集目录下（含年/月子目录）的记忆文件路径，跳过 distills/profile.md 等非记忆文件。
+function walkEntryFiles(dir, out) {
+  let names;
+  try { names = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+  for (const entry of names) {
+    const fp = path.join(dir, entry.name);
+    if (entry.isDirectory()) { walkEntryFiles(fp, out); continue; }
+    if (!entry.isFile()) continue;
+    if (!MEMORY_FILE_RE.test(entry.name)) continue;
+    out.push(fp);
+  }
+}
+// 序号在「类型目录 + owner」范围内唯一，跨越旧平铺与新年/月分层，避免同名覆盖。
+function maxSeqInTree(dir) {
   let max = 0;
-  if (fs.existsSync(dir)) {
-    for (const f of fs.readdirSync(dir)) {
-      const m = f.match(/^\d{4}-\d{2}-\d{2}-(\d{4})\.md(\.enc)?$/);
-      if (m) max = Math.max(max, parseInt(m[1], 10));
-    }
+  const files = [];
+  if (fs.existsSync(dir)) walkEntryFiles(dir, files);
+  for (const fp of files) {
+    const f = path.basename(fp);
+    const m = f.match(/^\d{4}-\d{2}-\d{2}-(\d{4})\.md(\.enc)?$/);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
   }
   return String(max + 1).padStart(4, '0');
+}
+function nextSeq(dir) { return maxSeqInTree(dir); }
+// 分层写入时序号要跨该类型全部分层计算（否则同一年不同月份会重复 0001）。
+function nextSeqFor(typeDir, writeDir) {
+  return maxSeqInTree(typeDir || writeDir);
+}
+// 去重只看「最近写入窗口」：当前年/月子目录 + 平铺根，避免大库每次写入都全量扫一遍。
+function recentlyWrittenFiles(typeDir, writeDir) {
+  const out = [];
+  if (path.resolve(typeDir) === path.resolve(writeDir)) {
+    if (fs.existsSync(typeDir)) walkEntryFiles(typeDir, out);
+    return out;
+  }
+  if (fs.existsSync(writeDir)) walkEntryFiles(writeDir, out);
+  const yearDir = path.dirname(writeDir);
+  const seen = new Set(out);
+  if (fs.existsSync(yearDir)) {
+    for (const fp of fs.readdirSync(yearDir)) {
+      const full = path.join(yearDir, fp);
+      if (fs.statSync(full).isFile() && MEMORY_FILE_RE.test(fp) && !seen.has(full)) out.push(full);
+    }
+  }
+  if (fs.existsSync(typeDir)) {
+    for (const f of fs.readdirSync(typeDir)) {
+      const full = path.join(typeDir, f);
+      if (fs.statSync(full).isFile() && MEMORY_FILE_RE.test(f) && !seen.has(full)) out.push(full);
+    }
+  }
+  return out;
 }
 
 
@@ -1859,13 +1937,8 @@ function collectEntryFiles(root) {
     }
   }
   const out = [];
-  for (const dir of dirs) {
-    for (const f of fs.readdirSync(dir)) {
-      if (!/\.md(\.enc)?$/.test(f)) continue;
-      const fp = path.join(dir, f);
-      if (fs.statSync(fp).isFile()) out.push(fp);
-    }
-  }
+  // v0.17.0：递归下探年/月子目录；旧平铺文件依旧按原路径收集。
+  for (const dir of dirs) walkEntryFiles(dir, out);
   return out;
 }
 // 迁移：把根下旧平铺 prefs|bounds|commits/*.md 按 frontmatter owner 迁入 private/<owner>/<type>/
@@ -3187,32 +3260,92 @@ function runtimeDoctorCore(opts) {
   };
 }
 function storeHasMemoryData(root) {
-  const factsDir = path.join(root, PUBLIC_DIR);
-  if (fs.existsSync(factsDir)) {
-    try {
-      if (fs.readdirSync(factsDir).some(function (f) { return /\.md(\.enc)?$/.test(f); })) return true;
-    } catch (e) {}
-  }
+  if (storeHasPublicFacts(root)) return true;
   if (hasPlaintextPrivate(root)) return true;
-  for (const owner of collectOwners(root)) {
-    for (const t of PRIVATE_LEAF) {
-      const dir = path.join(root, PRIVATE_DIR, owner, t);
-      if (!fs.existsSync(dir)) continue;
-      try {
-        if (fs.readdirSync(dir).some(function (f) { return f.endsWith(ENC_SUFFIX); })) return true;
-      } catch (e) {}
-    }
-  }
+  // v0.17.0：年/月分层后必须递归统计，否则新布局会被误判为空库。
+  if (collectEntryFiles(root).length) return true;
   return false;
 }
 function storeHasPublicFacts(root) {
   const factsDir = path.join(root, PUBLIC_DIR);
   if (!fs.existsSync(factsDir)) return false;
-  try {
-    return fs.readdirSync(factsDir).some(function (f) { return /\.md(\.enc)?$/.test(f); });
-  } catch (e) {
-    return false;
+  const files = [];
+  walkEntryFiles(factsDir, files);
+  return files.length > 0;
+}
+// ---- v0.17.0 B2：doctor 规模体检（只读；阈值走 config，info / warning 两级）----
+const SCALE_THRESHOLD_DEFAULTS = {
+  scale_warn_entries: 50000,
+  scale_warn_files_per_dir: 500,
+  scale_warn_index_bytes: 5 * 1024 * 1024,
+  scale_warn_cold_start_ms: 2000,
+};
+function scaleThreshold(cfg, key) {
+  const raw = cfg ? cfg[key] : undefined;
+  if (raw === undefined || raw === null || raw === '') return SCALE_THRESHOLD_DEFAULTS[key];
+  const n = parseFloat(raw);
+  return (n >= 0) ? n : SCALE_THRESHOLD_DEFAULTS[key];
+}
+function maxFilesInDir(dir) {
+  let max = 0;
+  let names;
+  try { names = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return 0; }
+  let files = 0;
+  for (const item of names) {
+    if (item.isDirectory()) max = Math.max(max, maxFilesInDir(path.join(dir, item.name)));
+    else if (item.isFile()) files++;
   }
+  return Math.max(max, files);
+}
+function indexSizeBytes(root) {
+  let total = 0;
+  const manifest = indexPath(root);
+  try { total += fs.statSync(manifest).size; } catch (e) { /* 尚未建索引 */ }
+  for (const sh of (loadIndexManifest(root) || { shards: [] }).shards || []) {
+    if (!isSafeShardName(sh)) continue;
+    try { total += fs.statSync(path.join(root, sh)).size; } catch (e) { /* 分片缺失已由 doctor 其它段报出 */ }
+  }
+  return total;
+}
+function measureIndexColdStart(root) {
+  const started = process.hrtime.bigint();
+  loadIndex(root);
+  const elapsed = Number(process.hrtime.bigint() - started) / 1e6;
+  return Math.round(elapsed * 1000) / 1000;
+}
+function scaleReport(root, cfg) {
+  const thresholds = {};
+  for (const key of Object.keys(SCALE_THRESHOLD_DEFAULTS)) thresholds[key] = scaleThreshold(cfg, key);
+  const entries = collectEntryFiles(root).length;
+  const filesPerDir = Math.max(maxFilesInDir(path.join(root, PUBLIC_DIR)), maxFilesInDir(path.join(root, PRIVATE_DIR)));
+  const indexBytes = indexSizeBytes(root);
+  // 冷启动取多次测量的中位数，避免单次抖动影响只读体检结果。
+  const samples = [];
+  for (let i = 0; i < 3; i++) samples.push(measureIndexColdStart(root));
+  samples.sort(function (a, b) { return a - b; });
+  const coldStartMs = samples[Math.floor(samples.length / 2)];
+  const warnings = [];
+  if (entries > thresholds.scale_warn_entries) {
+    warnings.push('规模: 记忆条数 ' + entries + ' 超过阈值 ' + thresholds.scale_warn_entries + '（考虑按年归档旧条目，或分批导出冷数据）');
+  }
+  if (filesPerDir > thresholds.scale_warn_files_per_dir) {
+    warnings.push('规模: 单个目录文件数 ' + filesPerDir + ' 超过阈值 ' + thresholds.scale_warn_files_per_dir + '（检查是否有目录未按年/月分层）');
+  }
+  if (indexBytes > thresholds.scale_warn_index_bytes) {
+    warnings.push('规模: 索引总体积 ' + indexBytes + ' 字节超过阈值 ' + thresholds.scale_warn_index_bytes + '（可用 reindex 重建，或按年份分片）');
+  }
+  if (coldStartMs > thresholds.scale_warn_cold_start_ms) {
+    warnings.push('规模: 索引冷启动 ' + coldStartMs + 'ms 超过阈值 ' + thresholds.scale_warn_cold_start_ms + 'ms（可用 reindex 重建索引）');
+  }
+  return {
+    entries: entries,
+    files_per_dir: filesPerDir,
+    index_bytes: indexBytes,
+    cold_start_ms: coldStartMs,
+    thresholds: thresholds,
+    level: warnings.length ? 'warning' : 'ok',
+    warnings: warnings,
+  };
 }
 // 开工可靠性检查：只读检查根目录、密钥库、索引、身份登记与最近备份。
 function doctorCore(opts) {
@@ -3254,6 +3387,13 @@ function doctorCore(opts) {
     warnings.push('公共索引无法解析或版本过旧；可运行 yotta-memory reindex 重建。');
   } else {
     checks.index = { exists: true, valid: true };
+  }
+
+  // v0.17.0 B2：规模体检（只读，不产生写入）
+  if (exists) {
+    const scale = scaleReport(root, cfg);
+    checks.scale = scale;
+    for (const message of scale.warnings) warnings.push(message);
   }
 
   if (!fs.existsSync(agentsPath(root))) {
@@ -3341,6 +3481,9 @@ function doctorCore(opts) {
     '- agent home: ' + (agentHomeEnv || '(未设置 YOTTA_MEMORY_AGENT_HOME，按宿主默认检测)'),
     '- 备份目录: ' + (configuredDir || (cfg.backup_setup_choice === 'manual' ? '手动模式' : '(未配置)')),
   ];
+  if (checks.scale) {
+    lines.push('- 规模: ' + checks.scale.entries + ' 条记忆 / 单目录最大 ' + checks.scale.files_per_dir + ' 个文件 / 索引 ' + checks.scale.index_bytes + ' 字节 / 冷启动 ' + checks.scale.cold_start_ms + 'ms（' + (checks.scale.level === 'warning' ? '有告警' : '正常') + '）');
+  }
   for (const message of critical) lines.push('- [严重] ' + message);
   for (const message of warnings) lines.push('- [警告] ' + message);
   if (!critical.length && !warnings.length) lines.push('- 检查项: 全部通过');
@@ -3723,17 +3866,19 @@ function rememberCore(type, subject, statement, opts) {
   if (scope === 'private' && encrypted && !getOwnerKeyFor(root, owner)) {
     return { error: true, text: '私密区已加密：当前无 ' + owner + ' 的授权密钥，请在用户平台授权（yotta-memory view → 授权本智能体）后再写私密记忆。公共 FACT 不受影响。' };
   }
-  const dir = path.join(root, typeSubdir(t, owner));
+  const typeDir = path.join(root, typeSubdir(t, owner));
+  const writeDate = today(opts._today);
+  const dir = entryWriteDir(root, t, owner, writeDate);
   fs.mkdirSync(dir, { recursive: true });
-  if (fs.existsSync(dir)) {
-    for (const f of fs.readdirSync(dir)) {
-      const fp = path.join(dir, f);
-      if (!fs.statSync(fp).isFile()) continue;
+  // 去重扫描覆盖旧平铺 + 最近写入窗口，避免同一内容按两种布局各存一份。
+  const existingFiles = recentlyWrittenFiles(typeDir, dir);
+  if (existingFiles.length) {
+    for (const fp of existingFiles) {
       let parsed;
       try { parsed = parseFrontmatter(readMemoryText(root, fp, owner)); } catch (err) { continue; }
       const meta = parsed.meta;
       if ((meta.type || '').toUpperCase() === t && meta.subject === subj && meta.statement === stmt) {
-        const patch = { updated: today() };
+        const patch = { updated: writeDate };
         if (owner && !meta.owner) patch.owner = owner;
         if (scope && !meta.scope) patch.scope = scope;
         if (opts.source && !meta.source) patch.source = opts.source;
@@ -3754,12 +3899,12 @@ function rememberCore(type, subject, statement, opts) {
       }
     }
   }
-  const seq = nextSeq(dir);
+  const seq = nextSeqFor(typeDir, dir);
   const suffix = (encrypted && scope === 'private') ? ENC_SUFFIX : '';
-  const file = path.join(dir, today() + '-' + seq + '.md' + suffix);
+  const file = path.join(dir, writeDate + '-' + seq + '.md' + suffix);
   const rec = {
     type: t, subject: subj, statement: stmt,
-    confidence: 1.0, created: today(), updated: today(),
+    confidence: 1.0, created: writeDate, updated: writeDate,
     tags: [], immutable: false,
     scope: scope, owner: owner,
     source: opts.source || '',
@@ -4082,10 +4227,11 @@ function archiveCore(opts) {
     if (t === 'BOUND') continue; // v0.10.0 BOUND 豁免归档（边界常驻）
     // v0.8.0 统一效用分（盖棺分）替代 vitality
     if (utilityScore(meta) < threshold && createdTs < cutoff) {
-      const destDir = archiveDirFor(root, t, owner);
-      fs.mkdirSync(destDir, { recursive: true });
-      fs.renameSync(fp, path.join(destDir, path.basename(fp)));
       const rel = relOf(root, fp);
+      const dest = path.join(root, archiveRelFor(root, rel, t, owner));
+      const destDir = path.dirname(dest);
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.renameSync(fp, dest);
       movedFiles.push(rel);
       moved++;
     }
@@ -4288,9 +4434,10 @@ function maintainCore(opts) {
     for (const rec of toArchive) {
       lines.push('- [' + rec.type + '] ' + rec.rel + '（utility ' + round3(rec.utility) + '，' + rec.ageDays + ' 天）— ' + (rec.meta.subject || '') + ': ' + String(rec.meta.statement || '').slice(0, 40) + (rec.type === 'COMMIT' ? '  ⚠️ COMMIT 收工纪律锚点，请确认' : ''));
       if (apply && !opts.dedup) {
-        const destDir = archiveDirFor(root, rec.type, rec.owner);
+        const dest = path.join(root, archiveRelFor(root, rec.rel, rec.type, rec.owner));
+        const destDir = path.dirname(dest);
         fs.mkdirSync(destDir, { recursive: true });
-        fs.renameSync(rec.fp, path.join(destDir, path.basename(rec.fp)));
+        fs.renameSync(rec.fp, dest);
         appendAudit(root, 'audit', { ts: new Date().toISOString(), file: rec.rel, action: 'archive', reason: 'utility<' + round3(rec.utility) + ',age>' + rec.ageDays, utility: round3(rec.utility) });
         archived++;
       }
@@ -4302,9 +4449,9 @@ function maintainCore(opts) {
     for (const rec of toForget) {
       lines.push('- [' + rec.type + '] ' + rec.rel + '（utility ' + round3(rec.utility) + '，' + rec.ageDays + ' 天）');
       if (apply && purge && !opts.dedup) {
-        const destDir = archiveDirFor(root, rec.type, rec.owner);
+        const dest = path.join(root, archiveRelFor(root, rec.rel, rec.type, rec.owner));
+        const destDir = path.dirname(dest);
         fs.mkdirSync(destDir, { recursive: true });
-        const dest = path.join(destDir, path.basename(rec.fp));
         fs.renameSync(rec.fp, dest);
         appendAudit(root, 'audit', { ts: new Date().toISOString(), file: rec.rel, action: 'forget', reason: 'utility<' + round3(rec.utility) + ',age>' + rec.ageDays + ',purge', utility: round3(rec.utility) });
         // 真删前二次确认标记：purge 已显式授权，删除 .archive 内副本前的最终动作 = 记录审计后删除
@@ -4585,9 +4732,19 @@ function migrateCore(root, password, recoveryKeyIn) {
     for (const t of PRIVATE_LEAF) {
       const d = path.join(root, PRIVATE_DIR, owner, t);
       if (!fs.existsSync(d)) continue;
-      for (const f of fs.readdirSync(d)) {
-        if (!f.endsWith('.md')) continue;
-        const fp = path.join(d, f);
+      // v0.17.0：递归下探年/月子目录，明文库迁移到加密时不能漏掉分层文件。
+      const plaintexts = [];
+      const collectPlaintext = function (current) {
+        let names = [];
+        try { names = fs.readdirSync(current, { withFileTypes: true }); } catch (e) { return; }
+        for (const item of names) {
+          const fp = path.join(current, item.name);
+          if (item.isDirectory()) { collectPlaintext(fp); continue; }
+          if (item.isFile() && /\.md$/.test(item.name) && !isEncFile(fp)) plaintexts.push(fp);
+        }
+      };
+      collectPlaintext(d);
+      for (const fp of plaintexts) {
         const text = fs.readFileSync(fp, 'utf8');
         fs.writeFileSync(fp + ENC_SUFFIX, encryptMemoryText(text, ok));
         fs.unlinkSync(fp);
@@ -5439,18 +5596,20 @@ function importCore(root, src) {
     const owner = meta.owner || '';
     const scope = meta.scope || defaultScope(t);
     if (encrypted && scope === 'private' && !getOwnerKeyFor(root, owner)) { skippedPriv++; continue; }
-    const dir = path.join(root, typeSubdir(t, owner));
+    // 导入沿用条目的 created 日期决定分层目录，避免历史记忆被塞进当前月。
+    const importDate = /^\d{4}-\d{2}-\d{2}$/.test(String(meta.created || '')) ? String(meta.created) : today();
+    const dir = entryWriteDir(root, t, owner, importDate);
     fs.mkdirSync(dir, { recursive: true });
-    let seq = nextSeq(dir);
+    let seq = nextSeqFor(path.join(root, typeSubdir(t, owner)), dir);
     const suffix = (encrypted && scope === 'private') ? ENC_SUFFIX : '';
-    let file = path.join(dir, today() + '-' + seq + '.md' + suffix);
-    while (fs.existsSync(file)) { seq = String(parseInt(seq, 10) + 1).padStart(4, '0'); file = path.join(dir, today() + '-' + seq + '.md' + suffix); }
+    let file = path.join(dir, importDate + '-' + seq + '.md' + suffix);
+    while (fs.existsSync(file)) { seq = String(parseInt(seq, 10) + 1).padStart(4, '0'); file = path.join(dir, importDate + '-' + seq + '.md' + suffix); }
     const rec = {
       type: t,
       subject: meta.subject || '',
       statement: meta.statement || '',
       confidence: parseFloat(meta.confidence || 1.0),
-      created: meta.created || today(),
+      created: importDate,
       updated: meta.updated || today(),
       tags: parseTags(meta.tags),
       immutable: meta.immutable === true || meta.immutable === 'true',
@@ -6028,10 +6187,12 @@ function cmdContext(opts) {
 
 // ---- config 命令 ----
 // v0.10.0：maintain_* / consolidate_* 数值键纳入 config set/get（此前只支持 3 个键但文档已写可调）
-function isNumericConfigKey(key) { return /^(maintain_|consolidate_|backup_max_age_hours$)/.test(key); }
+function isNumericConfigKey(key) { return /^(maintain_|consolidate_|scale_|backup_max_age_hours$)/.test(key); }
+// v0.17.0 B2：doctor 规模体检阈值键（0 表示只要超过 0 就告警，便于压测与演练）
+const SCALE_CONFIG_KEYS = ['scale_warn_entries', 'scale_warn_files_per_dir', 'scale_warn_index_bytes', 'scale_warn_cold_start_ms'];
 function cmdConfigSet(key, value) {
-  const known = ['memory_home', 'embedding_cmd', 'embedding_timeout', 'backup_dir', 'backup_enabled', 'backup_schedule', 'backup_time', 'backup_max_age_hours', 'backup_setup_choice', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'];
-  if (known.indexOf(key) === -1) { console.error('未知配置项: ' + key + '（可用: memory_home / backup_dir / embedding_cmd / embedding_timeout / maintain_* / consolidate_*）'); process.exit(2); }
+  const known = ['memory_home', 'embedding_cmd', 'embedding_timeout', 'backup_dir', 'backup_enabled', 'backup_schedule', 'backup_time', 'backup_max_age_hours', 'backup_setup_choice', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'].concat(SCALE_CONFIG_KEYS);
+  if (known.indexOf(key) === -1) { console.error('未知配置项: ' + key + '（可用: memory_home / backup_dir / embedding_cmd / embedding_timeout / maintain_* / consolidate_* / scale_*）'); process.exit(2); }
   if (value === undefined || value === null || value === '') { console.error('缺少值: config set ' + key + ' <值>'); process.exit(2); }
   const cfg = loadConfig();
   if (key === 'memory_home') cfg.memory_home = value;
@@ -6064,7 +6225,7 @@ function cmdConfigGet(opts) {
   console.log('backup_time: ' + (cfg.backup_time || '(未设置)'));
   console.log('embedding_cmd: ' + (cfg.embedding_cmd || '(未设置)'));
   console.log('embedding_timeout: ' + (cfg.embedding_timeout || 3000));
-  const keys = ['memory_home', 'backup_dir', 'backup_enabled', 'backup_schedule', 'backup_time', 'backup_max_age_hours', 'backup_setup_choice', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'];
+  const keys = ['memory_home', 'backup_dir', 'backup_enabled', 'backup_schedule', 'backup_time', 'backup_max_age_hours', 'backup_setup_choice', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period'].concat(SCALE_CONFIG_KEYS);
   for (const k of keys) {
     if (k === 'memory_home' || k === 'backup_dir' || k === 'backup_enabled' || k === 'backup_schedule' || k === 'backup_time' || k === 'embedding_cmd' || k === 'embedding_timeout') continue;
     if (cfg[k] !== undefined) console.log(k + ': ' + cfg[k]);
@@ -7730,8 +7891,17 @@ module.exports = {
   loadTokens: loadTokens,
   saveTokens: saveTokens,
   collectEntryFiles: collectEntryFiles,
+  walkEntryFiles: walkEntryFiles,
   migrateLayout: migrateLayout,
+  exportCore: exportCore,
+  importCore: importCore,
   typeSubdir: typeSubdir,
+  dateSubdir: dateSubdir,
+  entryWriteDir: entryWriteDir,
+  archiveRelFor: archiveRelFor,
+  SCALE_CONFIG_KEYS: SCALE_CONFIG_KEYS,
+  SCALE_THRESHOLD_DEFAULTS: SCALE_THRESHOLD_DEFAULTS,
+  scaleReport: scaleReport,
   runtimeRoot: runtimeRoot,
   runtimeManifestPath: runtimeManifestPath,
   runtimeVersionsDir: runtimeVersionsDir,
@@ -7838,6 +8008,7 @@ module.exports = {
 
   loadIndex: loadIndex,
   saveIndex: saveIndex,
+  buildIndex: buildIndex,
   getIndex: getIndex,
   touchIndex: touchIndex,
   loadIndexManifest: loadIndexManifest,
