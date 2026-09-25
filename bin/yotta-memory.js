@@ -25,7 +25,7 @@ const net = require('net');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.17.1';
+const VERSION = '0.17.2';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path']);
 const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--yes', '--keep-memories', '--keep-identity']);
 
@@ -4518,9 +4518,17 @@ function archiveCore(opts) {
   if (guard.error) return { error: true, text: guard.text };
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   let moved = 0;
+  let deniedCrossOwner = 0;
   const movedFiles = [];
+  const selfAgent = resolveIdentity(opts).id;
   for (const fp of collectEntryFiles(root)) {
     const owner = ownerFromPrivatePath(root, fp);
+    // v0.17.2：只归档自己有权写的条目 —— 旧行为遍历全部 owner，
+    // 任何身份都能把别的智能体的私密记忆移进归档区。
+    if (checkOwnerWritable(root, relOf(root, fp), selfAgent, opts.unsafe)) {
+      deniedCrossOwner++;
+      continue;
+    }
     let meta;
     try { meta = parseFrontmatter(readMemoryText(root, fp, owner)).meta; } catch (e) { continue; }
     if (meta.immutable === 'true') continue;
@@ -4541,7 +4549,11 @@ function archiveCore(opts) {
     }
   }
   if (movedFiles.length) removeIndexEntries(root, movedFiles);
-  return { error: false, text: '已归档 ' + moved + ' 条旧记忆到 ' + path.join(root, ARCHIVE_DIR) + '\n事务快照: ' + guard.snapshot.id };
+  let text = '已归档 ' + moved + ' 条旧记忆到 ' + path.join(root, ARCHIVE_DIR) + '\n事务快照: ' + guard.snapshot.id;
+  if (deniedCrossOwner) {
+    text += '\n跨 owner 私密条目已跳过（' + deniedCrossOwner + ' 条）：请用 --agent <id> 声明自己的身份；只有用户显式授权（--unsafe）才能越界维护。';
+  }
+  return { error: false, text: text };
 }
 
 // ---- v0.8.0 自我学习/自我进化/自我提升：feedback / explain / maintain / distill ----
@@ -4643,7 +4655,9 @@ function explainCore(ref, opts) {
   let entry;
   try { entry = readEntry(target.fp, target.root); } catch (e) { return { error: true, text: '读取失败: ' + e.message }; }
   const deny = checkOwnerWritable(target.root, target.rel, selfAgent, opts.unsafe);
-  const readable = !deny;
+  // v0.17.2：跨 owner 私密条目 fail-closed —— 旧行为只是加一句「仅元数据」，
+  // 正文（subject / statement）照样输出，等于把别人的私密记忆读给调用方。
+  if (deny) return { error: true, text: deny };
   const ub = utilityBreakdown(entry);
   const ageDays = entry.created ? daysBetween(entry.created, today()) : 0;
   const cfg = loadConfig();
@@ -4653,7 +4667,7 @@ function explainCore(ref, opts) {
   const forgetU = parseFloat(cfg.maintain_forget_utility || 0.12);
   const forgetAge = parseInt(cfg.maintain_forget_age || '365', 10) || 365;
   const lines = ['[' + entry.type + '] ' + entry.subject + ': ' + entry.statement];
-  lines.push('  文件: ' + target.rel + (readable ? '' : '（其它智能体私密，仅元数据）'));
+  lines.push('  文件: ' + target.rel);
   lines.push('  效用分: ' + ub.total + ' = confidence ' + ub.confidence + ' + 使用 ' + ub.usage + ' + 时效 ' + ub.recency + '（半衰 ' + hlText + '） + 类型 ' + ub.type + ' + 结构 ' + ub.structure + '）×weight ' + ub.weight);
   lines.push('  年龄: ' + ageDays + ' 天 / access_count ' + (entry.access_count || 0) + ' / feedback_net ' + entry.feedback_net + ' / immutable ' + (entry.immutable ? '是' : '否'));
   const importScore = round3(importanceScore(entry));
@@ -4713,8 +4727,15 @@ function maintainCore(opts) {
   if (guard) lines.push('- 事务快照: ' + guard.snapshot.id);
   lines.push('');
   const toArchive = [], toForget = [], skipped = [];
+  const selfAgent = resolveIdentity(opts).id;
+  let deniedCrossOwner = 0;
   for (const fp of collectEntryFiles(root)) {
     const owner = ownerFromPrivatePath(root, fp);
+    // v0.17.2：跨 owner 私密条目默认跳过（旧行为会遍历全部 owner 做归档 / 遗忘）。
+    if (checkOwnerWritable(root, relOf(root, fp), selfAgent, opts.unsafe)) {
+      deniedCrossOwner++;
+      continue;
+    }
     let meta;
     try { meta = parseFrontmatter(readMemoryText(root, fp, owner)).meta; } catch (e) { continue; }
     if (meta.immutable === 'true') { skipped.push({ fp: fp, reason: 'immutable 豁免' }); continue; }
@@ -4784,6 +4805,10 @@ function maintainCore(opts) {
     const grouped = {};
     for (const s of skipped) { grouped[s.reason] = (grouped[s.reason] || 0) + 1; }
     for (const k of Object.keys(grouped)) lines.push('- ' + k + ': ' + grouped[k] + ' 条');
+  }
+  if (deniedCrossOwner) {
+    lines.push('');
+    lines.push('- 跨 owner 私密条目已跳过（' + deniedCrossOwner + ' 条）：请用 --agent <id> 声明自己的身份；只有用户显式授权（--unsafe）才能越界维护。');
   }
   // 去重（v0.10.0：置信度分档 + --apply 自动合并；--dedup 与归档/遗忘互斥）
   if (opts.dedup) appendDedupBlock(lines, root, opts);
@@ -8034,7 +8059,7 @@ function callToolInner(name, args, ctx) {
       return { text: r.text, error: r.error };
     }
     if (name === 'archive') {
-      const r = archiveCore({ days: args.days, threshold: args.threshold });
+      const r = archiveCore({ selfAgent: agent, days: args.days, threshold: args.threshold });
       return { text: r.text, error: r.error };
     }
     if (name === 'reindex') {

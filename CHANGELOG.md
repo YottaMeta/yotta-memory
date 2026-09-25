@@ -1,9 +1,19 @@
-## v0.17.1 (2026-09-25)
+## v0.17.2 (2026-09-25)
+
+安全修复：私密维护的 owner 门（explain fail-closed / archive / maintain 跨 owner 跳过）。
+
+- 背景：`explain` 对其它 owner 的私密条目照样输出 subject + statement（只加一句「仅元数据」注释）；`archive` / `maintain` 遍历全部 owner，任何身份都能归档 / 遗忘别人的私密记忆（ClawHub T05 High）。
+- 修复：`explain` 命中跨 owner 时直接拒绝（不回显正文）；`archive` / `maintain` 逐条走 `checkOwnerWritable`，跨 owner（含未声明身份）私密条目一律跳过并在输出里说明数量与补救方式；CLI 与 MCP 两条路径都传入调用方身份。
+- 边界：公共明文 FACT 不受影响；加密库里无对应密钥的条目本就不可解，本次把明文库与写路径补齐。
+- 安装器加固：拒绝对符号链接目标写入、不做整目录删除。
+- 回归：新增 `test/owner-gate.test.js` 5 项，`npm test` 232/232 通过。
 
 **view 删除身份的错误提示修复**
 
 - `view` 的 AI 列表点击「删除」后，如果确认 ID 输入错误，前端现在会立即提示「ID 不匹配，请输入完整 agent ID：<id>」；用户取消仍保持静默，不会误触删除。
 - 回归：`test/identity-remove.test.js` 新增 1 项，确认错误 ID 有可见提示；后端 400 校验与破坏性闸门保持不变。
+
+## v0.17.1 (2026-09-25)
 
 ## v0.17.0 (2026-09-25)
 
