@@ -153,14 +153,15 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 |---|---|
 | `init [--project]` | 创建目录结构；默认用户级，`--project` 建项目级 |
 | `remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入；同 subject+statement 已存在则更新 `updated` 且 `weight` 取 max；`--source` 记录来源；`--weight` 重要性权重；`--verify` 写后回读校验；`--no-hint` 关闭类型启发式提示 |
-| `recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 索引+TF 打分匹配；读取分区过滤；越界（读其它智能体私密）默认拒绝，需 grant / identity=user / `--unsafe` 授权；项目级优先；默认 50 条 |
+| `recall [关键词] [--type T] [--limit N] [--year <yyyy>] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 索引+TF 打分匹配；读取分区过滤；越界（读其它智能体私密）默认拒绝，需 grant / identity=user / `--unsafe` 授权；项目级优先；默认 50 条；v0.17.0 起 `--year` 只读该年份分片（可重复传多次，不传即全量）|
 | `forget <文件>` | 删除（按路径或文件名）|
 | `archive [--days 180] [--threshold 0.4]` | 按盖棺分+年龄移入 `.archive/`（`vitality < threshold` 且超过 N 天）|
 | `reindex` | 全量扫描重建 `index.json`（手动改 .md 后校正）|
 | `export [--out f.json]` | 导出全部记忆为 JSON |
 | `import <f.json>` | 从 JSON 导入（幂等）|
 | `profile [--owner <id>]` | 用户画像聚合（零推断，写 `private/<owner>/profile.md`；跨 owner 默认拒绝）|
-| `context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain]` | 开工上下文包（stdout：身份 + 多智能体铁律 + 画像 + 长期摘要 + 任务相关记忆 + 近期走廊 + 近期高价值 + 边界 + 承诺 + 会话闭环契约；`--budget` 控制动态记忆字符预算）|
+| `context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--year <yyyy>] [--explain]` | 开工上下文包（stdout：身份 + 多智能体铁律 + 画像 + 长期摘要 + 任务相关记忆 + 近期走廊 + 近期高价值 + 边界 + 承诺 + 会话闭环契约；`--budget` 控制动态记忆字符预算；`--year` 限定年份）|
+| `bench [--evalset <文件>] [--k N] [--seed N] [--bootstrap N] [--ablate] [--gate <指标>=<数值>] [--timing] [--year <yyyy>] [--json] [--out <文件>]` | 可复算基准评测（v0.17.0）：只读快照上重放检索打分与排序（`scoreCandidates` + `rankHits`，与 recall 同源），指标 Recall@k / MRR / nDCG@k / HitRate + 固定种子 bootstrap 95% CI；报告含索引与评测集指纹，默认不含墙钟时间；`--gate` 不达标 exit 1；不写访问计数、不重建索引、不调用 embedding 插件 |
 | `iam <id> [--name] [--user] [--relationship] [--force]` | 登记身份 + 自我档案（可选扩展显示名 / 用户 / 关系）|
 
 

@@ -15,7 +15,7 @@ const REQUIRED_COMMANDS = [
   'maintain', 'consolidate', 'distill', 'feedback', 'explain', 'reindex',
   'export', 'import', 'iam', 'whoami', 'profile', 'context', 'token',
   'migrate', 'view', 'reset-password', 'key', 'config', 'runtime', 'serve',
-  'lan', '--version',
+  'lan', 'bench', '--version',
 ];
 
 const REQUIRED_SUBCOMMANDS = {
@@ -132,7 +132,7 @@ test('top-level help remains render-stable', () => {
   const digest = crypto.createHash('sha256').update(stdout).digest('hex');
   assert.strictEqual(
     digest,
-    'e59f1f31b956cfb8db768b1a02886043bb84db39a153579d9a36183a185b88e3',
+    'e2dba962789b999fd66839c2bf9bd751a3250f9776d8e2cb8dda1821f16580a6',
     'top-level help changed; review every command/option line, then update the snapshot digest intentionally'
   );
 });

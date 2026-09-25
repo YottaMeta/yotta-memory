@@ -92,3 +92,9 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 
 ## 16. 开工时怎么知道记忆库是否可靠？
 运行 `yotta-memory doctor`。它只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份；`--json` 可输出机器可读结果。严重异常时会锁定 `maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 等破坏性写入，`context` 也会在开工提醒中显示“破坏性写入已锁定”。先按 doctor 提示修复，再继续写操作。
+
+## 17. 记忆库很大，检索能快一点吗？
+公共索引超过 5000 条会按年份分片（`index-<year>.json`）。只关心某一年时用 `yotta-memory recall <关键词> --year 2026`（可重复传多次）或 `yotta-memory context --year 2026`：引擎只读取命中年份的分片文件，不再把所有年份载入内存。不传 `--year` 时行为与旧版完全一致（全量读取）。规模体检看 `yotta-memory doctor` 的「规模」段（条数 / 单目录最大文件数 / 索引总体积），阈值用 `config set scale_warn_entries` 等键调整。
+
+## 18. 怎么证明改了检索 / 索引之后「没变差」？
+用 `yotta-memory bench`。默认按库内条目做确定性抽样生成基线评测集，也可以用 `--evalset <文件>` 固定一组查询（评测集 v1：`{"version":1,"queries":[{"query":"...","expect":["<记忆 id>"]}]}`，记忆 id 写相对路径或文件名都可以）。报告给 Recall@k / MRR / nDCG@k / HitRate + 固定种子 bootstrap 95% 置信区间，并写明库指纹与评测集指纹——同库、同评测集、同参数必须同输出，所以改前跑一次、改后再跑一次就能直接对比。接 CI 用 `--gate mrr=0.6`（不达标 exit 1）；`--ablate` 对比关键词 / 语义 × 融合 / 纯分四组；想要耗时再加 `--timing`（带上后报告标记为不可逐字节复算）。`bench` 全程只读：不重建索引、不写访问计数、不调用外部 embedding 插件；索引缺失或版本过旧时会提示先 `reindex`。

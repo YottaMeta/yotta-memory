@@ -1,5 +1,10 @@
 ## v0.17.0 (2026-09-25)
 
+**帮助改造（A）**
+
+- 顶层 `--help` 重排为四段（核心记忆 / 身份与画像 / 加密与安全 / 平台与服务），逐条列出命令、子命令路径与全部选项；每个选项给出「做什么 / 什么时候用 / 注意」三段中文说明，风险选项（`--no-encrypt` / `--unsafe` / `--apply` / `--force` / `--purge` / `--allow-same-volume`）必须带「注意」。
+- 帮助文案收敛到单一真源 `HELP_MODEL`（`usage()` 只做渲染），解析器侧 `CLI_FLAG_OPTS` / `CLI_VALUE_OPTS` 上移为模块级名单；新增 `test/help-coverage.test.js` 四件护栏（命令 / 子命令覆盖、帮助 ↔ 解析器双向一致、风险项必须带注意、`main()` 布尔字面量必须登记）+ 渲染快照，禁止两处手写文案漂移。
+
 **规模三项（B1 写入分层 + B2 规模体检）**
 
 - 记忆文件新写入按年/月分层：公共 `facts/<yyyy>/<mm>/`，私密 `private/<owner>/<type>/<yyyy>/<mm>/`。读取与索引递归兼容新旧两种布局，v0.16 及更早的平铺文件保持原位、不自动迁移。
@@ -7,7 +12,16 @@
 - 归档保留分层：`archive` / `maintain --apply --purge` / `consolidate` 移入 `.archive/` 时按原年/月路径落位，不同月份的同名文件不再互相覆盖；旧平铺文件仍落到归档根。
 - 明文库转加密（`migrate`）递归处理年/月子目录，不再漏掉分层私密文件。
 - `doctor` 新增规模体检：记忆条数 / 单目录最大文件数 / 索引总体积 / 索引冷启动耗时（多次取中位数）；阈值走 `config set scale_warn_entries` / `scale_warn_files_per_dir` / `scale_warn_index_bytes` / `scale_warn_cold_start_ms`，超阈值进 `checks.scale.warnings` 并计入 doctor warning，只读、不锁定破坏性写入。
-- 回归：`test/scale-layout.test.js` 8 项（新写入分层 / 跨布局序号 / 新旧混读 / 导出导入往返 / 私密归属 / 归档路径 / doctor 规模正常与告警）；全量 `npm test` 182/182 PASS。
+- 回归：`test/scale-layout.test.js` 8 项（新写入分层 / 跨布局序号 / 新旧混读 / 导出导入往返 / 私密归属 / 归档路径 / doctor 规模正常与告警）。
+
+**索引按需加载 + 基准评测（B3 + A1）**
+
+- 索引按年份懒加载：新增 `loadIndexFor(root, { years })`；命中分片 manifest（`index-<year>.json`）时只读取指定年份的分片文件，`recall --year <yyyy>` / `context --year <yyyy>` 走该路径（可重复传多次），不传年份维持全量读取、既有行为零变化。命中后的访问计数回写（`touchIndex`）同样只碰命中年份的分片，其它年份分片逐字节不变。平铺索引（未达 5000 条分片阈值）无法少读文件，按条目年份过滤；`--year` 只接受四位年份，非法值给中文提示并 exit 2。
+- 新增 `bench` 可复算基准评测：默认按库内条目做确定性抽样（固定种子，最多 20 条查询）生成基线评测集，也可用 `--evalset <文件>` 指定评测集 v1（`{ "version": 1, "queries": [ { "query": "...", "expect": ["<记忆 id>"] } ] }`，记忆 id 可写相对路径或文件名）。
+- 指标 = `Recall@k` / `MRR` / `nDCG@k` / `HitRate` + 固定种子 bootstrap 95% 置信区间；报告写明库指纹（条数 + 索引 SHA-256 + 评测集 SHA-256）与参数，默认不含墙钟时间——同库 + 同评测集 + 同参数必须同输出。`--ablate` 给关键词 / 语义 × 融合（0.65 语义 + 0.35 效用）/ 纯分四组消融；`--gate <指标>=<数值>` 供 CI（不达标 exit 1，指标可选 `recall` / `mrr` / `ndcg` / `hit`）；`--timing` 显式附带检索耗时 p50 / p95（带上后报告标记为不可逐字节复算）。
+- `bench` 全程只读：索引缺失或版本过旧时提示先 `reindex`（不代建索引）、不写访问计数、不调用外部 embedding 插件；评测集非法（版本 / 空 query / 空 expect / 非法 JSON / 文件不存在）分别给中文修复建议并 exit 2；对当前身份不可读的记忆计入 `corpus.denied` 并跳过。
+- 检索打分与排序抽成共享原语 `scoreCandidates` / `rankHits`，`recall` 与 `bench` 走同一套逻辑，避免「评测口径」与真实检索漂移；recall 自身行为逐字节不变。
+- 帮助与回归：`--help` 新增 `bench` 命令与 `--year` / `--evalset` / `--k` / `--seed` / `--bootstrap` / `--ablate` / `--gate` / `--timing` 逐项中文说明；新增 `test/index-lazy-year.test.js` 5 项（分片读取集合 / 无年份全量一致 / 平铺过滤 / recallCore 年份 / CLI `--year` 与非法年份）+ `test/bench.test.js` 8 项（指标手算 / 复算与只读 / 索引指纹 / 门禁 / 消融 / 评测集与索引校验 / `--out` / 文本与 `--timing`）；全量 `npm test` 196/196 PASS（0.16.7 基线 171）。
 
 ## v0.16.7 (2026-09-23)
 

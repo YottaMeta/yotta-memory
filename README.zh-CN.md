@@ -23,7 +23,7 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
-> 🆕 **v0.17.0（规模：文件分层 + doctor 规模体检）**：新写入按年/月分层——公共 `facts/<年>/<月>/`、私密 `private/<owner>/<type>/<年>/<月>/`；v0.16 及更早的平铺文件留在原位继续可读，不做自动迁移。归档保留分层，不同月份的同名文件不会互相覆盖。`doctor` 新增规模段（记忆条数 / 单目录最大文件数 / 索引总体积 / 索引冷启动耗时），阈值用 `config set scale_warn_entries` / `scale_warn_files_per_dir` / `scale_warn_index_bytes` / `scale_warn_cold_start_ms` 调整，超阈值只告警，不锁定破坏性写入。上一版 v0.16.7：明文库转加密推荐交互式 `yotta-memory migrate --recovery-key-out "$env:USERPROFILE\yotta-memory-recovery.key"`，自动化使用 `YOTTA_MEMORY_PASS`；`view` 复用端口前校验 memory_home 指纹。
+> 🆕 **v0.17.0（规模：文件分层 + doctor 规模体检 + 索引按需加载 + bench 基准评测）**：新写入按年/月分层——公共 `facts/<年>/<月>/`、私密 `private/<owner>/<type>/<年>/<月>/`；v0.16 及更早的平铺文件留在原位继续可读，不做自动迁移。归档保留分层，不同月份的同名文件不会互相覆盖。`doctor` 新增规模段（记忆条数 / 单目录最大文件数 / 索引总体积 / 索引冷启动耗时），阈值用 `config set scale_warn_entries` / `scale_warn_files_per_dir` / `scale_warn_index_bytes` / `scale_warn_cold_start_ms` 调整，超阈值只告警，不锁定破坏性写入。大库检索可以按年份只读对应分片：`recall --year <yyyy>` / `context --year <yyyy>`（可重复传多次，不传即全量、行为与旧版一致）。新增 `bench` 可复算基准评测：默认按库内条目确定性抽样，`--evalset <文件>` 也可指定评测集；输出 Recall@k / MRR / nDCG@k / HitRate + 95% 置信区间、库指纹与评测集指纹，`--gate <指标>=<数值>` 可接 CI，同库同评测集同参数必得同结果；全程只读，不重建索引、不写访问计数、不调用外部 embedding。上一版 v0.16.7：明文库转加密推荐交互式 `yotta-memory migrate --recovery-key-out "$env:USERPROFILE\yotta-memory-recovery.key"`，自动化使用 `YOTTA_MEMORY_PASS`；`view` 复用端口前校验 memory_home 指纹。
 > 🆕 **v0.16.5（doctor JSON 契约）**：`doctor --json` 顶层新增稳定字段 `schemaVersion` / `encryption` / `migration_required`，同时保留原有 `checks` / `warnings` / `identity` 结构。
 > 🆕 **v0.16.4（agent-key 提示范围）**：`--agent-key-file` 不存在时不再为公共 / 维护命令输出全局 `stderr` 警告；只有真正访问私密区才 fail-closed，并给出缺失路径、`view` / `key bind`、`key status` / `key claim` 步骤。`whoami --json`、`doctor --json`、`config get --json` 返回结构化 `identity.mode` / `identity.agentKeyStatus`。
 > 🆕 **v0.16.2（首启修复）**：空加密库 `view` 可用恢复钥匙解锁；非 TTY 支持 `--password-stdin`；恢复钥匙支持 `--recovery-key-out <文件>`；`--agent-key-file` 不存在时降级未授权（公共 FACT 可读、私密 fail-closed）；空明文库可直接 `migrate` 启用加密；`view` 端口占用给明确提示。
@@ -325,9 +325,9 @@ bash install.sh --agent <智能体名称>
 |---|---|
 | `yotta-memory init [--project] [--dir <目录>]` | 初始化记忆库（默认用户级 `~/.yottamemory/`；--dir 显式指定位置）|
 | `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入记忆（同 subject+statement 自动更新；--owner 标注归属；--source 记录来源；--weight 重要性权重、去重取 max；--verify 写后回读；--no-hint 关闭类型提示）|
-| `yotta-memory recall [关键词] [--type T] [--limit N] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain] [--semantic] [--embedding <命令>] [--embedding-timeout N]` | 检索记忆（语义+效用分排序；可选本地 embedding 插件；读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 仅作身份声明、不授予跨读；项目级优先）|
+| `yotta-memory recall [关键词] [--type T] [--limit N] [--year <yyyy>] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain] [--semantic] [--embedding <命令>] [--embedding-timeout N]` | 检索记忆（语义+效用分排序；可选本地 embedding 插件；读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 仅作身份声明、不授予跨读；项目级优先；v0.17.0 起 `--year` 只读该年份分片，可重复传多次）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
-| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--explain] [--embedding <命令>]` | 生成开工上下文包（身份 + 铁律 + 画像 + 长期摘要 + 任务相关记忆 + 近期走廊 + 近期高价值 + 边界 + 承诺 + 会话闭环契约；--budget 控制动态记忆字符预算；--focus 任务聚焦；--explain 输出 included/dropped 选择解释）|
+| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--year <yyyy>] [--explain] [--embedding <命令>]` | 生成开工上下文包（身份 + 铁律 + 画像 + 长期摘要 + 任务相关记忆 + 近期走廊 + 近期高价值 + 边界 + 承诺 + 会话闭环契约；--budget 控制动态记忆字符预算；--focus 任务聚焦；--year 限定年份；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆（按类型目录路径或文件名）|
 | `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入；`--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；私密入 `.archive/private/<owner>/<type>/`）|
@@ -344,6 +344,7 @@ bash install.sh --agent <智能体名称>
 | `yotta-memory feedback <文件|主题> --useful|--useless [--reason <原因>] [--undo]` | 使用反馈（useful/useless 调整 weight / confidence / feedback_net；`--undo` 回滚最近一次）|
 | `yotta-memory distill [--owner <id>] [--subject <主题>] [--model <cmd>] [--out <路径>]` | 心理日志蒸馏（统计摘要 / 主题画像 / 知识地图；可选本地模型，仅 CLI）|
 | `yotta-memory explain <文件|主题>` | 查看单条记忆效用分项与归档 / 遗忘 / BOUND 豁免状态 |
+| `yotta-memory bench [--evalset <文件>] [--k N] [--seed N] [--bootstrap N] [--ablate] [--gate <指标>=<数值>] [--timing] [--year <yyyy>] [--json] [--out <文件>]` | 可复算检索基准评测（v0.17.0）：默认按库内条目确定性抽样，或用 `--evalset` 指定评测集 v1；输出 Recall@k / MRR / nDCG@k / HitRate + bootstrap 95% 置信区间、库指纹与评测集指纹，默认不含墙钟时间；`--ablate` 对比关键词 / 语义 × 融合 / 纯分；`--gate` 不达标 exit 1；`--timing` 附带 p50 / p95 后不再逐字节可复算。全程只读：不重建索引、不写访问计数、不调用外部 embedding 插件 |
 
 类型：`FACT`（事实，公共共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺）。
 

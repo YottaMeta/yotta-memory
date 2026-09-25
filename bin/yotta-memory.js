@@ -26,8 +26,8 @@ const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
 const VERSION = '0.17.0';
-const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir']);
-const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--explain', '--semantic', '--runtime']);
+const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate']);
+const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--explain', '--semantic', '--runtime', '--ablate', '--timing']);
 
 function helpOption(flag, arg, what, when, caution) {
   return { flag: flag, arg: arg || '', what: what, when: when || '', caution: caution || '' };
@@ -64,6 +64,7 @@ const HELP_MODEL = [
       helpOption('--semantic', '', '显式开启语义检索', '想强制使用同义词 / 拼音 / 模糊匹配时', ''),
       helpOption('--embedding', '<命令>', '临时指定本地 embedding 插件命令', '这次检索想使用自定义本地向量命令时', '只在本地执行，不会把记忆上传远端'),
       helpOption('--embedding-timeout', '<毫秒>', '设置 embedding 插件超时', '插件较慢或需要快速失败时', ''),
+      helpOption('--year', '<yyyy>', '只检索指定年份的记忆', '库很大、只想在某一年的记忆里找时', '可重复传多次；不传则检索全部年份'),
     ] },
     { name: 'forget', usage: 'forget <记忆 id> [选项]', what: '删除一条记忆', when: '确认某条记忆不应继续保留时', options: [
       helpOption('--reason', '<原因>', '记录删除原因', '需要留下为什么删除的审计线索时', ''),
@@ -138,6 +139,18 @@ const HELP_MODEL = [
       helpOption('--undo', '', '撤销上一次反馈', '误点反馈时', ''),
     ] },
     { name: 'explain', usage: 'explain <记忆 id> [--json]', what: '解释一条记忆的效用分和归档判定', when: '想理解为什么它被排序、归档或遗忘时', options: [helpOption('--json', '', '输出 JSON', '脚本读取解释结果时', '')] },
+    { name: 'bench', usage: 'bench [--evalset <文件>] [--k <条数>] [--seed <数值>] [--bootstrap <次数>] [--ablate] [--gate <指标>=<数值>] [--timing] [--json] [--out <文件>]', what: '可复算的检索基准评测', when: '改检索 / 索引逻辑前后要证明「没变差」，或把质量门禁接进 CI 时', options: [
+      helpOption('--evalset', '<文件>', '指定评测集 JSON 文件', '想固定一组查询来复算指标时', '不指定时按库内条目做确定性抽样，生成基线评测集'),
+      helpOption('--k', '<条数>', '设置结果窗口大小', '想按 Recall@k / nDCG@k 的 k 口径统计时', '默认 5'),
+      helpOption('--seed', '<数值>', '设置抽样与置信区间的随机种子', '要让评测集和置信区间可复算时', '默认 20260925；同种子同库必须同结果'),
+      helpOption('--bootstrap', '<次数>', '设置 bootstrap 重采样次数', '想调整 95% 置信区间的精度时', '默认 1000；0 表示不重采样'),
+      helpOption('--ablate', '', '输出关键词 / 语义 × 融合 / 纯分的消融对比', '想知道哪一层检索贡献最大时', ''),
+      helpOption('--gate', '<指标>=<数值>', '设置质量门禁', 'CI 里要求指标达到阈值时', '不达标 exit 1；可重复传多次，指标可选 recall / mrr / ndcg / hit'),
+      helpOption('--timing', '', '附带检索耗时 p50 / p95', '想了解检索耗时分布时', '带上耗时后报告不再逐字节可复算'),
+      helpOption('--year', '<yyyy>', '只评测指定年份的记忆', '库很大、只想对某一年做基准时', '可重复传多次；不传则覆盖全部年份'),
+      helpOption('--json', '', '输出 JSON', '脚本读取指标与门禁结果时', ''),
+      helpOption('--out', '<文件>', '把报告写到文件', '想把评测报告归档或交给 CI 时', ''),
+    ] },
     { name: 'reindex', usage: 'reindex', what: '重建记忆索引', when: '索引损坏、手动改过记忆文件或 doctor 提示索引异常时', options: [] },
     { name: 'export', usage: 'export --out <文件.json>', what: '导出全部记忆', when: '备份、迁移或做离线检查时', options: [helpOption('--out', '<文件>', '指定导出文件', '导出时必须给出目标 JSON 文件', '')] },
     { name: 'import', usage: 'import <文件.json>', what: '导入记忆 JSON', when: '从导出文件恢复或迁移时', options: [] },
@@ -161,6 +174,7 @@ const HELP_MODEL = [
       helpOption('--explain', '', '输出 included / dropped 选择解释', '想理解上下文为什么收录或丢弃时', ''),
       helpOption('--embedding', '<命令>', '临时指定本地 embedding 插件命令', '上下文检索想用本地向量命令时', '只在本地执行'),
       helpOption('--embedding-timeout', '<毫秒>', '设置 embedding 插件超时', '插件较慢或需要快速失败时', ''),
+      helpOption('--year', '<yyyy>', '只装载指定年份的记忆', '只想让上下文包覆盖某一年份时', '可重复传多次；不传则装载全部年份'),
     ] },
     { name: 'token', usage: 'token <子命令> [选项]', what: '管理远端 MCP 访问 token', when: '给远端 MCP 客户端发放或吊销访问凭据时', subcommands: [
       helpSub('new', 'new --agent <id> [--scope <范围>] [--json]', '生成一个访问 token', '远端客户端第一次接入时', [
@@ -1858,6 +1872,24 @@ const INDEX_SHARD_THRESHOLD = 5000;
 const SHARD_RE = /^index-\d{4}\.json$/;
 function isSafeShardName(name) { return typeof name === 'string' && SHARD_RE.test(name); }
 function indexShardName(year) { return 'index-' + year + '.json'; }
+function shardYear(name) { return String(name).slice('index-'.length, -'.json'.length); }
+function entryYear(entry) {
+  return String((entry && entry.created) || '').slice(0, 4) || String(today()).slice(0, 4);
+}
+// v0.17.0：--year 只接受四位年份，可重复；不传即全量（既有行为零变化）。
+function normalizeYearList(value) {
+  if (value === undefined || value === null) return { years: [], error: '' };
+  const list = Array.isArray(value) ? value : [value];
+  const years = [];
+  for (const raw of list) {
+    const year = String(raw === undefined || raw === null ? '' : raw).trim();
+    if (!/^\d{4}$/.test(year)) {
+      return { years: [], error: '年份格式不正确: ' + String(raw) + '。--year 只接受四位年份（例如 --year 2026），可重复传多次。' };
+    }
+    if (years.indexOf(year) === -1) years.push(year);
+  }
+  return { years: years, error: '' };
+}
 function loadIndexManifest(root) {
   const p = indexPath(root);
   if (!fs.existsSync(p)) return null;
@@ -1894,6 +1926,52 @@ function loadIndex(root) {
   } catch (e) { /* ignore */ }
   return null;
 }
+// v0.17.0 B3：按年份懒加载索引——命中分片 manifest 时只读 years 覆盖的分片；
+// years 为空维持全量 loadIndex（逐字节行为不变）。平铺索引无法少读文件，按条目年份过滤。
+function loadIndexFor(root, options) {
+  const filter = normalizeYearList(options && (options.years !== undefined ? options.years : options.year));
+  if (filter.error) return null;
+  const years = filter.years;
+  if (!years.length) return loadIndex(root);
+  const p = indexPath(root);
+  if (!fs.existsSync(p)) return null;
+  try {
+    const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (!d) return null;
+    if (Array.isArray(d.entries)) {
+      if (d.version && d.version < INDEX_VERSION) return null;
+      const want = new Set(years);
+      return d.entries.filter(function (e) { return want.has(entryYear(e)); });
+    }
+    if (Array.isArray(d.shards)) {
+      if (d.version && d.version < INDEX_VERSION) return null;
+      const want = new Set(years);
+      const out = [];
+      for (const sh of d.shards) {
+        if (!isSafeShardName(sh)) continue;
+        if (!want.has(shardYear(sh))) continue; // 只读取命中年份的分片文件
+        const sp = path.join(root, sh);
+        if (!fs.existsSync(sp)) continue;
+        const sd = JSON.parse(fs.readFileSync(sp, 'utf8'));
+        if (sd && Array.isArray(sd.entries)) out.push.apply(out, sd.entries);
+      }
+      return out;
+    }
+  } catch (e) { /* ignore */ }
+  return null;
+}
+function indexEntriesFor(root, options) {
+  const filter = normalizeYearList(options && options.years);
+  if (filter.error) return { entries: [], error: filter.error };
+  if (filter.years.length) {
+    const lazy = loadIndexFor(root, { years: filter.years });
+    if (lazy) return { entries: lazy, error: '' };
+  }
+  const all = ensureIndex(root);
+  if (!filter.years.length) return { entries: all, error: '' };
+  const want = new Set(filter.years);
+  return { entries: all.filter(function (e) { return want.has(entryYear(e)); }), error: '' };
+}
 function getIndex(root) { return loadIndex(root) || []; }
 function saveIndex(root, entries) {
   const clean = entries.map(function (e) { const c = Object.assign({}, e); delete c.meta; return c; });
@@ -1901,7 +1979,7 @@ function saveIndex(root, entries) {
   if (clean.length > INDEX_SHARD_THRESHOLD) {
     const byYear = {};
     for (const e of clean) {
-      const y = String(e.created || '').slice(0, 4) || String(today()).slice(0, 4);
+      const y = entryYear(e);
       (byYear[y] = byYear[y] || []).push(e);
     }
     const newShards = [];
@@ -2119,13 +2197,18 @@ function bumpReadMeta(root, relFiles) {
     rewriteFrontmatter(fp, { access_count: acc, last_accessed: now }, root, owner);
   }
 }
-function touchIndex(root, relFiles) {
+function touchIndex(root, relFiles, options) {
   const set = new Set(relFiles);
   const now = today();
+  // v0.17.0 B3：带 --year 的检索只碰命中年份的分片（命中条目必然来自这些分片），
+  // 不传年份时行为与旧版一致（遍历全部 shards）。
+  const filterYears = (options && Array.isArray(options.years)) ? options.years : [];
+  const yearSet = filterYears.length ? new Set(filterYears) : null;
   const manifest = loadIndexManifest(root);
   if (manifest && Array.isArray(manifest.shards)) {
     for (const sh of manifest.shards) {
       if (!isSafeShardName(sh)) continue;
+      if (yearSet && !yearSet.has(shardYear(sh))) continue;
       const sp = path.join(root, sh);
       if (!fs.existsSync(sp)) continue;
       let sd = null; try { sd = JSON.parse(fs.readFileSync(sp, 'utf8')); } catch (e) { continue; }
@@ -3961,6 +4044,84 @@ function recallPrefilter(q) {
     return false;
   };
 }
+// v0.17.0：命中打分与排序抽成共享原语，recall 与 bench 用同一套逻辑（评测才不会与真实检索漂移）。
+function scoreCandidates(entries, query, options) {
+  options = options || {};
+  const useSemantic = options.semantic !== false;
+  const prefilter = options.prefilter || null;
+  const wantExplain = !!options.wantExplain;
+  const embeddingMap = options.embeddingMap || null;
+  const root = options.root ? String(options.root) : '';
+  const out = [];
+  for (const e of entries || []) {
+    let score = 0;
+    let detail = null;
+    const embeddingHit = embeddingMap ? (embeddingMap.get(root + '\0' + e.file) || null) : null;
+    if (query) {
+      if (useSemantic) {
+        if (prefilter && !prefilter(e) && !embeddingHit) continue; // v0.8.1 候选预过滤：粗筛后再语义打分；embedding 命中可越过词法预过滤
+        const m = semanticMatch(e, query, wantExplain);
+        score = m.score;
+        if (wantExplain && m.detail && m.detail.length) detail = m.detail;
+        if (embeddingHit) {
+          score = Math.max(score, embeddingHit.score);
+          if (wantExplain && embeddingHit.detail) detail = (detail || []).concat(embeddingHit.detail);
+        }
+      } else {
+        const qtoks = tokenize(query);
+        for (const tt of qtoks) { if (e.tokens && e.tokens[tt]) score += e.tokens[tt]; }
+        if (score === 0) {
+          const hay = ((e.subject || '') + ' ' + (e.statement || '') + ' ' + (e.tags || []).join(' ')).toLowerCase();
+          if (hay.indexOf(query) !== -1) score = 1;
+        }
+      }
+      if (score === 0) continue;
+    } else {
+      score = 1;
+    }
+    out.push({ entry: e, score: score, detail: detail });
+  }
+  return out;
+}
+function rankHits(hits, options) {
+  options = options || {};
+  const fuse = options.fuse !== false;
+  if (hits.length > 1 && fuse) {
+    // v0.8.0 融合排序：0.65 × 语义分归一 + 0.35 × 效用分归一
+    let minSem = Infinity, maxSem = -Infinity, minUtil = Infinity, maxUtil = -Infinity;
+    for (const h of hits) {
+      if (h.score < minSem) minSem = h.score;
+      if (h.score > maxSem) maxSem = h.score;
+      const u = utilityScore(h.entry);
+      if (u < minUtil) minUtil = u;
+      if (u > maxUtil) maxUtil = u;
+    }
+    const spanSem = maxSem - minSem;
+    const spanUtil = maxUtil - minUtil;
+    for (const h of hits) {
+      h.semNorm = spanSem > 0 ? (h.score - minSem) / spanSem : 1;
+      h.utilNorm = spanUtil > 0 ? (utilityScore(h.entry) - minUtil) / spanUtil : 1;
+      h.finalScore = 0.65 * h.semNorm + 0.35 * h.utilNorm;
+    }
+    hits.sort(function (a, b) {
+      if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
+      if (b.score !== a.score) return b.score - a.score;
+      const pa = a.root === projectRoot() ? 0 : 1;
+      const pb = b.root === projectRoot() ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      return String(b.entry.created).localeCompare(String(a.entry.created));
+    });
+    return hits;
+  }
+  hits.sort(function (a, b) {
+    if (options.sortByScore && b.score !== a.score) return b.score - a.score;
+    const pa = a.root === projectRoot() ? 0 : 1;
+    const pb = b.root === projectRoot() ? 0 : 1;
+    if (pa !== pb) return pa - pb;
+    return String(b.entry.created).localeCompare(String(a.entry.created));
+  });
+  return hits;
+}
 function recallCore(query, opts) {
   opts = opts || {};
   const roots = memoryRoots();
@@ -3995,13 +4156,16 @@ function recallCore(query, opts) {
   const explicitCross = !!opts.all || (!!ownerFilter && ownerFilter !== agent);
   const wantExplain = !!opts.explain;
   const useSemantic = opts.semantic !== false;
+  const yearFilter = normalizeYearList(opts.years);
+  if (yearFilter.error) return { error: true, exitCode: 2, text: yearFilter.error };
+  const years = yearFilter.years;
   const prefilter = (q && useSemantic) ? recallPrefilter(q) : null;
   const embeddingMap = new Map();
   const embeddingCommand = effectiveEmbeddingCommand(opts);
   const embeddingTimeout = effectiveEmbeddingTimeout(opts);
   if (q && embeddingCommand) {
     for (const root of roots) {
-      const rootEntries = ensureIndex(root).filter(function (e) {
+      const rootEntries = indexEntriesFor(root, { years: years }).entries.filter(function (e) {
         return classifyRead(e, agent, ownerFilter, allSafe, selfAgent) !== 'denied';
       });
       try {
@@ -4021,74 +4185,26 @@ function recallCore(query, opts) {
   const hits = [];
   let deniedCount = 0;
   for (const root of roots) {
-    const entries = ensureIndex(root);
+    const entries = indexEntriesFor(root, { years: years }).entries;
+    const readable = [];
     for (const e of entries) {
       if (onlyType && e.type !== onlyType) continue;
       const r = classifyRead(e, agent, ownerFilter, allSafe, selfAgent);
       if (r === 'denied') { deniedCount++; continue; }
-      let score = 0;
-      let detail = null;
-      const embeddingHit = embeddingMap.get(root + '\0' + e.file) || null;
-      if (q) {
-        if (useSemantic) {
-          if (prefilter && !prefilter(e) && !embeddingHit) continue; // v0.8.1 候选预过滤：粗筛后再语义打分；embedding 命中可越过词法预过滤
-          const m = semanticMatch(e, q, wantExplain);
-          score = m.score;
-          if (wantExplain && m.detail && m.detail.length) detail = m.detail;
-          if (embeddingHit) {
-            score = Math.max(score, embeddingHit.score);
-            if (wantExplain && embeddingHit.detail) {
-              detail = (detail || []).concat(embeddingHit.detail);
-            }
-          }
-        } else {
-          const qtoks = tokenize(q);
-          for (const tt of qtoks) { if (e.tokens && e.tokens[tt]) score += e.tokens[tt]; }
-          if (score === 0) {
-            const hay = ((e.subject || '') + ' ' + (e.statement || '') + ' ' + e.tags.join(' ')).toLowerCase();
-            if (hay.indexOf(q) !== -1) score = 1;
-          }
-        }
-        if (score === 0) continue;
-      } else {
-        score = 1;
-      }
-      hits.push({ entry: e, score: score, root: root, detail: detail });
+      readable.push(e);
+    }
+    const scored = scoreCandidates(readable, q, {
+      semantic: useSemantic,
+      prefilter: prefilter,
+      wantExplain: wantExplain,
+      embeddingMap: embeddingMap,
+      root: root,
+    });
+    for (const s of scored) {
+      hits.push({ entry: s.entry, score: s.score, root: root, detail: s.detail });
     }
   }
-  // v0.8.0 融合排序：0.65 × 语义分归一 + 0.35 × 效用分归一
-  if (hits.length > 1) {
-    let minSem = Infinity, maxSem = -Infinity, minUtil = Infinity, maxUtil = -Infinity;
-    for (const h of hits) {
-      if (h.score < minSem) minSem = h.score;
-      if (h.score > maxSem) maxSem = h.score;
-      const u = utilityScore(h.entry);
-      if (u < minUtil) minUtil = u;
-      if (u > maxUtil) maxUtil = u;
-    }
-    const spanSem = maxSem - minSem;
-    const spanUtil = maxUtil - minUtil;
-    for (const h of hits) {
-      h.semNorm = spanSem > 0 ? (h.score - minSem) / spanSem : 1;
-      h.utilNorm = spanUtil > 0 ? (utilityScore(h.entry) - minUtil) / spanUtil : 1;
-      h.finalScore = 0.65 * h.semNorm + 0.35 * h.utilNorm;
-    }
-    hits.sort(function (a, b) {
-      if (b.finalScore !== a.finalScore) return b.finalScore - a.finalScore;
-      if (b.score !== a.score) return b.score - a.score;
-      const pa = a.root === projectRoot() ? 0 : 1;
-      const pb = b.root === projectRoot() ? 0 : 1;
-      if (pa !== pb) return pa - pb;
-      return String(b.entry.created).localeCompare(String(a.entry.created));
-    });
-  } else {
-    hits.sort(function (a, b) {
-      const pa = a.root === projectRoot() ? 0 : 1;
-      const pb = b.root === projectRoot() ? 0 : 1;
-      if (pa !== pb) return pa - pb;
-      return String(b.entry.created).localeCompare(String(a.entry.created));
-    });
-  }
+  rankHits(hits, {});
   const shown = hits.slice(0, limit);
   if (!shown.length) {
     if (deniedCount > 0 && explicitCross) {
@@ -4100,7 +4216,7 @@ function recallCore(query, opts) {
   if (touchRel.length) {
     for (const root of roots) {
       bumpReadMeta(root, touchRel);
-      touchIndex(root, touchRel);
+      touchIndex(root, touchRel, { years: years });
     }
   }
   const lines = ['共 ' + shown.length + ' 条记忆（' + (hits.length > limit ? '前 ' + limit + ' 条' : '全部') + '）：'];
@@ -5995,6 +6111,9 @@ function contextCore(opts) {
   const unsafe = !!opts.unsafe;
   const budget = opts.budget ? parseInt(opts.budget, 10) : 0;
   const focus = opts.focus ? String(opts.focus) : '';
+  const yearFilter = normalizeYearList(opts.years);
+  if (yearFilter.error) return { error: true, exitCode: 2, text: yearFilter.error };
+  const years = yearFilter.years;
   const explain = !!opts.explain;
   const embeddingCommand = effectiveEmbeddingCommand(opts);
   const embeddingTimeout = effectiveEmbeddingTimeout(opts);
@@ -6072,7 +6191,7 @@ function contextCore(opts) {
 
   const readableEntries = [];
   for (const r of roots) {
-    for (const e of ensureIndex(r)) {
+    for (const e of indexEntriesFor(r, { years: years }).entries) {
       if (classifyRead(e, owner, '', unsafe, selfAgent) === 'denied') continue;
       readableEntries.push(e);
     }
@@ -6096,6 +6215,7 @@ function contextCore(opts) {
       owner: owner,
       unsafe: unsafe,
       selfAgent: selfAgent,
+      years: years,
       embedding: embeddingCommand,
       embeddingTimeout: embeddingTimeout
     });
@@ -6182,6 +6302,384 @@ function cmdContext(opts) {
     const reminder = migrationReminderText(userRoot());
     if (reminder) console.log('\n' + reminder);
   }
+  if (r.exitCode) process.exit(r.exitCode);
+}
+
+// ---- v0.17.0 A1: bench 可复算基准评测（只读 / 本地 / 零依赖）----
+const BENCH_SCHEMA_VERSION = 1;
+const BENCH_DEFAULT_SEED = 20260925;
+const BENCH_DEFAULT_BOOTSTRAP = 1000;
+const BENCH_AUTO_QUERY_LIMIT = 20;
+const BENCH_GATE_METRICS = {
+  recall: 'recallAtK',
+  recall_at_k: 'recallAtK',
+  mrr: 'mrr',
+  ndcg: 'ndcgAtK',
+  ndcg_at_k: 'ndcgAtK',
+  hit: 'hitRate',
+  hitrate: 'hitRate',
+  hit_rate: 'hitRate',
+};
+// 消融四组：关键词 / 语义 × 融合（0.65 语义 + 0.35 效用）/ 纯分排序
+const BENCH_VARIANTS = [
+  { variant: 'semantic-fused', semantic: true, fuse: true },
+  { variant: 'lexical-fused', semantic: false, fuse: true },
+  { variant: 'semantic-score', semantic: true, fuse: false },
+  { variant: 'lexical-score', semantic: false, fuse: false },
+];
+function sha256Hex(buf) { return crypto.createHash('sha256').update(buf).digest('hex'); }
+function round4(n) { return Math.round((Number(n) || 0) * 10000) / 10000; }
+function seededRandom(seed) {
+  let a = (Number(seed) || 0) >>> 0;
+  if (!a) a = 1;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+// 索引指纹：index.json + 各分片内容一起哈希，改一条记忆就会变。
+function indexFingerprint(root) {
+  const manifestPath = indexPath(root);
+  if (!fs.existsSync(manifestPath)) return { sha256: '', bytes: 0, files: 0 };
+  const parts = ['ytm-index-fingerprint-v1\n'];
+  let bytes = 0;
+  let files = 0;
+  const manifestBytes = fs.readFileSync(manifestPath);
+  bytes += manifestBytes.length;
+  files++;
+  parts.push(INDEX_FILE + '\n' + sha256Hex(manifestBytes) + '\n');
+  let shards = [];
+  try {
+    const d = JSON.parse(manifestBytes.toString('utf8'));
+    if (d && Array.isArray(d.shards)) shards = d.shards;
+  } catch (e) { /* ignore */ }
+  for (const sh of shards) {
+    if (!isSafeShardName(sh)) continue;
+    const sp = path.join(root, sh);
+    if (!fs.existsSync(sp)) continue;
+    const buf = fs.readFileSync(sp);
+    bytes += buf.length;
+    files++;
+    parts.push(sh + '\n' + sha256Hex(buf) + '\n');
+  }
+  return { sha256: sha256Hex(Buffer.from(parts.join(''), 'utf8')), bytes: bytes, files: files };
+}
+function benchEvalsetDigest(queries) {
+  return sha256Hex(Buffer.from(JSON.stringify({ version: 1, queries: queries }), 'utf8'));
+}
+function autoBenchQueries(entries, seed) {
+  const pool = entries
+    .filter(function (e) { return String(e.subject || '').trim().length > 0; })
+    .sort(function (a, b) { return String(a.file).localeCompare(String(b.file)); });
+  const count = Math.min(BENCH_AUTO_QUERY_LIMIT, pool.length);
+  const remaining = pool.slice();
+  const rnd = seededRandom(seed);
+  const queries = [];
+  for (let i = 0; i < count; i++) {
+    const picked = remaining.splice(Math.floor(rnd() * remaining.length), 1)[0];
+    queries.push({ query: String(picked.subject), expect: [String(picked.file)] });
+  }
+  return queries;
+}
+function loadBenchEvalset(file, entries, seed) {
+  if (!file) {
+    const queries = autoBenchQueries(entries, seed);
+    return { source: 'auto', file: '', queries: queries, sha256: benchEvalsetDigest(queries) };
+  }
+  const fp = path.resolve(String(file));
+  if (!fs.existsSync(fp)) {
+    return { error: '找不到评测集文件: ' + fp + '。请检查路径，或省略 --evalset 用库内自动基线集。' };
+  }
+  let data = null;
+  try {
+    data = JSON.parse(fs.readFileSync(fp, 'utf8'));
+  } catch (e) {
+    return { error: '评测集不是合法 JSON: ' + fp + '（' + (e && e.message ? e.message : String(e)) + '）' };
+  }
+  if (!data || data.version !== 1) {
+    return { error: '评测集版本不支持: ' + fp + '。bench 评测集 v1 格式为 { "version": 1, "queries": [ { "query": "...", "expect": ["<记忆 id>"] } ] }。' };
+  }
+  if (!Array.isArray(data.queries) || !data.queries.length) {
+    return { error: '评测集缺少 queries: ' + fp + '。至少需要一条 { "query": "...", "expect": ["<记忆 id>"] }。' };
+  }
+  const queries = [];
+  for (const row of data.queries) {
+    const query = row && typeof row.query === 'string' ? row.query.trim() : '';
+    const expect = row && Array.isArray(row.expect) ? row.expect.map(String).filter(Boolean) : [];
+    if (!query) return { error: '评测集存在空 query: ' + fp + '。每条查询都需要非空 query 字符串。' };
+    if (!expect.length) return { error: '评测集缺少 expect: ' + fp + '（query=' + query + '）。expect 必须是记忆 id 数组。' };
+    queries.push({ query: query, expect: expect });
+  }
+  return { source: 'file', file: fp, queries: queries, sha256: benchEvalsetDigest(queries) };
+}
+function parseBenchGates(list) {
+  const out = [];
+  for (const raw of list || []) {
+    const text = String(raw);
+    const cut = text.indexOf('=');
+    if (cut <= 0) {
+      return { error: '门禁格式不正确: ' + text + '。应为 <指标>=<数值>，例如 --gate mrr=0.6；指标可选 recall / mrr / ndcg / hit。' };
+    }
+    const metric = text.slice(0, cut).trim().toLowerCase();
+    const value = parseFloat(text.slice(cut + 1));
+    if (!BENCH_GATE_METRICS[metric]) {
+      return { error: '门禁指标不支持: ' + text.slice(0, cut).trim() + '。可选指标: recall / mrr / ndcg / hit。' };
+    }
+    if (!isFinite(value)) {
+      return { error: '门禁数值不正确: ' + text + '。门禁需要可比较的数值，例如 --gate mrr=0.6。' };
+    }
+    out.push({ metric: metric, key: BENCH_GATE_METRICS[metric], value: value });
+  }
+  return { gates: out, error: '' };
+}
+function entryMatchesExpect(entry, expectSet) {
+  const ref = String((entry && entry.file) || '');
+  return expectSet.has(ref) || expectSet.has(path.basename(ref));
+}
+function benchQueryMetrics(hits, expect, k) {
+  const expectSet = new Set((expect || []).map(String));
+  const top = hits.slice(0, k);
+  let found = 0;
+  let rr = 0;
+  let dcg = 0;
+  for (let i = 0; i < top.length; i++) {
+    if (!entryMatchesExpect(top[i].entry, expectSet)) continue;
+    found++;
+    if (!rr) rr = 1 / (i + 1);
+    dcg += 1 / Math.log2(i + 2);
+  }
+  let idcg = 0;
+  const idealCount = Math.min(k, expectSet.size);
+  for (let i = 0; i < idealCount; i++) idcg += 1 / Math.log2(i + 2);
+  return {
+    recall: expectSet.size ? Math.min(1, found / expectSet.size) : 0,
+    mrr: rr,
+    ndcg: idcg > 0 ? Math.min(1, dcg / idcg) : 0,
+    hit: found ? 1 : 0,
+  };
+}
+function bootstrapCI(values, seed, rounds) {
+  if (!values.length) return [0, 0];
+  const mean = values.reduce(function (s, v) { return s + v; }, 0) / values.length;
+  const n = parseInt(rounds, 10) || 0;
+  if (n <= 0) return [round4(mean), round4(mean)];
+  const rnd = seededRandom(seed);
+  const means = [];
+  for (let b = 0; b < n; b++) {
+    let sum = 0;
+    for (let i = 0; i < values.length; i++) sum += values[Math.floor(rnd() * values.length)];
+    means.push(sum / values.length);
+  }
+  means.sort(function (a, b) { return a - b; });
+  const pick = function (p) {
+    const idx = Math.min(means.length - 1, Math.max(0, Math.floor(p * (means.length - 1))));
+    return round4(means[idx]);
+  };
+  return [pick(0.025), pick(0.975)];
+}
+function benchEvaluate(corpusByRoot, queries, options) {
+  const perQuery = [];
+  for (const row of queries) {
+    const prefilter = options.semantic ? recallPrefilter(row.query) : null;
+    const hits = [];
+    for (const group of corpusByRoot) {
+      const scored = scoreCandidates(group.entries, row.query, { semantic: options.semantic, prefilter: prefilter });
+      for (const s of scored) hits.push({ entry: s.entry, score: s.score, root: group.root, detail: s.detail });
+    }
+    rankHits(hits, { fuse: options.fuse !== false, sortByScore: options.fuse === false });
+    perQuery.push(benchQueryMetrics(hits, row.expect, options.k));
+  }
+  const mean = function (pick) {
+    if (!perQuery.length) return 0;
+    return perQuery.reduce(function (s, row) { return s + pick(row); }, 0) / perQuery.length;
+  };
+  const metrics = {
+    recallAtK: round4(mean(function (r) { return r.recall; })),
+    mrr: round4(mean(function (r) { return r.mrr; })),
+    ndcgAtK: round4(mean(function (r) { return r.ndcg; })),
+    hitRate: round4(mean(function (r) { return r.hit; })),
+  };
+  const ci95 = {
+    recallAtK: bootstrapCI(perQuery.map(function (r) { return r.recall; }), options.seed, options.bootstrap),
+    mrr: bootstrapCI(perQuery.map(function (r) { return r.mrr; }), options.seed, options.bootstrap),
+    ndcgAtK: bootstrapCI(perQuery.map(function (r) { return r.ndcg; }), options.seed, options.bootstrap),
+    hitRate: bootstrapCI(perQuery.map(function (r) { return r.hit; }), options.seed, options.bootstrap),
+  };
+  return { metrics: metrics, ci95: ci95, perQuery: perQuery.length };
+}
+function benchCore(opts) {
+  opts = opts || {};
+  const k = parseInt(opts.k, 10) > 0 ? Math.min(50, parseInt(opts.k, 10)) : 5;
+  const seed = opts.seed === undefined || opts.seed === null || isNaN(parseInt(opts.seed, 10)) ? BENCH_DEFAULT_SEED : parseInt(opts.seed, 10);
+  if (seed < 0) return { error: true, exitCode: 2, text: '随机种子必须是非负整数: ' + opts.seed };
+  const bootstrap = opts.bootstrap === undefined || opts.bootstrap === null || isNaN(parseInt(opts.bootstrap, 10)) ? BENCH_DEFAULT_BOOTSTRAP : parseInt(opts.bootstrap, 10);
+  if (bootstrap < 0) return { error: true, exitCode: 2, text: 'bootstrap 次数必须是非负整数: ' + opts.bootstrap };
+  const yearFilter = normalizeYearList(opts.years);
+  if (yearFilter.error) return { error: true, exitCode: 2, text: yearFilter.error };
+  const years = yearFilter.years;
+  const gates = parseBenchGates(opts.gate);
+  if (gates.error) return { error: true, exitCode: 2, text: gates.error };
+
+  const roots = memoryRoots();
+  if (!roots.length) return { error: true, exitCode: 2, text: '记忆库不存在，请先运行: yotta-memory init' };
+  const ident = resolveIdentity(opts);
+  if (ident.error) return { error: true, exitCode: 3, text: ident.error };
+  const selfAgent = ident.id;
+
+  const corpusByRoot = [];
+  const rootReports = [];
+  let denied = 0;
+  let privateSkipped = 0;
+  for (const root of roots) {
+    const pub = loadIndexFor(root, { years: years });
+    if (!pub) {
+      return { error: true, exitCode: 2, text: '索引缺失或版本过旧（' + root + '）：请先运行 yotta-memory reindex，再执行 bench。' };
+    }
+    const entries = [];
+    for (const e of pub) {
+      if (classifyRead(e, selfAgent, '', false, selfAgent) === 'denied') { denied++; continue; }
+      entries.push(e);
+    }
+    if (isEncrypted(root)) {
+      for (const owner of collectOwners(root)) {
+        const key = getOwnerKeyFor(root, owner, { id: ident.id, agentKey: ident.agentKey });
+        if (!key) { privateSkipped++; continue; }
+        let idx = [];
+        try { idx = loadOwnerIndex(root, owner, key); } catch (err) { idx = []; }
+        for (const e of idx) {
+          if (years.length && years.indexOf(entryYear(e)) === -1) continue;
+          if (classifyRead(e, selfAgent, '', false, selfAgent) === 'denied') { denied++; continue; }
+          entries.push(e);
+        }
+      }
+    }
+    corpusByRoot.push({ root: root, entries: entries });
+    rootReports.push({ path: root, entries: entries.length, index: indexFingerprint(root) });
+  }
+  const corpusEntries = [];
+  for (const group of corpusByRoot) for (const e of group.entries) corpusEntries.push(e);
+
+  const evalset = loadBenchEvalset(opts.evalset, corpusEntries, seed);
+  if (evalset.error) return { error: true, exitCode: 2, text: evalset.error };
+
+  const baseOptions = { k: k, seed: seed, bootstrap: bootstrap, semantic: true, fuse: true };
+  let timing = null;
+  if (opts.timing) {
+    const samples = [];
+    for (const row of evalset.queries) {
+      const started = process.hrtime.bigint();
+      benchEvaluate(corpusByRoot, [row], baseOptions);
+      samples.push(Number(process.hrtime.bigint() - started) / 1e6);
+    }
+    samples.sort(function (a, b) { return a - b; });
+    const pick = function (p) { return round4(samples[Math.min(samples.length - 1, Math.max(0, Math.round(p * (samples.length - 1))))]); };
+    timing = { p50Ms: pick(0.5), p95Ms: pick(0.95) };
+  }
+  const baseline = benchEvaluate(corpusByRoot, evalset.queries, baseOptions);
+  const gateResults = (gates.gates || []).map(function (g) {
+    const actual = baseline.metrics[g.key];
+    return { metric: g.metric, value: g.value, actual: actual, pass: actual >= g.value };
+  });
+  const level = gateResults.every(function (g) { return g.pass; }) ? 'ok' : 'fail';
+  const report = {
+    schemaVersion: BENCH_SCHEMA_VERSION,
+    command: 'bench',
+    version: VERSION,
+    params: { k: k, seed: seed, bootstrap: bootstrap },
+    corpus: {
+      entries: corpusEntries.length,
+      denied: denied,
+      privateSkipped: privateSkipped,
+      roots: rootReports,
+    },
+    evalset: {
+      source: evalset.source,
+      file: evalset.file || '',
+      sha256: evalset.sha256,
+      queries: evalset.queries.length,
+    },
+    metrics: Object.assign({}, baseline.metrics, { ci95: baseline.ci95 }),
+    gates: gateResults,
+    embedding: {
+      status: 'not-run',
+      reason: 'bench 只跑本地确定性检索（关键词 / 语义），不调用外部 embedding 插件，保证可复算与只读',
+    },
+    reproducible: !opts.timing,
+    level: level,
+  };
+  if (years.length) report.years = years.slice();
+  if (opts.ablate) {
+    report.ablation = BENCH_VARIANTS.map(function (v) {
+      const result = benchEvaluate(corpusByRoot, evalset.queries, { k: k, seed: seed, bootstrap: bootstrap, semantic: v.semantic, fuse: v.fuse });
+      return { variant: v.variant, metrics: result.metrics };
+    });
+  }
+  if (timing) report.timing = timing;
+  return { error: false, exitCode: level === 'fail' ? 1 : 0, text: renderBenchText(report), report: report };
+}
+function renderBenchText(report) {
+  const lines = [];
+  const m = report.metrics;
+  lines.push('# 元忆基准评测（bench）');
+  lines.push('');
+  lines.push('- 记忆库: ' + report.corpus.roots.map(function (r) { return r.path; }).join('、'));
+  lines.push('- 条目数: ' + report.corpus.entries +
+    '；索引指纹: ' + report.corpus.roots.map(function (r) { return String(r.index.sha256).slice(0, 12) + '…'; }).join('、') +
+    '（' + report.corpus.roots.map(function (r) { return r.index.files + ' 个文件 / ' + r.index.bytes + ' 字节'; }).join('；') + '）');
+  lines.push('- 评测集: ' + (report.evalset.source === 'auto' ? '库内自动基线集（确定性抽样）' : report.evalset.file) +
+    '；sha256 ' + report.evalset.sha256.slice(0, 12) + '…；' + report.evalset.queries + ' 条查询');
+  lines.push('- 参数: k=' + report.params.k + '；seed=' + report.params.seed + '；bootstrap=' + report.params.bootstrap +
+    (report.years && report.years.length ? '；年份=' + report.years.join(',') : ''));
+  lines.push('');
+  lines.push('检索质量：');
+  lines.push('- Recall@' + report.params.k + ': ' + m.recallAtK + '（95% CI ' + m.ci95.recallAtK[0] + ' - ' + m.ci95.recallAtK[1] + '）');
+  lines.push('- MRR: ' + m.mrr + '（95% CI ' + m.ci95.mrr[0] + ' - ' + m.ci95.mrr[1] + '）');
+  lines.push('- nDCG@' + report.params.k + ': ' + m.ndcgAtK + '（95% CI ' + m.ci95.ndcgAtK[0] + ' - ' + m.ci95.ndcgAtK[1] + '）');
+  lines.push('- HitRate: ' + m.hitRate + '（95% CI ' + m.ci95.hitRate[0] + ' - ' + m.ci95.hitRate[1] + '）');
+  if (report.ablation && report.ablation.length) {
+    lines.push('');
+    lines.push('消融对比：');
+    for (const row of report.ablation) {
+      lines.push('- ' + row.variant + ': Recall@' + report.params.k + ' ' + row.metrics.recallAtK +
+        '；MRR ' + row.metrics.mrr + '；nDCG@' + report.params.k + ' ' + row.metrics.ndcgAtK + '；HitRate ' + row.metrics.hitRate);
+    }
+    lines.push('- 口径: 关键词 / 语义 × 融合排序（0.65 语义 + 0.35 效用）/ 纯分排序；embedding 插件不参与。');
+  }
+  if (report.timing) {
+    lines.push('');
+    lines.push('检索耗时（--timing，非可复算项）：');
+    lines.push('- p50: ' + report.timing.p50Ms + ' ms；p95: ' + report.timing.p95Ms + ' ms');
+  }
+  lines.push('');
+  lines.push('门禁：');
+  if (!report.gates.length) {
+    lines.push('- 未设置（--gate <指标>=<数值> 可接入 CI）');
+  } else {
+    for (const g of report.gates) {
+      lines.push('- ' + g.metric + ' >= ' + g.value + '：' + (g.pass ? '通过' : '未通过') + '（实际 ' + g.actual + '）');
+    }
+  }
+  if (report.corpus.denied) lines.push('- 已跳过 ' + report.corpus.denied + ' 条当前身份不可读的记忆');
+  lines.push('');
+  lines.push('复算口径：库指纹 + 评测集指纹 + 参数一致时必须同输出；默认报告不含墙钟时间，只读、不写生产库。');
+  return lines.join('\n');
+}
+function cmdBench(opts) {
+  const r = benchCore(opts || {});
+  if (r.error) {
+    console.error(r.text);
+    process.exit(r.exitCode || 2);
+  }
+  const json = JSON.stringify(r.report, null, 2);
+  if (opts && opts.out) {
+    const target = path.resolve(String(opts.out));
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, json + '\n', 'utf8');
+  }
+  console.log(opts && opts.json ? json : r.text);
   if (r.exitCode) process.exit(r.exitCode);
 }
 
@@ -7693,6 +8191,8 @@ async function main() {
     else if (a === '--explain') opts.explain = true;
     else if (a === '--semantic') opts.semantic = true;
     else if (a === '--runtime') opts.runtime = true;
+    else if (a === '--ablate') opts.ablate = true;
+    else if (a === '--timing') opts.timing = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;
@@ -7738,6 +8238,12 @@ async function main() {
       else if (a === '--tools') opts.toolProfile = v;
       else if (a === '--mcp-config') opts.mcpConfigPaths = (opts.mcpConfigPaths || []).concat(v);
       else if (a === '--skill-dir') opts.skillDirs = (opts.skillDirs || []).concat(v);
+      else if (a === '--year') opts.years = (opts.years || []).concat(v);
+      else if (a === '--evalset') opts.evalset = v;
+      else if (a === '--k') opts.k = parseInt(v, 10);
+      else if (a === '--seed') opts.seed = parseInt(v, 10);
+      else if (a === '--bootstrap') opts.bootstrap = parseInt(v, 10);
+      else if (a === '--gate') opts.gate = (opts.gate || []).concat(v);
     } else if (a.startsWith('--')) {
       if (a === '--query') {
         console.error('未知选项: --query。recall/search 的关键词是位置参数：yotta-memory recall [关键词]');
@@ -7784,6 +8290,7 @@ async function main() {
     case 'search': cmdRecall(rest[0] || null, opts); break;
     case 'feedback': cmdFeedback(rest[0], opts); break;
     case 'explain': cmdExplain(rest[0], opts); break;
+    case 'bench': cmdBench(opts); break;
     case 'maintain': cmdMaintain(opts); break;
     case 'distill': cmdDistill(opts); break;
     case 'consolidate': if (opts.undo === true && rest.length) opts.undo = rest[0]; cmdConsolidate(opts); break;
@@ -7893,6 +8400,11 @@ module.exports = {
   collectEntryFiles: collectEntryFiles,
   walkEntryFiles: walkEntryFiles,
   migrateLayout: migrateLayout,
+  loadIndexFor: loadIndexFor,
+  indexEntriesFor: indexEntriesFor,
+  normalizeYearList: normalizeYearList,
+  indexFingerprint: indexFingerprint,
+  benchCore: benchCore,
   exportCore: exportCore,
   importCore: importCore,
   typeSubdir: typeSubdir,
