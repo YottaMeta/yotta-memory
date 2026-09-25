@@ -306,3 +306,9 @@ test('view 的删除 AI 在未配置独立备份时拒绝', async (t) => {
   assert.match(JSON.stringify(refused.data || refused.text), /备份|快照/);
   assert.ok(fs.existsSync(path.join(home, 'private', 'xiaoan')), '被拒时不得删除');
 });
+
+test('view 的删除 AI 在确认 ID 不一致时给出可见提示', () => {
+  const html = memory.viewHtml();
+  assert.match(html, /if\(typed===null\)return;/);
+  assert.match(html, /if\(typed!==owner\)\{alert\('ID 不匹配，请输入完整 agent ID：'\+owner\);return;\}/);
+});

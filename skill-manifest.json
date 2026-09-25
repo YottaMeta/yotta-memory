@@ -3,7 +3,7 @@
   "slug": "yotta-memory",
   "name": "元忆",
   "package": "@yottameta/yotta-memory",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "trust": "yottameta",
   "install": {
     "idempotent": true
