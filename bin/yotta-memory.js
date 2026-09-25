@@ -26,6 +26,227 @@ const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
 const VERSION = '0.16.7';
+const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir']);
+const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--explain', '--semantic', '--runtime']);
+
+function helpOption(flag, arg, what, when, caution) {
+  return { flag: flag, arg: arg || '', what: what, when: when || '', caution: caution || '' };
+}
+function helpSub(name, usage, what, when, options) {
+  return { name: name, usage: usage || name, what: what, when: when || '', options: options || [] };
+}
+const HELP_MODEL = [
+  { group: '核心记忆', commands: [
+    { name: 'init', usage: 'init [--project | --dir <目录>] [--attach | --encrypt | --no-encrypt] [--password-stdin] [--recovery-key-out <文件>]', what: '初始化记忆库', when: '第一次使用，或把已有记忆库接入当前项目 / 智能体时', options: [
+      helpOption('--project', '', '把记忆库放在当前项目根目录', '只希望这个项目使用这份记忆时', ''),
+      helpOption('--dir', '<目录>', '指定记忆库位置', '不想用默认用户级位置时', ''),
+      helpOption('--attach', '', '接入已有记忆库', '目录里已经有一份库，不要重新初始化时', ''),
+      helpOption('--encrypt', '', '新建加密记忆库', '想显式要求加密时', ''),
+      helpOption('--no-encrypt', '', '新建明文记忆库', '只做临时实验、明确接受明文风险时', '私密记忆会以明文落盘；正式使用不要加这个选项'),
+      helpOption('--password-stdin', '', '从标准输入读取主口令', '脚本或非交互环境设置口令时', '只适合纯 ASCII 口令；中文口令请交互输入'),
+      helpOption('--recovery-key-out', '<文件>', '把恢复钥匙写到文件', '新建或迁移后需要立刻保存恢复钥匙时', '恢复钥匙能重置主口令，必须单独妥善保管'),
+      helpOption('--force', '', '允许覆盖已存在的运行文件', '确认要替换旧运行文件时', '可能覆盖现有内容；先确认目标路径和备份'),
+    ] },
+    { name: 'remember', usage: 'remember <type> <subject> <statement> [选项]', what: '写入一条记忆', when: '出现事实、偏好、边界或承诺，需要跨会话保留时', options: [
+      helpOption('--source', '<来源>', '记录这条记忆的来源', '需要以后追溯「谁说的 / 哪来的」时', ''),
+      helpOption('--weight', '<数值>', '设置重要性权重', '这条记忆比普通条目更重要或更次要时', ''),
+      helpOption('--verify', '', '写完立刻回读校验', '关键记忆担心写失败或索引异常时', ''),
+      helpOption('--no-hint', '', '关闭类型启发式提示', '已经明确知道类型、不想看额外提醒时', ''),
+    ] },
+    { name: 'recall', usage: 'recall [关键词] [选项]；search 是别名', what: '检索记忆', when: '开工恢复上下文、找旧决定或确认边界时', options: [
+      helpOption('--type', '<类型>', '只查某一种类型', '只想看 FACT / PREF / BOUND / COMMIT 中的一类时', ''),
+      helpOption('--limit', '<条数>', '限制返回条数', '结果太多、只需看最相关的几条时', ''),
+      helpOption('--agent', '<id>', '声明当前智能体身份或按智能体筛选', '当前会话身份需要明确声明时', '声明身份不等于获得跨读权限'),
+      helpOption('--owner', '<id>', '指定记忆归属者', '查询某个 owner 的私密记忆时', '读其它智能体的私密区需要授权'),
+      helpOption('--all', '', '跨 owner 检索', '确实需要看所有可读范围内的记忆时', '跨读其它智能体私密仍未授权会拒绝并提示'),
+      helpOption('--unsafe', '', '跳过越界读取保护', '只有用户明确授权做隔离排查时', '会放宽私密读取边界，日常不要使用'),
+      helpOption('--explain', '', '输出命中理由和效用分项', '想理解为什么这条记忆被排到前面时', ''),
+      helpOption('--semantic', '', '显式开启语义检索', '想强制使用同义词 / 拼音 / 模糊匹配时', ''),
+      helpOption('--embedding', '<命令>', '临时指定本地 embedding 插件命令', '这次检索想使用自定义本地向量命令时', '只在本地执行，不会把记忆上传远端'),
+      helpOption('--embedding-timeout', '<毫秒>', '设置 embedding 插件超时', '插件较慢或需要快速失败时', ''),
+    ] },
+    { name: 'forget', usage: 'forget <记忆 id> [选项]', what: '删除一条记忆', when: '确认某条记忆不应继续保留时', options: [
+      helpOption('--reason', '<原因>', '记录删除原因', '需要留下为什么删除的审计线索时', ''),
+      helpOption('--unsafe', '', '跳过越界删除保护', '只有获得明确授权处理隔离库时', '会放宽删除边界，误删风险很高'),
+    ] },
+    { name: 'archive', usage: 'archive [选项]', what: '把低价值或过期记忆归档', when: '库变大，想让旧记忆退出主检索但保留可回溯时', options: [
+      helpOption('--days', '<天数>', '按未使用天数判断归档', '想调整「多久没用才归档」时', ''),
+      helpOption('--threshold', '<数值>', '按效用分阈值判断归档', '想调整「用得少不少」时', ''),
+      helpOption('--dry-run', '', '只预览归档结果', '先看会动哪些记忆，再决定是否执行时', ''),
+    ] },
+    { name: 'backup', usage: 'backup <子命令> [选项]', what: '备份、恢复和演练记忆库', when: '配置自动备份、创建备份、恢复误删或验证备份可用时', subcommands: [
+      helpSub('volumes', 'volumes [--json]', '列出可用备份卷', '想知道备份会写到哪里时', [helpOption('--json', '', '输出 JSON', '脚本处理备份卷列表时', '')]),
+      helpSub('setup', 'setup [--manual] [--skip-schedule] [--allow-same-volume]', '配置备份目录和计划任务', '第一次启用自动备份时', [
+        helpOption('--manual', '', '只配置目录，不改计划任务', '由你自己管理定时任务时', ''),
+        helpOption('--skip-schedule', '', '跳过自动计划任务', '只想先建备份目录、不注册系统计划时', ''),
+        helpOption('--allow-same-volume', '', '允许备份和记忆库在同一磁盘卷', '只有临时测试且接受同盘故障风险时', '同盘备份无法防止整盘损坏；正式使用必须换独立盘'),
+      ]),
+      helpSub('status', 'status [--json]', '查看备份健康状态', '开工检查或排查备份是否正常时', [helpOption('--json', '', '输出 JSON', '脚本读取备份状态时', '')]),
+      helpSub('ensure-daily', 'ensure-daily [--json]', '确保每日备份任务存在', '修复自动备份任务缺失时', [helpOption('--json', '', '输出 JSON', '自动化里检查任务时', '')]),
+      helpSub('schedule', 'schedule <on|off|status> [--time <HH:MM>]', '管理每天自动备份', '设置或关闭每日备份时', [helpOption('--time', '<HH:MM>', '设置每日备份时间', '默认 03:30 不合适时', '')]),
+      helpSub('create', 'create [--json]', '立即创建一份备份', '手动留一个恢复点、或改库前先备份时', [helpOption('--json', '', '输出 JSON', '脚本读取新备份 id 时', '')]),
+      helpSub('list', 'list [--json]', '列出备份历史', '选一个恢复点时', [helpOption('--json', '', '输出 JSON', '脚本读取备份列表时', '')]),
+      helpSub('doctor', 'doctor [--json]', '检查备份目录和文件是否健康', '怀疑备份损坏或磁盘异常时', [helpOption('--json', '', '输出 JSON', '自动化体检时', '')]),
+      helpSub('restore', 'restore <id> --to <目录> [--force]', '从备份恢复到指定目录', '误删、迁移或需要验证恢复内容时', [
+        helpOption('--to', '<目录>', '指定恢复目标目录', '恢复时必须显式给出目标位置', ''),
+        helpOption('--id', '<id>', '指定备份 id', '不用位置参数、想显式点名备份时', ''),
+        helpOption('--force', '', '允许覆盖非空目标目录', '确认目标可以覆盖时', '可能覆盖目标目录现有文件；先确认目标和备份'),
+      ]),
+      helpSub('drill', 'drill <id> --to <目录>', '恢复演练', '验证备份真的能恢复时', [
+        helpOption('--to', '<目录>', '指定演练恢复目录', '演练时使用临时空目录更安全', ''),
+        helpOption('--id', '<id>', '指定备份 id', '不用位置参数、想显式点名备份时', ''),
+      ]),
+    ] },
+    { name: 'doctor', usage: 'doctor [选项]', what: '开工可靠性检查', when: '开工前、异常后或升级后确认系统状态时', options: [
+      helpOption('--runtime', '', '同时检查 CLI、current、MCP、进程和技能副本是否漂移', '升级后版本对不上时', ''),
+      helpOption('--mcp-config', '<文件>', '补充检查指定 MCP 配置文件', '排查宿主 MCP 是否指向旧运行时', ''),
+      helpOption('--skill-dir', '<目录>', '补充检查指定技能副本目录', '排查技能目录是否落后', ''),
+      helpOption('--json', '', '输出 JSON', '脚本或自动化读取体检结果时', ''),
+    ] },
+    { name: 'maintain', usage: 'maintain [选项]', what: '记忆自组织：归档、遗忘候选、去重和合并', when: '定期清理低价值记忆、合并重复条目时', options: [
+      helpOption('--dedup', '', '只做重复检查并给置信度', '想先看哪些条目重复时', ''),
+      helpOption('--apply', '', '真正执行，而不是只预览', '确认预览结果后要落盘时', '会改动记忆库并创建事务快照；先跑 dry-run'),
+      helpOption('--purge', '', '对遗忘候选执行真删', '确认候选确实不再需要时', '真删不可逆；通常先用归档而不是 purge'),
+      helpOption('--dry-run', '', '只预览，不改库', '默认行为，想显式表达时', ''),
+      helpOption('--min-age', '<天数>', '设置遗忘候选最小年龄', '想调整「放多久才考虑遗忘」时', ''),
+      helpOption('--min-idle', '<天数>', '设置遗忘候选最小闲置天数', '想调整「多久没碰才考虑遗忘」时', ''),
+      helpOption('--max-utility', '<数值>', '设置效用分上限', '想调整「用得少到什么程度」时', ''),
+      helpOption('--min-group', '<条数>', '设置重复组最小条数', '调整查重灵敏度时', ''),
+      helpOption('--merge', '<id列表>', '显式合并指定条目', '已经确认这些条目可以合并时', ''),
+      helpOption('--json', '', '输出 JSON', '自动化处理维护结果时', ''),
+    ] },
+    { name: 'consolidate', usage: 'consolidate [--apply | --undo <batch> | --batches] [选项]', what: '把旧记忆压缩成周期摘要', when: '库很大，想把超龄、闲置、低效用条目压成摘要时', options: [
+      helpOption('--apply', '', '真正执行压缩', '确认 dry-run 结果后要落盘时', '会改动记忆库并创建事务快照；先预览'),
+      helpOption('--undo', '<batch>', '回滚一个摘要批次', '压缩后发现结果不合适时', ''),
+      helpOption('--batches', '', '列出历史批次', '想找回滚批次号时', ''),
+      helpOption('--period', '<天数>', '设置摘要周期', '想改变摘要覆盖的时间跨度时', ''),
+      helpOption('--threshold', '<数值>', '设置候选效用阈值', '想调整进入摘要的门槛时', ''),
+      helpOption('--min-age', '<天数>', '设置候选最小年龄', '想调整「放多久才进入摘要」时', ''),
+      helpOption('--min-idle', '<天数>', '设置候选最小闲置天数', '想调整「多久没碰才进入摘要」时', ''),
+      helpOption('--max-utility', '<数值>', '设置候选效用分上限', '想调整「用得少到什么程度」时', ''),
+      helpOption('--min-group', '<条数>', '设置摘要组最小条数', '调整合并力度时', ''),
+      helpOption('--json', '', '输出 JSON', '自动化处理摘要结果时', ''),
+    ] },
+    { name: 'distill', usage: 'distill [--model <命令>] [选项]', what: '把心理日志蒸馏成统计摘要、主题画像和知识地图', when: '想把长期记录整理成更高层的自我画像时', options: [
+      helpOption('--model', '<命令>', '调用本地外部模型辅助蒸馏', '需要更高质量摘要、且已准备本地模型命令时', '命令在本地执行；不要指向会外传原文的服务'),
+      helpOption('--subject', '<标题>', '指定蒸馏输出主题', '想给这次摘要一个固定标题时', ''),
+      helpOption('--json', '', '输出 JSON', '自动化处理蒸馏结果时', ''),
+    ] },
+    { name: 'feedback', usage: 'feedback <记忆 id> [--useful | --useless | --undo]', what: '记录记忆是否有用', when: '一条记忆刚刚帮助了你，或明显误导了你时', options: [
+      helpOption('--useful', '', '记为有用', '这条记忆确实帮上忙时', ''),
+      helpOption('--useless', '', '记为没用', '这条记忆造成误导或噪音时', ''),
+      helpOption('--undo', '', '撤销上一次反馈', '误点反馈时', ''),
+    ] },
+    { name: 'explain', usage: 'explain <记忆 id> [--json]', what: '解释一条记忆的效用分和归档判定', when: '想理解为什么它被排序、归档或遗忘时', options: [helpOption('--json', '', '输出 JSON', '脚本读取解释结果时', '')] },
+    { name: 'reindex', usage: 'reindex', what: '重建记忆索引', when: '索引损坏、手动改过记忆文件或 doctor 提示索引异常时', options: [] },
+    { name: 'export', usage: 'export --out <文件.json>', what: '导出全部记忆', when: '备份、迁移或做离线检查时', options: [helpOption('--out', '<文件>', '指定导出文件', '导出时必须给出目标 JSON 文件', '')] },
+    { name: 'import', usage: 'import <文件.json>', what: '导入记忆 JSON', when: '从导出文件恢复或迁移时', options: [] },
+  ] },
+  { group: '身份与画像', commands: [
+    { name: 'iam', usage: 'iam --name <名字> --user <用户> --relationship <关系>', what: '登记当前智能体身份', when: '第一次接入，或身份信息需要更新时', options: [
+      helpOption('--name', '<名字>', '设置智能体显示名', '登记或更新身份时', ''),
+      helpOption('--user', '<用户>', '设置用户称呼', '登记或更新身份时', ''),
+      helpOption('--relationship', '<关系>', '设置与用户的关系定位', '登记或更新身份时', ''),
+    ] },
+    { name: 'whoami', usage: 'whoami [--json]', what: '查看当前身份和登记状态', when: '不确定当前是谁、是否已登记时', options: [helpOption('--json', '', '输出 JSON', '脚本读取身份状态时', '')] },
+    { name: 'profile', usage: 'profile [--owner <id>] [--json]', what: '生成用户画像', when: '想按私密记忆原文结构化查看用户画像时', options: [
+      helpOption('--owner', '<id>', '指定画像归属者', '查某个 owner 的私密画像时', '仍然受私密区权限约束'),
+      helpOption('--json', '', '输出 JSON', '自动化读取画像时', ''),
+    ] },
+    { name: 'context', usage: 'context [选项]', what: '生成开工上下文包', when: '每个会话开工时恢复身份、边界、近期记忆和承诺', options: [
+      helpOption('--limit', '<条数>', '限制近期记忆条数', '上下文太长、想缩短时', ''),
+      helpOption('--owner', '<id>', '指定 owner 范围', '需要看某个 owner 的上下文时', '仍然受私密区权限约束'),
+      helpOption('--budget', '<字符数>', '设置动态记忆字符预算', '需要控制上下文包大小时', '0 表示不限制'),
+      helpOption('--focus', '<关键词>', '按当前任务聚焦', '这次任务很明确、想优先拉相关记忆时', ''),
+      helpOption('--explain', '', '输出 included / dropped 选择解释', '想理解上下文为什么收录或丢弃时', ''),
+      helpOption('--embedding', '<命令>', '临时指定本地 embedding 插件命令', '上下文检索想用本地向量命令时', '只在本地执行'),
+      helpOption('--embedding-timeout', '<毫秒>', '设置 embedding 插件超时', '插件较慢或需要快速失败时', ''),
+    ] },
+    { name: 'token', usage: 'token <子命令> [选项]', what: '管理远端 MCP 访问 token', when: '给远端 MCP 客户端发放或吊销访问凭据时', subcommands: [
+      helpSub('new', 'new --agent <id> [--scope <范围>] [--json]', '生成一个访问 token', '远端客户端第一次接入时', [
+        helpOption('--agent', '<id>', '指定 token 对应的智能体 id', '发 token 时必须明确给谁用', ''),
+        helpOption('--scope', '<范围>', '限制 token 权限范围', '只想给某一类访问权限时', ''),
+        helpOption('--json', '', '输出 JSON', '脚本读取新 token 时', ''),
+      ]),
+      helpSub('list', 'list [--json]', '列出 token', '查当前有哪些 token 时', [helpOption('--json', '', '输出 JSON', '自动化盘点 token 时', '')]),
+      helpSub('revoke', 'revoke --agent <id>', '吊销 token', '设备丢失或凭据泄漏时', [helpOption('--agent', '<id>', '指定要吊销 token 的智能体 id', '吊销时必须明确对象', '')]),
+    ] },
+  ] },
+  { group: '加密与安全', commands: [
+    { name: 'migrate', usage: 'migrate [--password-stdin] [--recovery-key-out <文件>]', what: '把明文记忆库迁移成加密记忆库；迁移后授权二选一：推荐 yotta-memory view，等价 CLI 为 yotta-memory key bind <id>', when: '旧库还是明文，确认要启用私密区加密时', options: [
+      helpOption('--password', '<口令>', '直接提供主口令', '自动化环境无法交互输入时', '命令行会留下痕迹；优先交互输入'),
+      helpOption('--password-stdin', '', '从标准输入读取主口令', '脚本迁移时', '只适合纯 ASCII 口令；中文口令请交互输入'),
+      helpOption('--agent', '<id>', '声明迁移使用的身份', '迁移时需要指定 owner 时', ''),
+      helpOption('--recovery-key', '<钥匙>', '用恢复钥匙参与迁移', '已有恢复钥匙、需要恢复访问时', '恢复钥匙能重置主口令，注意不要泄漏'),
+      helpOption('--recovery-key-out', '<文件>', '把恢复钥匙写到文件', '迁移后要立刻保存恢复钥匙时', '恢复钥匙必须单独妥善保管'),
+    ] },
+    { name: 'view', usage: 'view [--port <端口>] [--host <地址>]', what: '启动用户查看平台', when: '用户本人要浏览、授权或导出记忆时', options: [
+      helpOption('--port', '<端口>', '设置查看平台端口', '默认端口被占用时', ''),
+      helpOption('--host', '<地址>', '设置监听地址', '需要只在指定网卡上开放时', '监听公网地址前先确认访问控制和防火墙'),
+    ] },
+    { name: 'reset-password', usage: 'reset-password [--password <旧口令>] [--new-password <新口令>] [--recovery-key <钥匙>]', what: '重设主口令', when: '知道旧口令想更换，或用恢复钥匙救回访问时', options: [
+      helpOption('--password', '<口令>', '提供当前主口令', '正常更换口令时', '命令行会留下痕迹；优先交互输入'),
+      helpOption('--new-password', '<口令>', '设置新主口令', '更换口令时', '新口令只保存在本地密钥材料中'),
+      helpOption('--password-stdin', '', '从标准输入读取口令', '脚本重设口令时', '只适合纯 ASCII 口令'),
+      helpOption('--recovery-key', '<钥匙>', '用恢复钥匙重设口令', '忘记主口令时', '恢复钥匙只显示一次；泄漏等于可重置口令'),
+    ] },
+    { name: 'key', usage: 'key <子命令> [选项]', what: '管理 agent_key 授权绑定', when: '用户授权智能体读取自己的私密记忆、轮换或吊销 key 时', subcommands: [
+      helpSub('list', 'list', '列出授权绑定', '盘点哪些智能体已授权时', []),
+      helpSub('bind', 'bind <id> [--password <口令> | --recovery-key <钥匙>]', '给智能体绑定 agent_key', '用户明确授权后绑定', [
+        helpOption('--password', '<口令>', '提供主口令', '绑定或轮换时', '命令行会留下痕迹；优先交互输入'),
+        helpOption('--recovery-key', '<钥匙>', '用恢复钥匙完成绑定', '忘记主口令时', '恢复钥匙必须妥善保管'),
+      ]),
+      helpSub('rotate', 'rotate <id> [--password <口令> | --recovery-key <钥匙>]', '轮换 agent_key', '怀疑旧 key 泄漏或定期更换时', [
+        helpOption('--password', '<口令>', '提供主口令', '轮换时', '命令行会留下痕迹；优先交互输入'),
+        helpOption('--recovery-key', '<钥匙>', '用恢复钥匙完成轮换', '忘记主口令时', '恢复钥匙必须妥善保管'),
+      ]),
+      helpSub('authorize', 'authorize <id> [--password <口令>]', '授权一个 owner', '用户查看平台不方便时，由 CLI 显式授权', [helpOption('--password', '<口令>', '提供主口令', '授权时', '这是用户侧操作，AI 不应代做')]),
+      helpSub('claim', 'claim <id> [--to <AI_HOME> | --plugin-data <目录> | --agent-key-file <文件>]', '领取待绑定的 agent_key', '用户授权后，智能体新会话领取只显示一次的 key', [
+        helpOption('--to', '<AI_HOME>', '把 key 写到指定 AI_HOME', '宿主有标准 AI_HOME 目录时', ''),
+        helpOption('--plugin-data', '<目录>', '把 key 写到插件数据目录', 'Agent Plugin 形态接入时', ''),
+        helpOption('--agent-key-file', '<文件>', '把 key 写到显式文件', '希望完全指定路径时', ''),
+      ]),
+      helpSub('status', 'status <id> [--to <AI_HOME> | --plugin-data <目录> | --agent-key-file <文件>]', '检查 key 是否已领取、绑定是否有效', '新会话开始或 MCP 连不上时', [
+        helpOption('--to', '<AI_HOME>', '检查指定 AI_HOME 下的 key', '宿主有标准 AI_HOME 目录时', ''),
+        helpOption('--plugin-data', '<目录>', '检查插件数据目录下的 key', 'Agent Plugin 形态接入时', ''),
+        helpOption('--agent-key-file', '<文件>', '检查显式 key 文件', '希望完全指定路径时', ''),
+      ]),
+      helpSub('revoke', 'revoke <id>', '吊销一个 agent_key', '设备丢失、泄漏或不再授权时', []),
+    ] },
+    { name: 'config', usage: 'config <get | set <键> <值>>', what: '查看或修改元忆配置', when: '调整记忆位置、embedding 命令、备份或维护阈值时', subcommands: [
+      helpSub('get', 'get', '查看当前配置', '想知道实际生效值 / 路径时', []),
+      helpSub('set', 'set <键> <值>', '修改配置键', '调整 memory_home / backup_dir / embedding_cmd / embedding_timeout / maintain_* / consolidate_* 时', []),
+    ] },
+  ] },
+  { group: '平台与服务', commands: [
+    { name: 'runtime', usage: 'runtime <子命令> [选项]', what: '管理稳定运行时入口', when: '安装、切换、回滚或盘点元忆运行时版本时', subcommands: [
+      helpSub('install', 'install <tarball|版本> [--from-current] [--force]', '安装一个运行时版本', '升级或回退前准备版本目录时', [
+        helpOption('--from-current', '', '把当前运行目录打包安装为运行时版本', '把正在用的副本固化成稳定版本时', ''),
+        helpOption('--force', '', '允许覆盖内容不同的已安装版本', '确认要替换同版本目录时', '会覆盖已有运行时内容；先确认版本和备份'),
+      ]),
+      helpSub('use', 'use <版本> [--restart]', '切换 current 到指定版本', '升级后要把 MCP 切到新版本时', [helpOption('--restart', '', '切换后重启托管服务', '希望立即生效时', '')]),
+      helpSub('rollback', 'rollback [--restart]', '回滚到上一个运行时版本', '新版本出问题时', [helpOption('--restart', '', '回滚后重启托管服务', '希望立即恢复服务时', '')]),
+      helpSub('status', 'status [--json]', '查看 current 与运行时状态', '排查版本漂移时', [helpOption('--json', '', '输出 JSON', '自动化读取运行时状态时', '')]),
+      helpSub('list', 'list [--json]', '列出已安装运行时版本', '盘点可切换版本时', [helpOption('--json', '', '输出 JSON', '自动化盘点运行时版本时', '')]),
+    ] },
+    { name: 'serve', usage: 'serve [--stdio] [--tools core|full] [--host <地址>] [--port <端口>]', what: '启动 MCP 记忆引擎', when: '宿主需要以 MCP 方式访问元忆时', options: [
+      helpOption('--stdio', '', '用本地 stdio 模式启动', '本地宿主不需要 HTTP 服务时', ''),
+      helpOption('--tools', 'core|full', '选择工具分组', '想减少工具常驻开销时', 'core 更省上下文，full 暴露全部工具'),
+      helpOption('--host', '<地址>', '设置 HTTP 监听地址', '需要远端 MCP 接入时', '监听公网前必须配置鉴权和防火墙'),
+      helpOption('--port', '<端口>', '设置 HTTP 监听端口', '默认端口被占用时', ''),
+      helpOption('--no-auth', '', '关闭 HTTP 鉴权', '只在本机临时调试时', '任何能访问端口的人都可读写；不要用于远端或正式环境'),
+      helpOption('--agent-id', '<id>', 'stdio 模式下声明智能体 id', '本地宿主用固定身份启动时', ''),
+      helpOption('--agent-key', '<key>', 'stdio 模式下直接提供 agent_key', '宿主把 key 作为启动参数传入时', '命令行参数可能被进程列表看到；优先用 key 文件'),
+      helpOption('--agent-key-file', '<文件>', 'stdio 模式下从文件读取 agent_key', '宿主使用标准 key 文件时', ''),
+    ] },
+    { name: 'lan', usage: 'lan <子命令> [选项]', what: '管理开机自启', when: '需要元忆服务随系统或登录启动时', subcommands: [
+      helpSub('enable', 'enable [--onstart]', '启用开机自启', '希望元忆服务长期可用时', [helpOption('--onstart', '', '同时启用未登录也启动', 'Linux 上希望开机即启动、不依赖登录时', 'Windows 上此选项不改变计划任务语义')]),
+      helpSub('disable', 'disable', '关闭开机自启', '不再需要常驻服务时', []),
+      helpSub('status', 'status', '查看自启状态', '确认服务是否会随系统启动时', []),
+    ] },
+    { name: '--version', usage: '--version；短写法 -v', what: '显示当前版本', when: '确认安装的是哪个版本时', options: [] },
+  ] },
+];
 // @generated view-html:start
 const VIEW_HTML = "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>元忆 · 用户查看平台</title><style>\r\nbody{font-family:system-ui,-apple-system,\"Microsoft YaHei\",sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1f2328;background:#fafafa}\r\nh1{font-size:22px} .card{background:#fff;border:1px solid #e2e2e2;border-radius:10px;padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}\r\nbutton{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;margin:2px;font-size:14px}\r\nbutton.danger{background:#dc2626} button.ghost{background:#e5e7eb;color:#1f2328}\r\ninput,select{padding:8px;border:1px solid #c9c9c9;border-radius:6px;margin:2px;font-size:14px;box-sizing:border-box}\r\ntable{border-collapse:collapse;width:100%;font-size:13px} td,th{border:1px solid #ececec;padding:6px 8px;text-align:left;vertical-align:top}\r\n.owner{display:inline-flex;align-items:center;gap:6px;border:1px solid #ddd;border-radius:8px;padding:5px 10px;margin:4px 6px 4px 0;background:#f6f8fa}\r\n.entry{border-bottom:1px solid #eee;padding:8px 0} .meta{color:#8a8a8a;font-size:12px}\r\n.err{color:#dc2626;margin-top:8px} .ok{color:#16a34a;margin-top:8px}\r\n#app{display:none} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:12px}\r\n</style></head><body>\r\n<h1>元忆 · 用户查看平台 <span id=\"ver\" style=\"font-size:14px;color:#888\"></span></h1>\r\n<div id=\"lock\" class=\"card\">\r\n  <p><b>输入主口令解锁</b>（口令只在本地内存派生，不落盘、不发送远端）。忘口令可在 CLI 用恢复钥匙重设：<code>yotta-memory reset-password --recovery-key &lt;钥匙&gt;</code></p>\r\n  <input type=\"password\" id=\"pw\" placeholder=\"主口令\" style=\"width:260px\">\r\n  <button onclick=\"unlock()\">解锁</button>\r\n  <div class=\"err\" id=\"lockerr\"></div>\r\n</div>\r\n<div id=\"app\">\r\n  <div class=\"card\">\r\n    <b>AI 列表</b>（✅=已授权可读自己私密，🔒=未授权）\r\n    <div class=\"meta\" style=\"margin-top:6px\">「授权」由你（用户）操作：确认后生成只显示一次的 agent_key，请立即单独保存；服务端同时写临时待领取文件 <code>keys/pending/&lt;agent_id&gt;.key</code>，供该 AI 新会话领取，领取成功后自动删除。</div>\r\n    <div id=\"owners\" style=\"margin-top:8px\"></div>\r\n  </div>\r\n  <div class=\"card\">\r\n    <b>记忆</b>\r\n    <input id=\"q\" placeholder=\"搜索关键词\" style=\"width:220px\" onkeydown=\"if(event.key==='Enter'){off=0;load()}\">\r\n    <button onclick=\"off=0;load()\">搜索</button>\r\n    <button class=\"ghost\" onclick=\"doExport()\">导出 JSON</button>\r\n    <button class=\"ghost\" onclick=\"showRk()\">显示恢复钥匙</button>\r\n    <span id=\"rkout\" style=\"font-size:12px;color:#888;margin-left:8px\"></span>\r\n    <div id=\"meta\" style=\"margin-top:10px;font-size:12px;color:#666\"></div>\r\n    <div id=\"entries\" style=\"margin-top:6px\"></div>\r\n    <div id=\"pager\" style=\"margin-top:10px\">\r\n      <button class=\"ghost\" id=\"prevb\" onclick=\"prevPage()\">上一页</button>\r\n      <span id=\"pageinfo\" style=\"font-size:12px;color:#888;margin:0 8px\"></span>\r\n      <button class=\"ghost\" id=\"nextb\" onclick=\"nextPage()\">下一页</button>\r\n    </div>\r\n  </div>\r\n  <div class=\"card\">\r\n    <b>重设口令</b><br>\r\n    <input type=\"password\" id=\"cur\" placeholder=\"当前口令\">\r\n    <input type=\"password\" id=\"np1\" placeholder=\"新口令\">\r\n    <input type=\"password\" id=\"np2\" placeholder=\"确认新口令\">\r\n    <button onclick=\"resetPw()\">重设</button>\r\n    <span id=\"pwout\"></span>\r\n  </div>\r\n</div>\r\n<script>\r\nfunction esc(s){return String(s==null?'':s).replace(/[&<>\"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}\r\nasync function api(p,b){try{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return await r.json();}catch(e){return{error:String(e)};}}\r\nasync function boot(){const s=await api('/api/status');document.getElementById('ver').textContent='v'+(s.version||'');if(s.unlocked){showApp();}}\r\nfunction showApp(){document.getElementById('lock').style.display='none';document.getElementById('app').style.display='block';loadOwners();load();}\r\nasync function unlock(){const d=await api('/api/unlock',{password:document.getElementById('pw').value});if(d.error){document.getElementById('lockerr').textContent=d.error;return;}showApp();}\r\nasync function loadOwners(){const d=await api('/api/owners');const box=document.getElementById('owners');box.innerHTML='';if(!d.owners||!d.owners.length){box.innerHTML=esc(d.hint||'（无 owner）');return;}\r\n  for(const o of d.owners){const c=document.createElement('span');c.className='owner';c.innerHTML=esc(o.owner)+(o.authorized?' ✅':' 🔒')+' <button class=\"ghost\" data-a=\"'+esc(o.owner)+'\">授权</button><button class=\"danger\" data-r=\"'+esc(o.owner)+'\">吊销</button>';box.appendChild(c);}\r\n  box.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){var owner=b.getAttribute('data-a');if(!confirm('确认由你为用户授权 '+owner+' 读取其私密记忆？授权后将生成只显示一次的 agent_key，请立即保存；同时写入待领取文件供该 AI 新会话领取。AI 不应代为执行该授权操作。'))return;b.disabled=true;api('/api/authorize',{owner:owner}).then(function(d){b.disabled=false;if(!d||d.error){alert((d&&d.error)||'授权失败');loadOwners();return;}if(d.agentKey){showKey(d.agentKey);}loadOwners();});};});\r\n  box.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){if(!confirm('确认吊销 '+b.getAttribute('data-r')+' 的 agent_key？吊销后该智能体立即失去私密读写能力。'))return;api('/api/revoke',{owner:b.getAttribute('data-r')}).then(function(){loadOwners();});};});\r\nfunction showKey(k){var ov=document.createElement('div');ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99';var box=document.createElement('div');box.className='card';box.style.cssText='max-width:640px;word-break:break-all';var t=document.createElement('div');t.innerHTML='<b>agent_key（只显示一次）</b>';var hint=document.createElement('div');hint.className='meta';hint.textContent='请用户立即单独保存。AI 新会话先执行 yotta-memory key status <agent_id>，有 pending 再执行 key claim <agent_id>；默认写入 AI_HOME/.yotta-memory-agent-key，需要时用 --to 或 --agent-key-file 指定。若 key 丢失，可吊销后重新授权；旧 key 会立即校验失败。';var ta=document.createElement('textarea');ta.readOnly=true;ta.value=k;ta.style.cssText='width:100%;height:72px;margin-top:8px;font-family:monospace;font-size:12px';var close=document.createElement('button');close.textContent='我已保存，关闭';close.onclick=function(){ov.remove();};box.appendChild(t);box.appendChild(hint);box.appendChild(ta);box.appendChild(close);ov.appendChild(box);document.body.appendChild(ov);ta.focus();ta.select();}\r\n}\r\nlet off=0,PS=50;\r\nasync function load(){const d=await api('/api/entries',{query:document.getElementById('q').value,offset:off,limit:PS});const meta=document.getElementById('meta');const pg=document.getElementById('pageinfo');if(meta)meta.textContent='共 '+d.count+' 条';const lim=d.limit||PS;const totalPg=Math.max(1,Math.ceil(d.count/lim));const curPg=Math.floor((d.offset||0)/lim)+1;if(pg)pg.textContent='第 '+curPg+' / '+totalPg+' 页';const box=document.getElementById('entries');box.innerHTML='';if(d.entries)for(const e of d.entries){const div=document.createElement('div');div.className='entry';div.innerHTML='<b>['+esc(e.type)+'] '+esc(e.subject)+'</b><div>'+esc(e.statement)+'</div><div class=\"meta\">'+esc(e.file)+' · owner='+esc(e.owner||'-')+' · '+esc(e.updated||e.created||'')+'</div>';box.appendChild(div);}const pb=document.getElementById('prevb'),nb=document.getElementById('nextb');if(pb)pb.disabled=(d.offset||0)<=0;if(nb)nb.disabled=!d.hasMore;}\r\nfunction prevPage(){if(off>=PS){off-=PS;load();}}\r\nfunction nextPage(){off+=PS;load();}\r\nasync function doExport(){const d=await api('/api/export');if(d.error){alert(d.error);return;}const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='yottamemory-view-export.json';a.click();}\r\nasync function showRk(){const d=await api('/api/recovery-key');document.getElementById('rkout').textContent=d.recoveryKey?('恢复钥匙: '+d.recoveryKey):(d.error||'');}\r\nasync function resetPw(){const np1=document.getElementById('np1').value,np2=document.getElementById('np2').value;if(np1!==np2){document.getElementById('pwout').innerHTML='<span class=\"err\">两次新口令不一致</span>';return;}\r\n  const d=await api('/api/reset-password',{currentPassword:document.getElementById('cur').value,newPassword:np1});document.getElementById('pwout').innerHTML=d.error?('<span class=\"err\">'+esc(d.error)+'</span>'):('<span class=\"ok\">'+esc(d.text||'ok')+'</span>');}\r\nboot();\r\n</script></body></html>\r\n";
 // @generated view-html:end
@@ -7194,68 +7415,89 @@ function cmdRuntimeStatus() {
 function cmdRuntimeList() {
   console.log(runtimeListCore().text);
 }
-function usage() {
-  const banner = 'yotta-memory v' + VERSION + ' — 元忆：有权限边界的文件式智能体记忆';
-  const sections = [
-    ['核心记忆', [
-      ['init', '初始化记忆库（新建默认加密：需主口令 + 恢复钥匙；--attach 接入已有库；--no-encrypt 降级明文；非 TTY 用 --password-stdin；--recovery-key-out <文件> 写恢复钥匙）'],
-      ['remember <type> <subject> <statement>', '写入记忆（--source 来源；--weight 权重；--verify 写后回读校验；--no-hint 关启发）'],
-      ['recall [关键词]', '检索记忆（--type/--limit/--agent/--owner/--all/--unsafe）'],
-      ['forget', '删除一条记忆'],
-      ['archive', '归档（--days/--threshold 盖棺分+年龄）'],
-      ['backup', '备份记忆库（volumes / setup / status / ensure-daily / schedule / create / list / doctor / restore <id> --to <目录> / drill）'],
-      ['doctor', '开工可靠性检查（根目录/密钥库/索引/身份/最近备份；全新空库缺失 index/agents 降为 info；输出 YOTTA_MEMORY_AGENT_HOME 提示；--runtime 加查 CLI/current/MCP/进程/技能副本漂移）'],
-      ['maintain', '记忆自组织（归档/遗忘候选/去重/合并；默认 dry-run；--dedup 查重+置信度，--dedup --apply 自动合并高置信组）'],
-      ['consolidate', '周期摘要压缩（默认 dry-run；--apply 执行；--undo <batch> 回滚；--batches 查批次；候选=超龄+闲置+低效用，immutable/BOUND 豁免）'],
-      ['distill', '心理日志蒸馏（统计摘要/主题画像/知识地图；--model 可选外部模型）'],
-      ['feedback', '使用反馈（--useful/--useless/--undo）'],
-      ['explain', '查看单条记忆效用分项与归档/遗忘状态判定'],
-      ['reindex', '重建索引'],
-      ['export', '导出全部记忆（--out 文件.json）'],
-      ['import', '导入记忆（<文件.json>）']
-    ]],
-    ['身份与画像', [
-      ['iam', '登记本智能体唯一身份（--name/--user/--relationship；agents.json）'],
-      ['whoami', '查看当前智能体身份与登记状态'],
-      ['profile', '生成用户画像（聚合 private/<owner>/ 原文，零推断）'],
-      ['context', '生成开工上下文包（--limit/--owner/--budget）'],
-      ['token', '生成/列出/吊销访问 token（new --agent / list / revoke --agent）']
-    ]],
-    ['加密与安全', [
-      ['migrate', '把明文库迁移为密文（需主口令；空明文库同样可用；--password-stdin 仅用于纯 ASCII 管道；--recovery-key-out <文件> 写恢复钥匙；首次迁移推荐交互式：yotta-memory migrate --recovery-key-out <文件>；非 ASCII 口令请交互输入，勿用 echo 中文管道；迁移后授权二选一：推荐 yotta-memory view，等价 CLI 为 yotta-memory key bind <id>）'],
-      ['view', '启动用户查看平台（--port/--host；复用前校验 memory_home 指纹，跨库或旧版无指纹服务会拒绝复用；空加密库可用恢复钥匙校验主口令）'],
-      ['reset-password', '重设主口令（忘口令用恢复钥匙）'],
-      ['key', '管理 agent_key binding（list / bind <id> / rotate <id> / claim <id> [--to <AI_HOME> | --plugin-data <PLUGIN_DATA> | --agent-key-file <文件>] / status <id> [--to <AI_HOME> | --plugin-data <PLUGIN_DATA> | --agent-key-file <文件>] / revoke <id>；bind/rotate 需主口令或恢复钥匙；--plugin-data 供 Agent Plugin 一条命令绑定插件身份）'],
-      ['config', '查看/设置配置（get；set memory_home <目录> / backup_dir <目录> / embedding_cmd <命令> / embedding_timeout <毫秒> / maintain_* 阈值与半衰 / consolidate_* 参数）']
-    ]],
-    ['平台与服务', [
-      ['serve', '启动 MCP 记忆引擎（streamable HTTP；--stdio 本地零进程；--tools core|full 控制工具分组）'],
-      ['runtime', '运行时稳定入口（list / install <tarball|版本> [--from-current] [--force] / use <版本> [--restart] / rollback [--restart] / status）'],
-      ['lan', '开机自启管理（enable/disable/status；Windows 计划任务 / Linux systemd/crontab）'],
-      ['--version', '版本']
-    ]]
+function helpDisplayWidth(text) {
+  let width = 0;
+  for (const ch of String(text)) {
+    const cp = ch.codePointAt(0);
+    width += (
+      (cp >= 0x1100 && cp <= 0x115f) ||
+      (cp >= 0x2e80 && cp <= 0xa4cf) ||
+      (cp >= 0xac00 && cp <= 0xd7a3) ||
+      (cp >= 0xf900 && cp <= 0xfaff) ||
+      (cp >= 0xfe30 && cp <= 0xfe6f) ||
+      (cp >= 0xff00 && cp <= 0xff60) ||
+      (cp >= 0xffe0 && cp <= 0xffe6)
+    ) ? 2 : 1;
+  }
+  return width;
+}
+function helpPad(text, width) {
+  return text + ' '.repeat(Math.max(0, width - helpDisplayWidth(text)));
+}
+function helpText(item) {
+  const parts = [];
+  if (item.what) parts.push('做什么：' + item.what);
+  if (item.when) parts.push('什么时候用：' + item.when);
+  if (item.caution) parts.push('注意：' + item.caution);
+  return parts.join('；');
+}
+function helpOptionLabel(option) {
+  return option.flag + (option.arg ? ' ' + option.arg : '');
+}
+function renderHelp(model) {
+  const commands = [];
+  for (const group of model) for (const command of group.commands) commands.push(command);
+
+  let optionCol = 0;
+  for (const command of commands) {
+    for (const option of command.options || []) optionCol = Math.max(optionCol, helpDisplayWidth(helpOptionLabel(option)));
+    for (const sub of command.subcommands || []) {
+      for (const option of sub.options || []) optionCol = Math.max(optionCol, helpDisplayWidth(helpOptionLabel(option)));
+    }
+  }
+  optionCol += 2;
+
+  const lines = [
+    'yotta-memory v' + VERSION + ' — 元忆：有权限边界的文件式智能体记忆',
+    '',
+    '用法:',
+    '  yotta-memory <命令> [选项]',
+    '  yotta-memory --help    显示这份完整帮助',
+    '  yotta-memory --version 显示版本',
+    '',
   ];
-  let col = 0;
-  for (const s of sections) for (const r of s[1]) if (r[0].length > col) col = r[0].length;
-  col += 2;
-  const lines = [banner, '', '用法:', '  yotta-memory <命令> [选项]', ''];
-  for (const s of sections) {
-    lines.push(s[0] + ':');
-    for (const r of s[1]) lines.push('  ' + r[0].padEnd(col) + r[1]);
+  for (const group of model) {
+    lines.push(group.group + ':');
+    for (const command of group.commands) {
+      lines.push('  ' + command.name + '  ' + helpText(command));
+      lines.push('    用法: yotta-memory ' + command.usage);
+      for (const sub of command.subcommands || []) {
+        lines.push('    ' + (sub.usage || sub.name) + '  ' + helpText(sub));
+        for (const option of sub.options || []) {
+          lines.push('      ' + helpPad(helpOptionLabel(option), optionCol) + helpText(option));
+        }
+      }
+      for (const option of command.options || []) {
+        lines.push('    ' + helpPad(helpOptionLabel(option), optionCol) + helpText(option));
+      }
+    }
     lines.push('');
   }
   lines.push('类型: FACT(公共共享) / PREF(偏好) / BOUND(边界) / COMMIT(承诺)');
   lines.push('环境变量: YOTTA_MEMORY_HOME 临时覆盖用户级位置; 身份不再读取 env；CLI 用 --agent + --agent-key/--agent-key-file，stdio MCP 用 --agent-id + --agent-key-file，HTTP MCP 用请求头');
   lines.push('隔离: 公共 FACT 在 facts/；私密 PREF/BOUND/COMMIT 物理分目录 private/<agent_id>/<type>/，禁止 shell 直读写记忆库，一律走本命令');
   lines.push('远端接入: MCP url http://<主机IP>:8787/mcp；请求头 Authorization: Bearer <token> + X-Agent-Id: <id> + X-Agent-Key: <agent_key>');
-  console.log(lines.join('\n'));
+  return lines.join('\n');
+}
+function usage() {
+  console.log(renderHelp(HELP_MODEL));
 }
 async function main() {
   const args = process.argv.slice(2);
   if (!args.length) { usage(); return; }
   const opts = {};
   const positional = [];
-  const valueOpts = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir']);
+  const valueOpts = CLI_VALUE_OPTS;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--version' || a === '-v') { console.log(VERSION); return; }
@@ -7459,6 +7701,10 @@ async function main() {
 if (require.main === module) { main().catch(function (e) { console.error('错误: ' + (e && e.message ? e.message : String(e))); console.error('修复建议: 若与记忆库/密钥/权限有关，请检查 memory_home 路径、主口令与恢复钥匙，或运行 yotta-memory config get 确认位置；仍无法解决请把上面的错误信息反馈给开发者。'); process.exit(2); }); }
 module.exports = {
   VERSION: VERSION,
+  HELP_MODEL: HELP_MODEL,
+  CLI_FLAG_OPTS: CLI_FLAG_OPTS,
+  CLI_VALUE_OPTS: CLI_VALUE_OPTS,
+  renderHelp: renderHelp,
   userRoot: userRoot,
   projectRoot: projectRoot,
   memoryRoots: memoryRoots,
