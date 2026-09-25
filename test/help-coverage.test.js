@@ -15,7 +15,7 @@ const REQUIRED_COMMANDS = [
   'maintain', 'consolidate', 'distill', 'feedback', 'explain', 'reindex',
   'export', 'import', 'iam', 'whoami', 'profile', 'context', 'token',
   'migrate', 'view', 'reset-password', 'key', 'config', 'runtime', 'serve',
-  'lan', 'bench', '--version',
+  'lan', 'bench', 'scan', '--version',
 ];
 
 const REQUIRED_SUBCOMMANDS = {
@@ -27,7 +27,7 @@ const REQUIRED_SUBCOMMANDS = {
   lan: ['enable', 'disable', 'status'],
 };
 
-const RISK_OPTIONS = ['--no-encrypt', '--unsafe', '--apply', '--force', '--purge', '--allow-same-volume'];
+const RISK_OPTIONS = ['--no-encrypt', '--unsafe', '--apply', '--force', '--purge', '--allow-same-volume', '--quarantine', '--restore', '--yes'];
 
 function asNameSet(value) {
   if (value instanceof Set) return value;
@@ -132,7 +132,7 @@ test('top-level help remains render-stable', () => {
   const digest = crypto.createHash('sha256').update(stdout).digest('hex');
   assert.strictEqual(
     digest,
-    'e2dba962789b999fd66839c2bf9bd751a3250f9776d8e2cb8dda1821f16580a6',
+    '34a725357d27516e6c5a76c83580068721b0790586672161a8cfc62b5638cce3',
     'top-level help changed; review every command/option line, then update the snapshot digest intentionally'
   );
 });

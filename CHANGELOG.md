@@ -23,6 +23,18 @@
 - 检索打分与排序抽成共享原语 `scoreCandidates` / `rankHits`，`recall` 与 `bench` 走同一套逻辑，避免「评测口径」与真实检索漂移；recall 自身行为逐字节不变。
 - 帮助与回归：`--help` 新增 `bench` 命令与 `--year` / `--evalset` / `--k` / `--seed` / `--bootstrap` / `--ablate` / `--gate` / `--timing` 逐项中文说明；新增 `test/index-lazy-year.test.js` 5 项（分片读取集合 / 无年份全量一致 / 平铺过滤 / recallCore 年份 / CLI `--year` 与非法年份）+ `test/bench.test.js` 8 项（指标手算 / 复算与只读 / 索引指纹 / 门禁 / 消融 / 评测集与索引校验 / `--out` / 文本与 `--timing`）；全量 `npm test` 196/196 PASS（0.16.7 基线 171）。
 
+**恢复探针 + 记忆库安全扫描（A2 + A4）**
+
+- 新增恢复 / 迁移基线探针：`doctor --baseline [--against <库路径>] [--template <文件>]`，`backup drill <id> --probe [--against <库路径>]`。六类固定探针 = ① 身份（`agents.json` / `iam` 在位）② 近期（最近条目可召回）③ 仅源库独有（`--against` 差集条目必须已在目标库）④ CJK（中文条目可召回）⑤ 操作规则（`BOUND` 类可读）⑥ owner 范围（各 owner 计数 + 无法读取文件清单）；任何一项失败都会列出缺失清单并以非零状态退出（`doctor` exit 2、`drill` 判失败）。探针内容由确定性抽样或用户模板生成，**不硬编码任何具体记忆**。
+- 探针全程只读：直接读记忆文件（不依赖可能过期的索引）、不重建索引、不写访问计数、不调用外部 embedding。`doctor --baseline` 的探针结果进 `checks.baseline`（`probes` / `counts` / `unreadable` / `ok`），不带 `--baseline` 时 `doctor` 既有语义与输出不变；`backup drill` 不带 `--probe` 时行为与旧版一致（成功返回新增 `probes: null`）。
+- 探针模板 v1（`--template <文件>`）只加严判定、不放宽：`{ "version": 1, "expect_owners": [], "expect_min_entries": 0, "expect_types": { "BOUND": 1 }, "queries": [ { "id": "...", "query": "...", "expect": ["<记忆 id>"] } ] }`；模板文件不存在 / 非法 JSON / 版本不支持 / 类型或条数非法都给出中文修复建议并 exit 2。
+- 条目身份键与布局无关（`类型/owner/文件名`），旧平铺 `facts/x.md` 与新年/月分层指向同一条记忆时不会误报「缺失」，因此 `--against` 可直接用于旧库 → 新库的迁移验收。
+- 新增 `scan` 记忆库安全扫描：`yotta-memory scan [--path <目录>] [--gate <安全级别>] [--quarantine --yes] [--restore] [--id <批次>] [--json]`。七类检测 = 恶意指令 / Prompt 注入 / 凭证泄漏 / 数据外泄 / 护栏绕过 / 行为操纵 / 权限提升；五级 `safe → low → medium → high → critical`；每条命中给 `file:line` 证据与规则出处。
+- 扫描默认**只报告**：不改写任何文件、不自动隔离、不自动删除、零网络零依赖。`--gate` 命中该级别及以上 exit 1（`--gate safe` 表示任何命中都不允许），非法级别 exit 2；`--path` 可指向另一个记忆库或导出目录（递归扫 `.md` / `.md.enc`，跳过 `.git` / `node_modules` / 隔离目录）。`.md.enc` 后缀但内容其实是明文的文件（历史恢复残留）不会被当成密文跳过，按文本扫描并计入 `summary.mislabelled`；每条命中除 `file:line` 外给出命中片段前后各 40 字符与命中原文（凭证类打码），长行也能一眼看到命中在哪。
+- `scan --quarantine` 需要显式确认（`--yes` 或交互 `y/N`；非交互环境未确认时 exit 2 且不改文件）：先把原文件逐字节备份到 `.memory-scan/quarantine/<批次>/` 并写 `manifest.json`，再把命中行替换为 `[已隔离: <规则> <类别>]`；`scan --restore [--id <批次>]` 还原最近（或指定）批次，批次已还原则拒绝重复还原。加密条目（`.md.enc`）在无授权密钥时不扫描，只计入 `summary.encrypted`。`scan` 是库主人的维护命令，会读整库文件（含其它 owner 的私密目录）：智能体不应用它查看其它智能体的私密内容，跨 owner 扫描前先取得用户授权。
+- 凭证类命中的片段一律打码（`[已打码]`），报告与 JSON 都不会回显密钥原文；规则词表不另起一套：每条规则的 `ref` 指向家族规则表的原始规则 id（`PIJ-xxx@yotta-verify` / `github@yotta-secret` / `DEX-001@yotta-security-audit` / `CMD-*@yotta-guardian`），`test/memory-scan.test.js` 在源码仓库内逐条回查这些规则 id 在对应技能里是否仍存在（发布产物内自动跳过该用例）。分工口径：元钥扫源码仓库、元信扫技能包、元忆扫记忆库。
+- 帮助与回归：`--help` 新增 `doctor --baseline` / `--against` / `--template`、`backup drill --probe` 与 `scan` 的逐项中文说明（风险项 `--quarantine` / `--restore` / `--yes` 均带「注意」）；新增 `test/baseline-probe.test.js` 7 项（六类探针 / 身份缺失变红 / 差集缺失清单 / 模板期望 / 模板校验 / 只读 / `drill --probe`）+ `test/memory-scan.test.js` 9 项（七类命中 / 证据行号与出处 / 凭据打码 / 门禁 / 加密跳过与 `--path` / 只读 / 隔离与还原 / 规则出处回查）；全量 `npm test` 212/212 PASS（0.16.7 基线 171 + S2–S5 新增 41）。
+
 ## v0.16.7 (2026-09-23)
 
 **迁移口令安全 + view 根指纹复用校验**

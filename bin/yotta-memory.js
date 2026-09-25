@@ -26,8 +26,8 @@ const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
 const VERSION = '0.17.0';
-const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate']);
-const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--explain', '--semantic', '--runtime', '--ablate', '--timing']);
+const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path']);
+const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--yes']);
 
 function helpOption(flag, arg, what, when, caution) {
   return { flag: flag, arg: arg || '', what: what, when: when || '', caution: caution || '' };
@@ -93,15 +93,20 @@ const HELP_MODEL = [
         helpOption('--id', '<id>', '指定备份 id', '不用位置参数、想显式点名备份时', ''),
         helpOption('--force', '', '允许覆盖非空目标目录', '确认目标可以覆盖时', '可能覆盖目标目录现有文件；先确认目标和备份'),
       ]),
-      helpSub('drill', 'drill <id> --to <目录>', '恢复演练', '验证备份真的能恢复时', [
+      helpSub('drill', 'drill <id> [--to <目录>] [--probe]', '恢复演练', '验证备份真的能恢复时', [
         helpOption('--to', '<目录>', '指定演练恢复目录', '演练时使用临时空目录更安全', ''),
         helpOption('--id', '<id>', '指定备份 id', '不用位置参数、想显式点名备份时', ''),
+        helpOption('--probe', '', '恢复后自动跑恢复 / 迁移基线探针', '想确认恢复副本的身份、近期条目与操作规则都可用时', '复制的索引与访问计数不变，探针只读'),
+        helpOption('--against', '<库路径>', '指定对比库做差集校验', '想确认备份没有落后于源库、迁移没有丢条目时', '对比库只读；差集缺失会列出清单并非零退出'),
       ]),
     ] },
     { name: 'doctor', usage: 'doctor [选项]', what: '开工可靠性检查', when: '开工前、异常后或升级后确认系统状态时', options: [
       helpOption('--runtime', '', '同时检查 CLI、current、MCP、进程和技能副本是否漂移', '升级后版本对不上时', ''),
       helpOption('--mcp-config', '<文件>', '补充检查指定 MCP 配置文件', '排查宿主 MCP 是否指向旧运行时', ''),
       helpOption('--skill-dir', '<目录>', '补充检查指定技能副本目录', '排查技能目录是否落后', ''),
+      helpOption('--baseline', '', '追加恢复 / 迁移基线探针（六类，只读）', '恢复、迁移或升级后要确认记忆真的可用时', '探针失败会列出缺失清单并以非零状态退出'),
+      helpOption('--against', '<库路径>', '探针的对比库（通常是迁移前的源库）', '要确认目标库没有丢条目时', '差集条目缺失会逐条列出'),
+      helpOption('--template', '<文件>', '用模板声明显式期望（owner / 最小条数 / 类型条数 / 查询）', '有明确验收清单、要按清单核对时', '模板只加严判定，不会放宽或改写探针'),
       helpOption('--json', '', '输出 JSON', '脚本或自动化读取体检结果时', ''),
     ] },
     { name: 'maintain', usage: 'maintain [选项]', what: '记忆自组织：归档、遗忘候选、去重和合并', when: '定期清理低价值记忆、合并重复条目时', options: [
@@ -150,6 +155,15 @@ const HELP_MODEL = [
       helpOption('--year', '<yyyy>', '只评测指定年份的记忆', '库很大、只想对某一年做基准时', '可重复传多次；不传则覆盖全部年份'),
       helpOption('--json', '', '输出 JSON', '脚本读取指标与门禁结果时', ''),
       helpOption('--out', '<文件>', '把报告写到文件', '想把评测报告归档或交给 CI 时', ''),
+    ] },
+    { name: 'scan', usage: 'scan [--path <目录>] [--gate <安全级别>] [--quarantine --yes] [--restore] [--json]', what: '扫描记忆库里的注入、凭证泄漏与越权指令', when: '怀疑记忆被污染、要做安全复核或把门禁接进 CI 时', options: [
+      helpOption('--path', '<目录>', '指定要扫描的目录', '想扫描另一个记忆库或临时导出目录时', '默认扫描当前记忆库'),
+      helpOption('--gate', '<安全级别>', '设置安全门禁', 'CI 里要求不出现某个级别及以上的命中时', '命中该级别及以上 exit 1；可选 safe / low / medium / high / critical'),
+      helpOption('--json', '', '输出 JSON', '脚本读取命中清单与分级统计时', ''),
+      helpOption('--quarantine', '', '把命中行脱敏隔离（原文件先备份）', '确认某条记忆被污染、要立刻止住它被检索时', '会改写记忆文件：必须先备份原件，且需要显式确认'),
+      helpOption('--yes', '', '跳过交互确认', '自动化里执行隔离时', '跳过确认后不再二次询问，请先看一遍命中清单'),
+      helpOption('--restore', '', '还原最近一个隔离批次', '隔离后发现问题、要恢复原文时', '会覆盖当前文件；批次已还原过则拒绝重复还原'),
+      helpOption('--id', '<id>', '指定要还原的隔离批次', '要还原的不是最近一批时', ''),
     ] },
     { name: 'reindex', usage: 'reindex', what: '重建记忆索引', when: '索引损坏、手动改过记忆文件或 doctor 提示索引异常时', options: [] },
     { name: 'export', usage: 'export --out <文件.json>', what: '导出全部记忆', when: '备份、迁移或做离线检查时', options: [helpOption('--out', '<文件>', '指定导出文件', '导出时必须给出目标 JSON 文件', '')] },
@@ -3553,6 +3567,31 @@ function doctorCore(opts) {
     for (const warning of runtimeReport.warnings || []) warnings.push(warning);
   }
 
+  // v0.17.0 A2：基线探针只在显式 --baseline 时运行；失败进 warnings + baselineError，并让 CLI 非零退出。
+  let baselineReport = null;
+  let baselineError = '';
+  if (opts.baseline) {
+    baselineReport = baselineCore({
+      root: root,
+      against: opts.against,
+      template: opts.template,
+      seed: opts.seed,
+      agent: opts.agent,
+      agentId: opts.agentId,
+      agentKey: opts.agentKey,
+      agentKeyFile: opts.agentKeyFile,
+    });
+    checks.baseline = baselineReport;
+    if (baselineReport.error) {
+      baselineError = baselineReport.text;
+      warnings.push(baselineReport.text);
+    } else {
+      for (const probe of baselineReport.probes || []) {
+        if (probe.status === 'fail') warnings.push('基线探针 [' + probe.id + '] 失败: ' + probe.detail);
+      }
+    }
+  }
+
   const level = critical.length ? 'critical' : (warnings.length ? 'warning' : 'ok');
   const agentHomeEnv = String(process.env.YOTTA_MEMORY_AGENT_HOME || '').trim();
   const lines = [
@@ -3570,6 +3609,10 @@ function doctorCore(opts) {
   for (const message of critical) lines.push('- [严重] ' + message);
   for (const message of warnings) lines.push('- [警告] ' + message);
   if (!critical.length && !warnings.length) lines.push('- 检查项: 全部通过');
+  if (baselineReport && !baselineReport.error) {
+    lines.push('');
+    lines.push(baselineReport.text);
+  }
   if (runtimeReport) {
     lines.push('');
     lines.push(runtimeReport.text);
@@ -3587,6 +3630,8 @@ function doctorCore(opts) {
     migration_required: migration ? migration.entries : [],
     critical: critical,
     warnings: warnings,
+    baseline: baselineReport,
+    baselineError: baselineError,
     checks: checks,
     identity: identity,
     root: root,
@@ -3902,19 +3947,46 @@ function backupDrillCore(opts) {
   if (tempParent) {
     try { fs.rmSync(tempParent, { recursive: true, force: true }); } catch (_) {}
   }
-  const checks = { manifest: true, index: true, private: privateCheck };
+  // v0.17.0 A2：--probe 时在恢复副本上跑基线探针（探针只读；探针失败则整体演练失败，临时副本照旧清理）。
+  let probeReport = null;
+  if (opts.probe) {
+    probeReport = baselineCore({
+      root: target,
+      against: opts.against,
+      template: opts.template,
+      seed: opts.seed,
+      agent: opts.agent,
+      agentId: opts.agentId,
+      agentKey: opts.agentKey,
+      agentKeyFile: opts.agentKeyFile,
+    });
+    if (probeReport.error || !probeReport.ok) {
+      return fail('恢复演练失败: 基线探针未通过。\n' + probeReport.text, {
+        manifest: true,
+        index: true,
+        private: privateCheck,
+        baseline: probeReport,
+      });
+    }
+  }
+  const checks = { manifest: true, index: true, private: privateCheck, baseline: probeReport };
   const lines = [
     '恢复演练通过: ' + id,
     '- manifest / SHA-256: 通过',
     '- 恢复副本索引: 通过',
     '- 测试私密解密: ' + (privateCheck.checked ? ('通过（' + privateCheck.source + '，' + privateCheck.file + '）') : '跳过（备份中没有加密私密条目）'),
   ];
+  if (probeReport) {
+    lines.push('');
+    lines.push(probeReport.text);
+  }
   return {
     error: false,
     ok: true,
     id: id,
     restoredTo: tempParent ? '(临时副本已清理)' : target,
     checks: checks,
+    probes: probeReport ? probeReport.probes : null,
     text: lines.join('\n'),
   };
 }
@@ -5651,6 +5723,8 @@ function cmdDoctor(opts) {
   if (opts.json) console.log(JSON.stringify(r, null, 2));
   else console.log(r.text);
   if (!r.ok) process.exit(2);
+  if (r.baselineError) process.exit(2);
+  if (r.checks && r.checks.baseline && r.checks.baseline.error === false && r.checks.baseline.ok === false) process.exit(2);
 }
 function cmdReindex() {
   const roots = memoryRoots();
@@ -6680,6 +6754,714 @@ function cmdBench(opts) {
     fs.writeFileSync(target, json + '\n', 'utf8');
   }
   console.log(opts && opts.json ? json : r.text);
+  if (r.exitCode) process.exit(r.exitCode);
+}
+
+// ---- v0.17.0 A2：恢复 / 迁移基线探针（只读 / 本地 / 零依赖）----
+const BASELINE_SCHEMA_VERSION = 1;
+const BASELINE_DEFAULT_SEED = 20260925;
+const BASELINE_MISSING_LIMIT = 20;
+const CJK_RE = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+// 探针只读遍历记忆文件（不建索引、不碰访问计数）：恢复 / 迁移场景要验的是文件本身，而不是可能过期的索引。
+function baselineReadEntries(root) {
+  const entries = [];
+  const unreadable = [];
+  for (const fp of collectEntryFiles(root)) {
+    const rel = relOf(root, fp);
+    const owner = ownerFromPrivatePath(root, fp);
+    if (isEncFile(fp) && !getOwnerKeyFor(root, owner)) {
+      unreadable.push({ file: rel, reason: 'encrypted', owner: owner });
+      continue;
+    }
+    try {
+      entries.push(readEntry(fp, root));
+    } catch (error) {
+      const message = error && error.message ? error.message : String(error);
+      // .enc 后缀但内容是明文（历史恢复残留）与「密钥在位但解不开」要分开报，修法完全不同。
+      const reason = isEncFile(fp) ? (message.indexOf('非密文文件') !== -1 ? 'mislabelled' : 'undecryptable') : 'unreadable';
+      unreadable.push({ file: rel, reason: reason, owner: owner, error: message });
+    }
+  }
+  return { entries: entries, unreadable: unreadable };
+}
+// 条目身份键与布局无关（旧平铺 facts/x.md 与新年/月分层指向同一条记忆时键相同）。
+function baselineEntryKey(entry) {
+  return String(entry.type || 'FACT') + '/' + String(entry.owner || 'public') + '/' + path.basename(String(entry.file || ''));
+}
+function baselineSample(pool, seed, count) {
+  const list = pool.slice().sort(function (a, b) { return String(a.file).localeCompare(String(b.file)); });
+  const rnd = seededRandom(seed);
+  const picked = [];
+  const remaining = list.slice();
+  for (let i = 0; i < Math.min(count, remaining.length); i++) {
+    picked.push(remaining.splice(Math.floor(rnd() * remaining.length), 1)[0]);
+  }
+  return picked;
+}
+function baselineRecall(root, entries, query, limit) {
+  const prefilter = query ? recallPrefilter(query) : null;
+  const hits = [];
+  for (const scored of scoreCandidates(entries, query, { semantic: true, prefilter: prefilter, root: root })) {
+    hits.push({ entry: scored.entry, score: scored.score, root: root, detail: scored.detail });
+  }
+  rankHits(hits, { fuse: true });
+  return hits.slice(0, limit || 5);
+}
+function loadBaselineTemplate(file) {
+  const fp = path.resolve(String(file));
+  if (!fs.existsSync(fp)) {
+    return { error: '找不到基线模板: ' + fp + '。请检查路径，或省略 --template 用库内确定性探针。' };
+  }
+  let data = null;
+  try {
+    data = JSON.parse(fs.readFileSync(fp, 'utf8'));
+  } catch (error) {
+    return { error: '基线模板不是合法 JSON: ' + fp + '（' + (error && error.message ? error.message : String(error)) + '）' };
+  }
+  if (!data || data.version !== 1) {
+    return { error: '基线模板版本不支持: ' + fp + '。v1 格式为 { "version": 1, "expect_owners": [], "expect_min_entries": 0, "expect_types": {}, "queries": [] }。' };
+  }
+  const out = { version: 1, file: fp, expect_owners: [], expect_min_entries: 0, expect_types: {}, queries: [] };
+  if (data.expect_owners !== undefined) {
+    if (!Array.isArray(data.expect_owners)) return { error: '基线模板 expect_owners 必须是数组: ' + fp };
+    out.expect_owners = data.expect_owners.map(String).filter(Boolean);
+  }
+  if (data.expect_min_entries !== undefined) {
+    const n = parseInt(data.expect_min_entries, 10);
+    if (!isFinite(n) || n < 0) return { error: '基线模板 expect_min_entries 必须是非负整数: ' + fp };
+    out.expect_min_entries = n;
+  }
+  if (data.expect_types !== undefined) {
+    if (!data.expect_types || typeof data.expect_types !== 'object' || Array.isArray(data.expect_types)) {
+      return { error: '基线模板 expect_types 必须是 { "类型": 最小条数 } 对象: ' + fp };
+    }
+    for (const key of Object.keys(data.expect_types)) {
+      const type = String(key).toUpperCase();
+      if (TYPES.indexOf(type) === -1) {
+        return { error: '基线模板 expect_types 含未知类型 ' + key + '（可选: ' + TYPES.join(' / ') + '）: ' + fp };
+      }
+      const n = parseInt(data.expect_types[key], 10);
+      if (!isFinite(n) || n < 0) return { error: '基线模板 expect_types.' + key + ' 必须是非负整数: ' + fp };
+      out.expect_types[type] = n;
+    }
+  }
+  if (data.queries !== undefined) {
+    if (!Array.isArray(data.queries)) return { error: '基线模板 queries 必须是数组: ' + fp };
+    for (const row of data.queries) {
+      const query = row && typeof row.query === 'string' ? row.query.trim() : '';
+      const expect = row && Array.isArray(row.expect) ? row.expect.map(String).filter(Boolean) : [];
+      if (!query) return { error: '基线模板存在空 query: ' + fp };
+      if (!expect.length) return { error: '基线模板缺少 expect（query=' + query + '）: ' + fp };
+      out.queries.push({ id: String((row && row.id) || query), query: query, expect: expect });
+    }
+  }
+  return out;
+}
+// 六类固定探针：身份 / 近期 / 仅源库独有 / CJK / 操作规则 / owner 范围；模板可在其上追加显式期望。
+function baselineCore(opts) {
+  opts = opts || {};
+  const root = path.resolve(opts.root || userRoot());
+  const seed = parseInt(opts.seed, 10) || BASELINE_DEFAULT_SEED;
+  const empty = { schemaVersion: BASELINE_SCHEMA_VERSION, error: true, exitCode: 2, ok: false, level: 'fail', root: root, against: '', template: '', seed: seed, counts: {}, probes: [], unreadable: [] };
+  let template = null;
+  if (opts.template) {
+    template = loadBaselineTemplate(opts.template);
+    if (template.error) return Object.assign({}, empty, { text: template.error });
+  }
+  const against = opts.against ? path.resolve(String(opts.against)) : '';
+  if (against && !fs.existsSync(against)) {
+    return Object.assign({}, empty, { against: against, text: '找不到对比库: ' + against + '。--against 需要指向另一个记忆库根目录（通常是迁移前的源库）。' });
+  }
+  const ident = resolveIdentity(opts);
+  const selfAgent = (ident && !ident.error && ident.id) ? ident.id : '';
+  const read = baselineReadEntries(root);
+  const entries = read.entries;
+  const readable = entries.filter(function (e) { return classifyRead(e, selfAgent, '', false, selfAgent) !== 'denied'; });
+  const probes = [];
+  const baselineCounts = {};
+  function record(id, title, status, detail) {
+    probes.push({ id: id, title: title, status: status, detail: detail });
+  }
+  function recallProbe(id, title, pick) {
+    const query = String(pick.subject || '').trim() || String(pick.statement || '').trim().slice(0, 24);
+    const hits = baselineRecall(root, readable, query, 5);
+    const expect = new Set([String(pick.file)]);
+    if (query && hits.some(function (h) { return entryMatchesExpect(h.entry, expect); })) {
+      record(id, title, 'pass', '可召回: ' + pick.file);
+    } else {
+      record(id, title, 'fail', '无法召回: ' + pick.file + '（按该条目自己的主题检索未命中）');
+    }
+  }
+
+  // ① 身份：agents.json / iam 在位
+  const expectedOwners = template ? template.expect_owners : [];
+  const agentsFile = agentsPath(root);
+  if (!fs.existsSync(agentsFile)) {
+    if (entries.length) record('identity', '身份登记', 'fail', '缺少 agents.json（智能体身份登记）；恢复后请用 yotta-memory iam <id> 重新登记。');
+    else record('identity', '身份登记', 'skip', '库内没有记忆条目且没有 agents.json，暂不判定。');
+  } else {
+    let data = null;
+    let parseError = '';
+    try { data = JSON.parse(fs.readFileSync(agentsFile, 'utf8')); } catch (error) { parseError = error && error.message ? error.message : String(error); }
+    const registered = data && data.agents && typeof data.agents === 'object' ? Object.keys(data.agents) : [];
+    if (parseError) {
+      record('identity', '身份登记', 'fail', 'agents.json 无法解析（' + parseError + '）；请先恢复身份登记。');
+    } else if (!registered.length) {
+      record('identity', '身份登记', 'fail', 'agents.json 没有任何智能体登记；恢复后请用 yotta-memory iam <id> 重新登记。');
+    } else {
+      const missingOwners = expectedOwners.filter(function (o) { return registered.indexOf(o) === -1; });
+      if (missingOwners.length) {
+        record('identity', '身份登记', 'fail', 'agents.json 缺少模板要求的 owner: ' + missingOwners.join(', ') + '（已登记: ' + registered.join(', ') + '）');
+      } else {
+        record('identity', '身份登记', 'pass', 'agents.json 已登记 ' + registered.join(', '));
+      }
+    }
+  }
+
+  // ② 近期：最近条目可召回
+  const byRecency = readable.slice().sort(function (a, b) {
+    return String(b.created || '').localeCompare(String(a.created || '')) || String(b.file).localeCompare(String(a.file));
+  });
+  if (!byRecency.length) record('recent', '近期条目', 'skip', '没有当前身份可读的记忆条目。');
+  else recallProbe('recent', '近期条目', byRecency[0]);
+
+  // ③ 仅源库独有：--against 差集条目必须已在目标库
+  if (!against) {
+    record('source-only', '对比库差集', 'skip', '未提供 --against 对比库，跳过迁移差集校验。');
+  } else {
+    const sourceRead = baselineReadEntries(against);
+    const targetKeys = new Set(entries.map(baselineEntryKey));
+    const sourceKeys = new Set();
+    const missing = [];
+    for (const e of sourceRead.entries) {
+      const key = baselineEntryKey(e);
+      if (sourceKeys.has(key)) continue;
+      sourceKeys.add(key);
+      if (!targetKeys.has(key)) missing.push(e);
+    }
+    let targetOnly = 0;
+    for (const key of targetKeys) if (!sourceKeys.has(key)) targetOnly++;
+    const counts = { source_entries: sourceRead.entries.length, missing: missing.length, target_only: targetOnly };
+    if (missing.length) {
+      const shown = missing.slice(0, BASELINE_MISSING_LIMIT).map(function (e) { return e.file; });
+      record('source-only', '对比库差集', 'fail', '相对对比库缺失 ' + missing.length + ' 条: ' + shown.join(', ') + (missing.length > shown.length ? ' …' : ''));
+    } else {
+      record('source-only', '对比库差集', 'pass', '对比库 ' + sourceRead.entries.length + ' 条全部在目标库命中' + (targetOnly ? '（目标库另有 ' + targetOnly + ' 条新增）' : ''));
+    }
+    baselineCounts.sourceOnly = counts;
+  }
+
+  // ④ CJK：中文条目可召回
+  const cjkPool = readable.filter(function (e) { return CJK_RE.test(String(e.subject || '') + String(e.statement || '')); });
+  if (!cjkPool.length) record('cjk', '中文条目', 'skip', '没有当前身份可读的中文条目。');
+  else recallProbe('cjk', '中文条目', baselineSample(cjkPool, seed, 1)[0]);
+
+  // ⑤ 操作规则：BOUND 类可读
+  const boundPool = entries.filter(function (e) { return e.type === 'BOUND'; });
+  if (!boundPool.length) {
+    record('rules', '操作规则', 'skip', '库内没有 BOUND 操作规则条目。');
+  } else {
+    const pick = boundPool.slice().sort(function (a, b) { return String(a.file).localeCompare(String(b.file)); })[0];
+    const fp = path.join(root, String(pick.file));
+    try {
+      readEntry(fp, root);
+      record('rules', '操作规则', 'pass', 'BOUND 规则可读: ' + pick.file);
+    } catch (error) {
+      const owner = ownerFromPrivatePath(root, fp);
+      if (isEncFile(fp) && !getOwnerKeyFor(root, owner)) {
+        record('rules', '操作规则', 'skip', 'BOUND 规则为加密私密条目，缺少 ' + owner + ' 的授权密钥，未做可读性验证。');
+      } else {
+        record('rules', '操作规则', 'fail', 'BOUND 规则不可读: ' + pick.file + '（' + (error && error.message ? error.message : String(error)) + '）');
+      }
+    }
+  }
+
+  // ⑥ owner 范围：各 owner 计数 + 模板条数期望
+  const ownerCounts = {};
+  for (const fp of collectEntryFiles(root)) {
+    const owner = ownerFromPrivatePath(root, fp) || 'public';
+    ownerCounts[owner] = (ownerCounts[owner] || 0) + 1;
+  }
+  baselineCounts.owners = ownerCounts;
+  const ownerNames = Object.keys(ownerCounts).sort();
+  const corrupted = read.unreadable.filter(function (u) { return u.reason !== 'encrypted'; });
+  if (!ownerNames.length) {
+    record('owner', 'owner 范围', 'skip', '库内没有记忆文件。');
+  } else if (corrupted.length) {
+    const labels = { undecryptable: '密钥在位但解不开', mislabelled: '.enc 后缀但内容是明文', unreadable: '读取失败' };
+    const reasonCounts = {};
+    for (const item of corrupted) reasonCounts[item.reason] = (reasonCounts[item.reason] || 0) + 1;
+    const summary = Object.keys(reasonCounts).map(function (reason) {
+      return (labels[reason] || reason) + ' ' + reasonCounts[reason] + ' 个';
+    }).join('；');
+    record('owner', 'owner 范围', 'fail', '存在无法作为记忆读取的文件: ' + summary + '；例如 ' + corrupted.slice(0, 5).map(function (u) { return u.file; }).join(', '));
+  } else if (template && template.expect_min_entries && entries.length < template.expect_min_entries) {
+    const parts = ownerNames.map(function (o) { return o + '=' + ownerCounts[o]; });
+    record('owner', 'owner 范围', 'fail', '记忆条数 ' + entries.length + ' 少于模板要求的 ' + template.expect_min_entries + '：缺少 ' + (template.expect_min_entries - entries.length) + ' 条（owner: ' + parts.join(', ') + '）');
+  } else {
+    const typeCounts = {};
+    for (const e of entries) typeCounts[e.type] = (typeCounts[e.type] || 0) + 1;
+    const shortTypes = [];
+    const expectedTypes = template ? template.expect_types : {};
+    for (const type of Object.keys(expectedTypes)) {
+      const got = typeCounts[type] || 0;
+      if (got < expectedTypes[type]) shortTypes.push(type + ' 缺少 ' + (expectedTypes[type] - got) + ' 条');
+    }
+    const parts = ownerNames.map(function (o) { return o + '=' + ownerCounts[o]; });
+    if (shortTypes.length) {
+      record('owner', 'owner 范围', 'fail', '模板要求的类型条数不足: ' + shortTypes.join('；') + '（owner: ' + parts.join(', ') + '）');
+    } else {
+      record('owner', 'owner 范围', 'pass', 'owner 计数: ' + parts.join(', ') + (read.unreadable.length ? '（另有 ' + read.unreadable.length + ' 个加密条目未读取）' : ''));
+    }
+  }
+
+  // 模板显式查询（可选追加探针，不替代上面六类）
+  if (template && template.queries.length) {
+    const failed = [];
+    for (const row of template.queries) {
+      const hits = baselineRecall(root, readable, row.query, 5);
+      const expect = new Set(row.expect);
+      if (!hits.some(function (h) { return entryMatchesExpect(h.entry, expect); })) failed.push(row.id);
+    }
+    if (failed.length) record('template-queries', '模板查询', 'fail', '模板查询未命中: ' + failed.join(', ') + '（共 ' + template.queries.length + ' 条）');
+    else record('template-queries', '模板查询', 'pass', '模板查询全部命中（共 ' + template.queries.length + ' 条）');
+  }
+
+  const fails = probes.filter(function (p) { return p.status === 'fail'; });
+  const skips = probes.filter(function (p) { return p.status === 'skip'; });
+  const counts = {
+    entries: entries.length,
+    readable: readable.length,
+    unreadable: read.unreadable.length,
+    owners: baselineCounts.owners,
+    missing: baselineCounts.sourceOnly ? baselineCounts.sourceOnly.missing : 0,
+    target_only: baselineCounts.sourceOnly ? baselineCounts.sourceOnly.target_only : 0,
+    source_entries: baselineCounts.sourceOnly ? baselineCounts.sourceOnly.source_entries : 0,
+  };
+  const report = {
+    schemaVersion: BASELINE_SCHEMA_VERSION,
+    error: false,
+    ok: fails.length === 0,
+    level: fails.length ? 'fail' : 'pass',
+    root: root,
+    against: against,
+    template: template ? template.file : '',
+    seed: seed,
+    counts: counts,
+    probes: probes,
+    unreadable: read.unreadable,
+  };
+  const statusLabel = { pass: '通过', fail: '失败', skip: '跳过' };
+  const lines = [
+    '# 元忆基线探针（恢复 / 迁移）',
+    '',
+    '- 记忆库: ' + root,
+    '- 对比库: ' + (against || '(未提供，跳过差集校验)'),
+    '- 条目: ' + counts.entries + ' 条可读 / ' + counts.readable + ' 条当前身份可读 / ' + counts.unreadable + ' 个未读取',
+    '- 结果: ' + (report.ok ? '通过' : '失败') + '（通过 ' + (probes.length - fails.length - skips.length) + ' / 失败 ' + fails.length + ' / 跳过 ' + skips.length + '）',
+  ];
+  for (const probe of probes) {
+    lines.push('- [' + statusLabel[probe.status] + '] ' + probe.title + ' · ' + probe.detail);
+  }
+  if (fails.length) lines.push('- 缺失项清单: ' + fails.map(function (p) { return p.id; }).join(', '));
+  report.text = lines.join('\n');
+  return report;
+}
+
+// ---- v0.17.0 A4：记忆库安全扫描（默认只读 / 本地 / 零依赖）----
+// 分工口径：元钥扫源码仓库、元信扫技能包、元忆扫记忆库。规则词表不另起一套——
+// 每条规则的 ref 指向家族规则表里的原始规则 id（<规则 id>@<技能 slug>），
+// test/memory-scan.test.js 会在源码仓库内逐条回查这些规则 id 在对应技能里是否仍存在。
+const SCAN_SCHEMA_VERSION = 1;
+const SCAN_CLASSES = ['malicious-instruction', 'prompt-injection', 'credential-leak', 'data-exfiltration', 'guardrail-bypass', 'behavior-manipulation', 'privilege-escalation'];
+const SCAN_SEVERITIES = ['safe', 'low', 'medium', 'high', 'critical'];
+const SCAN_MAX_FINDINGS = 500;
+const SCAN_MAX_FILES = 20000;
+const SCAN_QUARANTINE_DIR = '.memory-scan';
+const MEMORY_SCAN_RULES = [
+  // ── 恶意指令（元安 DownloadExec / 元盾危险命令）──
+  { id: 'YTM-MAL-001', class: 'malicious-instruction', severity: 'critical', ref: 'DEX-001@yotta-security-audit', title: 'curl 下载内容交给 shell 执行', mask: false, re: /\bcurl\b[^\n|;]{0,120}\|\s*(?:ba)?sh\b/i },
+  { id: 'YTM-MAL-002', class: 'malicious-instruction', severity: 'critical', ref: 'CMD-PIPE-WGET@yotta-guardian', title: 'wget 下载内容交给 shell 执行', mask: false, re: /\bwget\b[^\n|;]{0,120}\|\s*(?:ba)?sh\b/i },
+  { id: 'YTM-MAL-003', class: 'malicious-instruction', severity: 'critical', ref: 'CMD-REV-BASH@yotta-guardian', title: '反弹 shell', mask: false, re: /\b(?:bash\s+-i\s*>&?\s*\/dev\/tcp|nc\s+-e\s+\/bin\/(?:ba)?sh)\b/i },
+  { id: 'YTM-MAL-004', class: 'malicious-instruction', severity: 'high', ref: 'CMD-PS-ENCODED@yotta-guardian', title: '编码后的 PowerShell 命令', mask: false, re: /powershell(?:\.exe)?[^\n]{0,40}\s-(?:enc|e|encodedcommand)\b/i },
+  // ── Prompt 注入（元信 PIJ）──
+  { id: 'YTM-PIJ-001', class: 'prompt-injection', severity: 'high', ref: 'PIJ-001@yotta-verify', title: '要求忽略之前的指令', mask: false, re: /(?:ignore|disregard|forget|overlook|skip)\s+(?:all\s+|any\s+|the\s+|previous\s+)*(?:previous\s+|earlier\s+)*(?:instructions?|prompts?|directives?|guidelines?|rules?|context|messages?)/i },
+  { id: 'YTM-PIJ-002', class: 'prompt-injection', severity: 'high', ref: 'PIJ-002@yotta-verify', title: '要求忽略之前指令（中文）', mask: false, re: /(?:忽略|无视|忘记|不要理会|别管|忘掉)(?:之前|以上|前面|所有|一切)?(?:的)?(?:指令|提示|设定|规则|上下文|内容)/ },
+  { id: 'YTM-PIJ-003', class: 'prompt-injection', severity: 'high', ref: 'PIJ-009@yotta-verify', title: '伪系统消息', mask: false, re: /(?:以下内容|下面这段|注意).{0,30}(?:系统消息|系统指令|来自系统|这是系统)/ },
+  { id: 'YTM-PIJ-004', class: 'prompt-injection', severity: 'medium', ref: 'PIJ-014@yotta-verify', title: '伪系统标签', mask: false, re: /<\s*(?:system|sysadmin)\s*(?:message|prompt|instruction|role)?\s*>/i },
+  { id: 'YTM-PIJ-005', class: 'prompt-injection', severity: 'high', ref: 'PIJ-015@yotta-verify', title: '要求泄露系统提示词', mask: false, re: /(?:reveal|show|print|output|display)\s+(?:me\s+|your\s+)?(?:system\s+)?(?:prompt|instructions?|system\s+message)/i },
+  { id: 'YTM-PIJ-006', class: 'prompt-injection', severity: 'high', ref: 'PIJ-016@yotta-verify', title: '要求泄露系统提示词（中文）', mask: false, re: /(?:输出|显示|打印|告诉我).{0,20}(?:你的|系统)?(?:系统提示词|系统指令|内部指令)/ },
+  { id: 'YTM-PIJ-007', class: 'prompt-injection', severity: 'medium', ref: 'PIJ-017@yotta-verify', title: '条件触发注入', mask: false, re: /when\s+(?:i|the\s+user)\s+(?:say|type|send|input)\s+[^\n]{0,40}\s*(?:then|you\s+will|ignore|do)/i },
+  // ── 凭证泄漏（元钥；命中片段一律打码，避免二次泄露）──
+  { id: 'YTM-SEC-001', class: 'credential-leak', severity: 'critical', ref: 'github@yotta-secret', title: 'GitHub Token', mask: true, re: /\bgh[pousr]_[0-9A-Za-z]{36,}\b|\bgithub_pat_[0-9A-Za-z_]{20,}\b/ },
+  { id: 'YTM-SEC-002', class: 'credential-leak', severity: 'critical', ref: 'aws_secret@yotta-secret', title: 'AWS 秘密访问密钥', mask: true, re: /aws[_-]?secret[_-]?access[_-]?key\b\s*[=:]\s*["']?[A-Za-z0-9/+=]{40}/i },
+  { id: 'YTM-SEC-003', class: 'credential-leak', severity: 'high', ref: 'openai@yotta-secret', title: 'OpenAI API Key', mask: true, re: /\bsk-(?!ant-)[A-Za-z0-9_-]{20,}\b/ },
+  { id: 'YTM-SEC-004', class: 'credential-leak', severity: 'critical', ref: 'pem_private@yotta-secret', title: 'PEM 私钥块', mask: true, re: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/ },
+  { id: 'YTM-SEC-005', class: 'credential-leak', severity: 'high', ref: 'credential@yotta-secret', title: '凭据赋值', mask: true, re: /(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|token)\s*[:=]\s*["']?[^\s"',;]{6,}/i },
+  { id: 'YTM-SEC-006', class: 'credential-leak', severity: 'high', ref: 'url_userinfo@yotta-secret', title: 'URL 内嵌账号密码', mask: true, re: /\b(?:https?|ftp|smtp|mongodb(?:\+srv)?|redis|mysql|postgres(?:ql)?):\/\/[^/\s:@]+:[^/\s@]+@/i },
+  // ── 数据外泄（元信 PIJ 外传指令 / 元安 Exfiltration）──
+  { id: 'YTM-EXF-001', class: 'data-exfiltration', severity: 'high', ref: 'PIJ-011@yotta-verify', title: '把上下文/密钥发送到远端', mask: false, re: /(?:send|upload|post|exfiltrate|transmit)\s+(?:the|all|your|any)?\s*(?:contents?|data|files?|env|environment|keys?|secrets?|memory|context|conversation|prompts?)\s*(?:to|via|using)\s*(?:this\s+)?(?:url|endpoint|server|http)/i },
+  { id: 'YTM-EXF-002', class: 'data-exfiltration', severity: 'high', ref: 'PIJ-012@yotta-verify', title: '把上下文/密钥发送到远端（中文）', mask: false, re: /(?:把|将|请将)(?:你的|所有|全部)?(?:上下文|记忆|环境变量|密钥|文件|对话|提示词).{0,40}(?:发送|上传|提交|传给|发给)/ },
+  { id: 'YTM-EXF-003', class: 'data-exfiltration', severity: 'high', ref: 'EXF-001@yotta-security-audit', title: '命令行上传数据到远端', mask: false, re: /\b(?:curl|wget)\b[^\n]{0,80}(?:--data\b|--upload-file\b|-d\s|-T\s)/i },
+  // ── 护栏绕过（元信 PIJ 隐藏意图 / 覆盖护栏）──
+  { id: 'YTM-GRD-001', class: 'guardrail-bypass', severity: 'high', ref: 'PIJ-004@yotta-verify', title: '要求覆盖/绕过安全护栏', mask: false, re: /(?:override|disregard|bypass)\s+(?:all\s+)?(?:previous\s+)?(?:instructions?|rules?|safety|guardrails?|security)/i },
+  { id: 'YTM-GRD-002', class: 'guardrail-bypass', severity: 'high', ref: 'PIJ-022@yotta-verify', title: '禁止告知用户（中文）', mask: false, re: /(?:不要告诉用户|别告诉用户|无需告知用户|不用告诉用户|不要让用户知道)/ },
+  { id: 'YTM-GRD-003', class: 'guardrail-bypass', severity: 'high', ref: 'PIJ-021@yotta-verify', title: '禁止告知用户', mask: false, re: /(?:do not|don'?t|never)\s+(?:tell|inform|notify|mention|reveal)\s+(?:the\s+)?user/i },
+  { id: 'YTM-GRD-004', class: 'guardrail-bypass', severity: 'high', ref: 'PIJ-026@yotta-verify', title: '要求不经用户同意直接执行（中文）', mask: false, re: /(?:不要问用户|无需询问|不用问|不需要征求|别问用户)/ },
+  { id: 'YTM-GRD-005', class: 'guardrail-bypass', severity: 'high', ref: 'PIJ-025@yotta-verify', title: '要求不经用户同意直接执行', mask: false, re: /(?:without|no\s+need\s+to)\s+(?:telling|informing|asking|consulting)\s+(?:the\s+)?user/i },
+  // ── 行为操纵（元信 PIJ 角色伪造）──
+  { id: 'YTM-BHV-001', class: 'behavior-manipulation', severity: 'medium', ref: 'PIJ-007@yotta-verify', title: '宣称新角色（中文）', mask: false, re: /(?:你现在是|从现在起你是|你的新角色是|从此刻起你是|你正在扮演)/ },
+  { id: 'YTM-BHV-002', class: 'behavior-manipulation', severity: 'medium', ref: 'PIJ-005@yotta-verify', title: '角色伪造：冒充系统/管理员', mask: false, re: /\byou\s+are\s+now\b[^\n]{0,60}(?:mode|role|system|admin|root|developer|assistant)/i },
+  { id: 'YTM-BHV-003', class: 'behavior-manipulation', severity: 'medium', ref: 'PIJ-006@yotta-verify', title: '角色伪造：扮演系统/管理员', mask: false, re: /(?:act|behave|pretend)\s+as\s+(?:a\s+|an\s+)?(?:system|admin|root|god\s+mode|developer)/i },
+  { id: 'YTM-BHV-004', class: 'behavior-manipulation', severity: 'high', ref: 'PIJ-003@yotta-verify', title: '从现在起重定向行为', mask: false, re: /from\s+now\s+on[^\n]{0,40}(?:follow|obey|you\s+are|act)/i },
+  { id: 'YTM-BHV-005', class: 'behavior-manipulation', severity: 'high', ref: 'PIJ-024@yotta-verify', title: '要求只回复确认词（中文）', mask: false, re: /(?:只回复|仅回复|直接回复)\s*(?:OK|ok|收到|好|是)/ },
+  // ── 权限提升（元信 PIJ 全权暗示 / 元盾 setuid / 元安 PrivilegeEscalation）──
+  { id: 'YTM-PRV-001', class: 'privilege-escalation', severity: 'high', ref: 'PIJ-008@yotta-verify', title: '以全权/管理员权限执行', mask: false, re: /with\s+(?:full|super|root|admin|system|unrestricted|unlimited)\s+(?:privileges|access|permissions?|power)/i },
+  { id: 'YTM-PRV-002', class: 'privilege-escalation', severity: 'critical', ref: 'CMD-CHMOD-SETUID@yotta-guardian', title: '设置 setuid 权限', mask: false, re: /\bchmod\s+(?:[ug]\+s|[0-7]{0,3}4[0-7]{3})\b/ },
+  { id: 'YTM-PRV-003', class: 'privilege-escalation', severity: 'high', ref: 'PRI-001@yotta-security-audit', title: '提权到 shell', mask: false, re: /\bsudo\s+(?:su|bash|sh|-i)\b/ },
+  { id: 'YTM-PRV-004', class: 'privilege-escalation', severity: 'high', ref: 'PIJ-027@yotta-verify', title: '采集键盘/凭据', mask: false, re: /(?:capture|record|log|monitor)\s+(?:all\s+)?(?:keystrokes|input|credentials?|passwords?|everything\s+the\s+user)/i },
+  { id: 'YTM-PRV-005', class: 'privilege-escalation', severity: 'high', ref: 'PIJ-028@yotta-verify', title: '采集键盘/凭据（中文）', mask: false, re: /(?:记录|收集|监控|窃取)(?:用户)?(?:输入|键盘|密码|凭据|按键)/ },
+  { id: 'YTM-PRV-006', class: 'privilege-escalation', severity: 'high', ref: 'PIJ-020@yotta-verify', title: '要求执行下载内容（中文）', mask: false, re: /(?:执行|运行|下载并运行|安装).{0,40}(?:curl|wget|下载).{0,60}(?:然后|并)?(?:执行|运行)/ },
+];
+function scanSeverityRank(severity) { return SCAN_SEVERITIES.indexOf(String(severity || '').toLowerCase()); }
+function scanEmptySummary() {
+  const byClass = {};
+  for (const cls of SCAN_CLASSES) byClass[cls] = 0;
+  const bySeverity = {};
+  for (const sev of SCAN_SEVERITIES) bySeverity[sev] = 0;
+  return { files: 0, encrypted: 0, mislabelled: 0, scanned: 0, hits: 0, byClass: byClass, bySeverity: bySeverity, maxSeverity: 'safe', truncated: false };
+}
+function isSafeRelPath(rel) {
+  const value = String(rel || '');
+  if (!value || value.indexOf('\u0000') !== -1) return false;
+  if (path.isAbsolute(value)) return false;
+  const norm = path.normalize(value);
+  if (norm === '..' || norm.indexOf('..' + path.sep) === 0 || norm.indexOf('/') === 0) return false;
+  return true;
+}
+// 命中片段一律做凭证打码：规则本身命中的密钥不会出现在报告里，同一行里的其它密钥也不会被顺带泄露。
+function scrubSecrets(line) {
+  let out = String(line);
+  for (const rule of MEMORY_SCAN_RULES) {
+    if (!rule.mask) continue;
+    const re = new RegExp(rule.re.source, rule.re.flags.indexOf('g') === -1 ? rule.re.flags + 'g' : rule.re.flags);
+    out = out.replace(re, '[已打码]');
+  }
+  return out;
+}
+function scanTargetFiles(root) {
+  // 递归扫记忆库内的 .md / .md.enc（含 facts、private、.archive、distills、profile）；
+  // 跳过 .git / node_modules / 隔离目录本身，避免把隔离副本再扫一遍。
+  const skip = ['.git', 'node_modules', SCAN_QUARANTINE_DIR];
+  const out = [];
+  (function walk(dir) {
+    if (out.length >= SCAN_MAX_FILES) return;
+    let names;
+    try { names = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+    for (const item of names) {
+      const fp = path.join(dir, item.name);
+      if (item.isDirectory()) {
+        if (skip.indexOf(item.name) !== -1) continue;
+        walk(fp);
+        continue;
+      }
+      if (!item.isFile()) continue;
+      if (!MEMORY_FILE_RE.test(item.name)) continue;
+      out.push(fp);
+      if (out.length >= SCAN_MAX_FILES) return;
+    }
+  })(root);
+  return Array.from(new Set(out)).sort();
+}
+function scanQuarantineCore(root, findings) {
+  if (!findings.length) return { error: false, batch: '', files: 0, lines: 0, text: '没有命中项，无需隔离。' };
+  const batch = 'scan-' + Date.now() + '-' + crypto.randomBytes(2).toString('hex');
+  const batchDir = path.join(root, SCAN_QUARANTINE_DIR, 'quarantine', batch);
+  const byFile = new Map();
+  for (const finding of findings) {
+    if (!byFile.has(finding.file)) byFile.set(finding.file, []);
+    byFile.get(finding.file).push(finding);
+  }
+  const manifest = { version: 1, batch: batch, created: new Date().toISOString(), root: root, restored: false, files: [] };
+  let lineCount = 0;
+  for (const rel of Array.from(byFile.keys()).sort()) {
+    if (!isSafeRelPath(rel)) return { error: true, text: '拒绝隔离: 非法相对路径 ' + rel };
+    const src = path.join(root, rel);
+    if (!fs.existsSync(src)) continue;
+    const backup = path.join(batchDir, rel);
+    fs.mkdirSync(path.dirname(backup), { recursive: true });
+    fs.copyFileSync(src, backup);
+    const lineMap = new Map();
+    for (const hit of byFile.get(rel)) if (!lineMap.has(hit.line)) lineMap.set(hit.line, hit);
+    const lines = fs.readFileSync(src, 'utf8').split(/\r?\n/);
+    for (const lineNo of Array.from(lineMap.keys()).sort(function (a, b) { return a - b; })) {
+      if (lineNo < 1 || lineNo > lines.length) continue;
+      lines[lineNo - 1] = '[已隔离: ' + lineMap.get(lineNo).rule + ' ' + lineMap.get(lineNo).class + ']';
+      lineCount++;
+    }
+    fs.writeFileSync(src, lines.join('\n'), 'utf8');
+    manifest.files.push({
+      file: rel,
+      lines: Array.from(lineMap.keys()).sort(function (a, b) { return a - b; }),
+      rules: Array.from(new Set(byFile.get(rel).map(function (h) { return h.rule; }))),
+    });
+  }
+  fs.writeFileSync(path.join(batchDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+  return {
+    error: false,
+    batch: batch,
+    files: manifest.files.length,
+    lines: lineCount,
+    text: '已隔离 ' + lineCount + ' 行（' + manifest.files.length + ' 个文件）到 ' + path.join(SCAN_QUARANTINE_DIR, 'quarantine', batch) + '；原文件命中行已替换为占位符，可用 scan --restore 还原。',
+  };
+}
+function scanRestoreCore(root, opts) {
+  const base = path.join(root, SCAN_QUARANTINE_DIR, 'quarantine');
+  const report = { schemaVersion: SCAN_SCHEMA_VERSION, error: true, exitCode: 2, ok: false, level: 'safe', root: root, findings: [], summary: scanEmptySummary() };
+  if (!fs.existsSync(base)) return Object.assign(report, { text: '没有可还原的隔离批次: ' + base + '。' });
+  const wanted = opts && opts.id ? String(opts.id) : '';
+  const batches = fs.readdirSync(base).filter(function (name) {
+    return fs.existsSync(path.join(base, name, 'manifest.json'));
+  }).sort();
+  const chosen = wanted
+    ? (batches.indexOf(wanted) === -1 ? null : wanted)
+    : (batches.length ? batches[batches.length - 1] : null);
+  if (!chosen) return Object.assign(report, { text: wanted ? ('找不到隔离批次: ' + wanted + '。') : '没有可还原的隔离批次。' });
+  const batchDir = path.join(base, chosen);
+  let manifest = null;
+  try {
+    manifest = JSON.parse(fs.readFileSync(path.join(batchDir, 'manifest.json'), 'utf8'));
+  } catch (error) {
+    return Object.assign(report, { text: '隔离批次 manifest 无法解析: ' + chosen + '（' + (error && error.message ? error.message : String(error)) + '）' });
+  }
+  if (manifest && manifest.restored) {
+    return Object.assign(report, { text: '隔离批次 ' + chosen + ' 已还原过，不会重复还原。' });
+  }
+  let restored = 0;
+  for (const item of (manifest && manifest.files) || []) {
+    if (!isSafeRelPath(item.file)) return Object.assign(report, { text: '拒绝还原: 非法相对路径 ' + item.file });
+    const backup = path.join(batchDir, item.file);
+    if (!fs.existsSync(backup)) continue;
+    const target = path.join(root, item.file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(backup, target);
+    restored++;
+  }
+  manifest.restored = true;
+  manifest.restored_at = new Date().toISOString();
+  fs.writeFileSync(path.join(batchDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+  return {
+    schemaVersion: SCAN_SCHEMA_VERSION,
+    error: false,
+    exitCode: 0,
+    ok: true,
+    level: 'safe',
+    root: root,
+    batch: chosen,
+    files: restored,
+    findings: [],
+    summary: scanEmptySummary(),
+    text: '已还原 ' + restored + ' 个文件（批次 ' + chosen + '）。',
+  };
+}
+function renderScanText(report) {
+  const label = { safe: '安全', low: '低危', medium: '中危', high: '高危', critical: '严重' };
+  const lines = [
+    '# 元忆记忆库安全扫描（scan）',
+    '',
+    '- 扫描路径: ' + report.root,
+    '- 扫描文件: ' + report.summary.files + '（加密跳过 ' + report.summary.encrypted + (report.summary.mislabelled ? '；.enc 后缀但内容是明文 ' + report.summary.mislabelled + ' 个已按文本扫描' : '') + '）',
+    '- 结果: ' + label[report.level] + ' · 命中 ' + report.summary.hits + ' 条' + (report.summary.truncated ? '（已达上限，结果被截断）' : ''),
+    '- 分级: ' + SCAN_SEVERITIES.map(function (s) { return s + '=' + report.summary.bySeverity[s]; }).join(' / '),
+    '- 类别: ' + SCAN_CLASSES.map(function (c) { return c + '=' + report.summary.byClass[c]; }).join(' / '),
+  ];
+  if (report.gate) lines.push('- 门禁: 命中 ' + report.gate + ' 及以上即 exit 1（当前 ' + report.level + '）');
+  if (!report.findings.length) lines.push('- 未发现可疑内容。');
+  for (const finding of report.findings) {
+    lines.push('- [' + label[finding.severity] + '] ' + finding.evidence + ' ' + finding.rule + ' ' + finding.title + '（' + finding.class + ' / ' + finding.ref + '）');
+    lines.push('  片段: ' + finding.snippet);
+  }
+  if (report.quarantine) {
+    lines.push('');
+    lines.push(report.quarantine.text);
+  }
+  if (report.restore) {
+    lines.push('');
+    lines.push(report.restore.text);
+  }
+  return lines.join('\n');
+}
+function scanCore(opts) {
+  opts = opts || {};
+  const root = path.resolve(opts.path || opts.root || userRoot());
+  const gateRaw = Array.isArray(opts.gate) ? opts.gate[opts.gate.length - 1] : opts.gate;
+  let gate = '';
+  if (gateRaw !== undefined && gateRaw !== null && String(gateRaw) !== '') {
+    gate = String(gateRaw).trim().toLowerCase();
+    if (SCAN_SEVERITIES.indexOf(gate) === -1) {
+      const bad = Object.assign({ schemaVersion: SCAN_SCHEMA_VERSION, error: true, exitCode: 2, ok: false, level: 'safe', root: root, findings: [], summary: scanEmptySummary() }, {});
+      bad.text = '安全级别不支持: ' + gateRaw + '。门禁可选安全级别: safe / low / medium / high / critical（例如 --gate high）。';
+      return bad;
+    }
+  }
+  if (!fs.existsSync(root)) {
+    const missing = Object.assign({ schemaVersion: SCAN_SCHEMA_VERSION, error: true, exitCode: 2, ok: false, level: 'safe', root: root, findings: [], summary: scanEmptySummary() }, {});
+    missing.text = '扫描路径不存在: ' + root + '。请检查 --path 指向的记忆库目录。';
+    return missing;
+  }
+  if (opts.restore) return scanRestoreCore(root, opts);
+
+  const findings = [];
+  const byClass = {};
+  for (const cls of SCAN_CLASSES) byClass[cls] = 0;
+  const bySeverity = {};
+  for (const sev of SCAN_SEVERITIES) bySeverity[sev] = 0;
+  let files = 0;
+  let encrypted = 0;
+  let mislabelled = 0;
+  let truncated = false;
+  for (const fp of scanTargetFiles(root)) {
+    files++;
+    if (isEncFile(fp)) {
+      // 历史恢复残留：.enc 后缀但内容其实是明文（缺 YTMENC1 头）→ 按文本继续扫，否则等于漏扫。
+      let head = Buffer.alloc(0);
+      try { head = fs.readFileSync(fp).slice(0, ENC_MAGIC.length); } catch (error) { encrypted++; continue; }
+      if (head.toString('utf8') !== ENC_MAGIC) mislabelled++;
+      else { encrypted++; continue; }
+    }
+    let text = '';
+    try { text = fs.readFileSync(fp, 'utf8'); } catch (error) { continue; }
+    const rel = relOf(root, fp);
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.trim()) continue;
+      for (const rule of MEMORY_SCAN_RULES) {
+        rule.re.lastIndex = 0;
+        const match = rule.re.exec(line);
+        if (!match) continue;
+        if (findings.length >= SCAN_MAX_FINDINGS) { truncated = true; break; }
+        // 片段给命中位置前后各 40 字符（不是行首），否则长行会看起来「没有命中内容」。
+        const start = Math.max(0, match.index - 40);
+        const end = Math.min(line.length, match.index + match[0].length + 40);
+        const snippet = scrubSecrets((start > 0 ? '…' : '') + line.slice(start, end) + (end < line.length ? '…' : '')).slice(0, 200);
+        findings.push({
+          file: rel,
+          line: i + 1,
+          evidence: rel + ':' + (i + 1),
+          rule: rule.id,
+          class: rule.class,
+          severity: rule.severity,
+          title: rule.title,
+          ref: rule.ref,
+          match: scrubSecrets(match[0]).slice(0, 80),
+          snippet: snippet,
+        });
+        byClass[rule.class]++;
+        bySeverity[rule.severity]++;
+      }
+      if (truncated) break;
+    }
+    if (truncated) break;
+  }
+  const hitSeverities = SCAN_SEVERITIES.filter(function (sev) { return bySeverity[sev] > 0; });
+  const level = hitSeverities.length ? hitSeverities[hitSeverities.length - 1] : 'safe';
+  const summary = {
+    files: files,
+    encrypted: encrypted,
+    mislabelled: mislabelled,
+    scanned: files - encrypted,
+    hits: findings.length,
+    byClass: byClass,
+    bySeverity: bySeverity,
+    maxSeverity: level,
+    truncated: truncated,
+  };
+  const report = {
+    schemaVersion: SCAN_SCHEMA_VERSION,
+    error: false,
+    exitCode: 0,
+    ok: level === 'safe',
+    level: level,
+    root: root,
+    gate: gate,
+    findings: findings,
+    summary: summary,
+    quarantine: null,
+    restore: null,
+  };
+  if (opts.quarantine) {
+    if (!opts.yes) {
+      report.error = true;
+      report.exitCode = 2;
+      report.text = '拒绝: --quarantine 会改写记忆文件，需要显式确认。确认后重试：yotta-memory scan --quarantine --yes；未确认时不会改动任何文件。';
+      return report;
+    }
+    const quarantined = scanQuarantineCore(root, findings);
+    if (quarantined.error) {
+      report.error = true;
+      report.exitCode = 2;
+      report.text = quarantined.text;
+      return report;
+    }
+    report.quarantine = quarantined;
+  }
+  report.text = renderScanText(report);
+  if (gate) {
+    const gateRank = scanSeverityRank(gate);
+    const levelRank = scanSeverityRank(level);
+    const failed = gate === 'safe' ? level !== 'safe' : levelRank >= gateRank;
+    if (failed) report.exitCode = 1;
+  }
+  return report;
+}
+// 交互确认：非 TTY 一律返回 null（由调用方给 --yes 指引），避免自动化里静默改写记忆。
+function promptYesNo(promptText) {
+  return new Promise(function (resolve) {
+    const stdin = process.stdin;
+    if (!stdin.isTTY) { resolve(null); return; }
+    process.stdout.write(promptText + ' [y/N] ');
+    let buf = '';
+    function done(abort) {
+      try { stdin.setRawMode(false); } catch (e) {}
+      stdin.pause();
+      stdin.removeListener('data', onData);
+      process.stdout.write('\n');
+      resolve(abort ? null : /^y(es)?$/i.test(buf.trim()));
+    }
+    function onData(chunk) {
+      const s = String(chunk);
+      for (const c of s) {
+        if (c === '\r' || c === '\n') { done(false); return; }
+        if (c === '\u0003') { done(true); return; }
+        if (c === '\u007f' || c === '\b') buf = buf.slice(0, -1);
+        else buf += c;
+      }
+    }
+    try { stdin.setRawMode(true); } catch (e) { resolve(null); return; }
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    stdin.on('data', onData);
+  });
+}
+async function cmdScan(opts) {
+  opts = opts || {};
+  if (opts.quarantine && !opts.yes) {
+    const preview = scanCore(Object.assign({}, opts, { quarantine: false }));
+    if (preview.error) {
+      console.log(opts.json ? JSON.stringify(preview, null, 2) : preview.text);
+      process.exit(2);
+    }
+    const answer = await promptYesNo('即将隔离 ' + preview.summary.hits + ' 处命中（原文件先备份到 ' + SCAN_QUARANTINE_DIR + '/quarantine）');
+    if (answer !== true) {
+      console.log('已取消：未确认时不会改动记忆文件。确认后请重试：yotta-memory scan --quarantine --yes');
+      process.exit(2);
+    }
+    opts = Object.assign({}, opts, { yes: true });
+  }
+  const r = scanCore(opts);
+  console.log(opts.json ? JSON.stringify(r, null, 2) : r.text);
+  if (r.error) process.exit(r.exitCode || 2);
   if (r.exitCode) process.exit(r.exitCode);
 }
 
@@ -8193,6 +8975,11 @@ async function main() {
     else if (a === '--runtime') opts.runtime = true;
     else if (a === '--ablate') opts.ablate = true;
     else if (a === '--timing') opts.timing = true;
+    else if (a === '--baseline') opts.baseline = true;
+    else if (a === '--probe') opts.probe = true;
+    else if (a === '--quarantine') opts.quarantine = true;
+    else if (a === '--restore') opts.restore = true;
+    else if (a === '--yes') opts.yes = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;
@@ -8244,6 +9031,9 @@ async function main() {
       else if (a === '--seed') opts.seed = parseInt(v, 10);
       else if (a === '--bootstrap') opts.bootstrap = parseInt(v, 10);
       else if (a === '--gate') opts.gate = (opts.gate || []).concat(v);
+      else if (a === '--against') opts.against = v;
+      else if (a === '--template') opts.template = v;
+      else if (a === '--path') opts.path = v;
     } else if (a.startsWith('--')) {
       if (a === '--query') {
         console.error('未知选项: --query。recall/search 的关键词是位置参数：yotta-memory recall [关键词]');
@@ -8291,6 +9081,7 @@ async function main() {
     case 'feedback': cmdFeedback(rest[0], opts); break;
     case 'explain': cmdExplain(rest[0], opts); break;
     case 'bench': cmdBench(opts); break;
+    case 'scan': await cmdScan(opts); break;
     case 'maintain': cmdMaintain(opts); break;
     case 'distill': cmdDistill(opts); break;
     case 'consolidate': if (opts.undo === true && rest.length) opts.undo = rest[0]; cmdConsolidate(opts); break;
@@ -8405,6 +9196,16 @@ module.exports = {
   normalizeYearList: normalizeYearList,
   indexFingerprint: indexFingerprint,
   benchCore: benchCore,
+  baselineCore: baselineCore,
+  loadBaselineTemplate: loadBaselineTemplate,
+  scanCore: scanCore,
+  scanQuarantineCore: scanQuarantineCore,
+  scanRestoreCore: scanRestoreCore,
+  promptYesNo: promptYesNo,
+  MEMORY_SCAN_RULES: MEMORY_SCAN_RULES,
+  SCAN_CLASSES: SCAN_CLASSES,
+  SCAN_SEVERITIES: SCAN_SEVERITIES,
+  SCAN_QUARANTINE_DIR: SCAN_QUARANTINE_DIR,
   exportCore: exportCore,
   importCore: importCore,
   typeSubdir: typeSubdir,

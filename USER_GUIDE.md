@@ -266,11 +266,13 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 - `yotta-memory backup volumes` 只列出当前机器实际存在、可写、与记忆库异卷的路径；用户确认一次位置后，`backup setup --dir <目录>` 创建首份备份并默认启用每日自动备份（默认 03:30）。
 - Windows 使用 Task Scheduler，Linux 使用 systemd user timer（不可用时降级 cron），macOS 使用 LaunchAgent；`serve` 启动后与每 6 小时调用幂等 `backup ensure-daily` 补跑。
 - `yotta-memory backup status` 查看目录、计划、上次成功、最近失败与调度状态；`backup drill` 恢复到隔离副本，校验 manifest / 索引并解密一条测试私密。
+- `yotta-memory backup drill <id> --probe [--against <库路径>]` 在恢复副本上追加六类只读基线探针（身份 / 近期 / 仅源库独有 / CJK / 操作规则 / owner 范围）；`--against` 指向源库时，备份没有落后于源库才算通过，探针失败即演练失败。
 - 备份目录与记忆库同卷时默认拒绝；这是一条防线，不替代独立盘备份。
 
 ## 3.9 开工 doctor 与事务快照（v0.12.2）
 
 - `yotta-memory doctor`：只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json`、最近备份与规模（记忆条数 / 单目录最大文件数 / 索引总体积 / 索引冷启动耗时）。规模阈值用 `config set scale_warn_entries 50000`、`scale_warn_files_per_dir`、`scale_warn_index_bytes`、`scale_warn_cold_start_ms` 调整；超阈值只告警，不锁定破坏性写入。加 `--json` 可输出机器可读结果，顶层含 `schemaVersion` / `encryption` / `migration_required`，规模明细在 `checks.scale`，并保留 `identity.mode` / `identity.agentKeyStatus`。
+- `yotta-memory doctor --baseline [--against <库路径>] [--template <文件>]`：恢复 / 迁移后确认记忆真的可用——六类探针（身份 / 近期 / 仅源库独有 / CJK / 操作规则 / owner 范围）全部只读，条目身份键与布局无关（旧平铺 → 新年/月分层不会误报缺失）；缺失项列出清单并 exit 2。`--template` 用 v1 JSON 声明显式期望（`expect_owners` / `expect_min_entries` / `expect_types` / `queries`），只加严判定。探针结果在 `doctor --json` 的 `checks.baseline`。
 - 严重异常（根目录缺失、密钥库缺文件、备份目录同卷）会返回非零退出码；此时 `context` 也会显示“破坏性写入已锁定”。
 - `maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 在写入前自动创建新的整库事务快照，并在 `.archive/audit-<日期>.jsonl` 记录 transaction / operation / snapshot。
 - 未配置独立备份目录、doctor critical 或快照失败时，命令直接拒绝执行，原记忆保持不变；`forget` 仍只移入 `.trash/`，不重复创建整库快照。
@@ -437,7 +439,7 @@ yotta-memory key claim <本智能体ID>
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（零推断，写 `profile.md`）|
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--year <yyyy>] [--explain] [--embedding <命令>]` | 开工上下文包（身份+铁律+画像+长期摘要+任务相关记忆+近期走廊+近期高价值+边界+承诺+会话闭环契约；--budget 控制动态记忆字符预算；--focus 任务聚焦；v0.17.0 起 `--year` 只装载指定年份；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆 |
-| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（v0.12.2：根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入；v0.16.0：`--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；v0.17.0：`checks.scale` 规模体检）|
+| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>] [--baseline [--against <库路径>] [--template <文件>]]` | 开工可靠性检查（v0.12.2：根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入；v0.16.0：`--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；v0.17.0：`checks.scale` 规模体检 + `--baseline` 恢复 / 迁移六类只读探针，失败列出缺失清单并 exit 2）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；保留年/月分层，私密入 `.archive/private/<owner>/<type>/<年>/<月>/`）|
 | `yotta-memory reindex` | 重建索引 |
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |
@@ -454,6 +456,7 @@ yotta-memory key claim <本智能体ID>
 | `yotta-memory distill [--owner <id>] [--subject <主题>] [--model <cmd>] [--out <路径>]` | 心理日志蒸馏（v0.8.0：统计摘要 / 主题画像 / 知识地图）|
 | `yotta-memory explain <文件|主题>` | 查看单条记忆效用分项（v0.8.0）|
 | `yotta-memory bench [--evalset <文件>] [--k N] [--seed N] [--bootstrap N] [--ablate] [--gate <指标>=<数值>] [--timing] [--year <yyyy>] [--json] [--out <文件>]` | 可复算检索基准评测（v0.17.0：默认按库内条目确定性抽样；`--evalset` 指定评测集 v1；指标 Recall@k / MRR / nDCG@k / HitRate + 95% 置信区间；报告含库指纹、默认不含墙钟时间；`--ablate` 消融对比；`--gate` 供 CI；`--timing` 附带耗时后不可逐字节复算；全程只读）|
+| `yotta-memory scan [--path <目录>] [--gate <安全级别>] [--quarantine --yes] [--restore] [--id <批次>] [--json]` | 记忆库安全扫描（v0.17.0：七类 = 恶意指令 / Prompt 注入 / 凭证泄漏 / 数据外泄 / 护栏绕过 / 行为操纵 / 权限提升；五级 + `file:line` 证据；默认只报告、零网络零依赖；`--gate` 命中该级别及以上 exit 1；`--quarantine` 需 `--yes` 或交互确认，先把原文件备份到 `.memory-scan/quarantine/` 再替换命中行；`--restore` 还原；凭证片段打码不回显）|
 
 类型：`FACT`（事实，共享）/ `PREF`（偏好）/ `BOUND`（边界）/ `COMMIT`（承诺），后三类按智能体物理分目录隔离（`private/<owner>/<type>/`）；v0.17.0 起新写入再按年/月分层（`facts/<年>/<月>/`、`private/<owner>/<type>/<年>/<月>/`），旧平铺文件留在原位继续可读，不做自动迁移。
 

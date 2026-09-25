@@ -1,6 +1,6 @@
 ---
 name: yotta-memory
-description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照
+description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照、基线探针、恢复演练、记忆库安全扫描、scan
 version: 0.17.0
 license: MIT
 ---
@@ -20,6 +20,8 @@ license: MIT
 - **身份模型（v0.16.0）**：身份不再从环境变量读取。HTTP / 远程 MCP 只认请求头 `Authorization` + `X-Agent-Id` + `X-Agent-Key`；stdio MCP 只认显式参数 `--agent-id` + `--agent-key-file`；CLI 用 `--agent` + `--agent-key` / `--agent-key-file`。旧身份 env 会在 MCP 启动时被明确拒绝。
 - **未授权提示边界（v0.16.4）**：`--agent-key-file` 不存在时不再由主入口向全局 `stderr` 告警。公共 / 维护命令保持安静；只有真正访问私密区时才 fail-closed，并给出缺失文件、`view` / `key bind`、`key status` / `key claim` 的可操作步骤。`whoami --json`、`doctor --json`、`config get --json` 返回 `identity.mode` / `identity.agentKeyStatus`。
 - **doctor JSON 稳定契约（v0.16.5）**：`doctor --json` 顶层新增 `schemaVersion`（当前 `1`）、`encryption`（布尔）、`migration_required`（`[{agent, reason}]`）。原有 `checks` / `warnings` / `identity` / `text` 字段保持兼容。
+- **恢复 / 迁移基线探针（v0.17.0）**：`doctor --baseline [--against <库路径>] [--template <文件>]` 与 `backup drill <id> --probe [--against <库路径>]` 在目标库 / 恢复副本上跑六类只读探针（身份 / 近期 / 仅源库独有 / CJK / 操作规则 / owner 范围）；条目身份键与布局无关，旧平铺 → 新年/月分层的迁移不会误报「缺失」；缺失项列出清单并非零退出（`doctor` exit 2 / `drill` 判失败）；探针内容由确定性抽样或用户模板生成，**不硬编码任何记忆**，`--template` 只加严判定。
+- **记忆库安全扫描（v0.17.0）**：`scan` 扫记忆库里的恶意指令 / Prompt 注入 / 凭证泄漏 / 数据外泄 / 护栏绕过 / 行为操纵 / 权限提升七类，五级分级 + `file:line` 证据；默认**只报告**，`--gate` 可接 CI；只有 `--quarantine --yes`（或交互确认）才改写——先把原文件逐字节备份到 `.memory-scan/quarantine/<批次>/` 再替换命中行，`scan --restore` 还原；凭证片段一律打码；规则出处指向元信 / 元钥 / 元安 / 元盾规则表（分工 = 元钥扫源码仓库、元信扫技能包、元忆扫记忆库）。**边界**：`scan` 是库主人的维护命令，会读整库文件（含其它 owner 的私密目录）——智能体不要用它去查看其它智能体的私密内容，跨 owner 扫描前先取得用户授权；加密条目在无授权密钥时不会被解密扫描。
 - **运行时稳定入口（v0.16.0 M2）**：`runtime install --from-current` 把当前引擎安装到 `<runtimeRoot>/versions/<version>/` 并创建 `<runtimeRoot>/current` 稳定指针；`runtime use <version>` 原子切换、`runtime rollback` 回滚、`runtime status` 查看漂移。stdio MCP、`lan enable` 与备份调度只指向 `<runtimeRoot>/current/bin/yotta-memory.js`，不写版本目录。
 - **运行时诊断与握手（v0.16.0 M3）**：`doctor --runtime` 检查 CLI / current / runtime.json / MCP 配置 / 运行中 server / 技能副本 / 身份模式漂移，逐项给出实际版本、期望版本、修复命令和是否阻断；MCP `initialize` / `server/discover` 的 `serverInfo` 返回 `runtimePath` / `identityMode` / `toolProfile`。
 - **自我学习 / 自我进化 / 自我提升（v0.8.0）**：`recall` 语义检索（同义词 / 拼音 / 字段加权 / 模糊匹配，零依赖）；`feedback` 显式使用反馈闭环（useful / useless → weight / confidence / feedback_net 演化，越用越懂）；`maintain` 规则层自组织（统一效用分 + 年龄自动归档 / 遗忘候选 / 去重，默认 dry-run，immutable / BOUND 豁免）；`distill` 心理日志蒸馏（统计摘要 / 主题画像 / 知识地图，可选 `--model` 外部模型增强）；`explain` 查看单条记忆效用分项。
@@ -292,8 +294,8 @@ yotta-memory doctor --json
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--year <yyyy>] [--explain] [--embedding <command>]` | 生成开工上下文包（身份 + 多智能体铁律 + 画像 + 长期摘要 + 任务相关记忆 + 近期走廊 + 近期高价值 + 边界 + 承诺 + 会话闭环契约；--budget 控制动态记忆字符预算，0=不限；v0.17.0 起 `--year` 只装载指定年份，口径同 recall；--explain 输出 included / dropped 选择 trace）|
 | `yotta-memory forget <文件>` | 移入 `.trash/<时间>/` 回收区并写审计（v0.12.0；不再物理删除）|
 | `yotta-memory backup volumes / setup --dir <目录> / status / ensure-daily / schedule enable|disable|status` | 每日自动备份（v0.12.0；只展示实际枚举的异卷、用户确认一次位置后默认每日执行，Windows Task Scheduler / systemd timer / launchd 调度，`serve` 补跑）|
-| `yotta-memory backup create / list / doctor / restore <ID> --to <目录> / drill [<ID>]` | 备份、恢复与恢复演练（v0.12.0；独立盘校验、SHA-256 清单、排除 `keys/cache`、恢复默认只写新目录；drill 验证 manifest / 索引 / 测试私密解密）|
-| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>]` | 开工可靠性检查（v0.12.2；根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）；全新空库的缺失 index / agents 降为 info；输出 agent home 发现规则与 `YOTTA_MEMORY_AGENT_HOME` 提示；加 `--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；v0.16.4 起 `--json` 含身份 / agent-key 状态；v0.16.5 起顶层含 `schemaVersion` / `encryption` / `migration_required`；v0.17.0 起 `checks.scale` 给规模体检（条数 / 单目录文件数 / 索引体积 / 冷启动耗时，阈值 `scale_*`）|
+| `yotta-memory backup create / list / doctor / restore <ID> --to <目录> / drill [<ID>] [--probe] [--against <库路径>]` | 备份、恢复与恢复演练（v0.12.0；独立盘校验、SHA-256 清单、排除 `keys/cache`、恢复默认只写新目录；drill 验证 manifest / 索引 / 测试私密解密；v0.17.0 起 `--probe` 在恢复副本上追加六类基线探针，`--against` 校验备份没有落后于源库）|
+| `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>] [--baseline [--against <库路径>] [--template <文件>]]` | 开工可靠性检查（v0.12.2；根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）；全新空库的缺失 index / agents 降为 info；输出 agent home 发现规则与 `YOTTA_MEMORY_AGENT_HOME` 提示；加 `--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；v0.16.4 起 `--json` 含身份 / agent-key 状态；v0.16.5 起顶层含 `schemaVersion` / `encryption` / `migration_required`；v0.17.0 起 `checks.scale` 给规模体检（条数 / 单目录文件数 / 索引体积 / 冷启动耗时，阈值 `scale_*`），`--baseline` 追加恢复 / 迁移基线探针（结果进 `checks.baseline`，失败 exit 2）|
 | `yotta-memory archive [--days 180] [--threshold 0.35]` | 归档旧记忆（v0.8.0 统一效用分 + v0.10.0 分类型衰减；immutable / BOUND 豁免；私密归档入 `.archive/private/<owner>/<type>/`；阈值默认读 config `maintain_archived_utility`）|
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
@@ -310,6 +312,7 @@ yotta-memory doctor --json
 | `yotta-memory distill [--owner <id>] [--subject <主题>] [--model <cmd>] [--out <路径>]` | 心理日志蒸馏（v0.8.0 自我提升：统计摘要 / 主题画像 / 知识地图；启发式零依赖，`--model` 可选外部模型 stdin→stdout 提炼；私密产物入 `private/<owner>/distills/`，公共入 `facts/distills/`）|
 | `yotta-memory explain <文件|主题>` | 查看单条记忆效用分项与归档 / 遗忘状态判定（v0.8.0）|
 | `yotta-memory bench [--evalset <文件>] [--k N] [--seed N] [--bootstrap N] [--ablate] [--gate <指标>=<数值>] [--timing] [--year <yyyy>] [--json] [--out <文件>]` | 可复算检索基准评测（v0.17.0：默认按库内条目做确定性抽样生成基线评测集，`--evalset` 可指定评测集 v1；指标 Recall@k / MRR / nDCG@k / HitRate + 固定种子 bootstrap 95% 置信区间；报告带库指纹与评测集指纹、默认不含墙钟时间，同输入必须同输出；`--ablate` 输出关键词 / 语义 × 融合 / 纯分消融；`--gate <指标>=<数值>` 供 CI，不达标 exit 1；`--timing` 显式附带 p50 / p95，带上后报告不再逐字节可复算。**全程只读**：不重建索引、不写访问计数、不调用外部 embedding 插件；索引缺失或过旧时先 `reindex`）|
+| `yotta-memory scan [--path <目录>] [--gate <安全级别>] [--quarantine --yes] [--restore] [--id <批次>] [--json]` | 记忆库安全扫描（v0.17.0：七类 = 恶意指令 / Prompt 注入 / 凭证泄漏 / 数据外泄 / 护栏绕过 / 行为操纵 / 权限提升；五级 `safe → low → medium → high → critical` + `file:line` 证据与规则出处；**默认只报告**、零网络零依赖，`--gate` 命中该级别及以上 exit 1；`--quarantine` 必须先备份到 `.memory-scan/quarantine/` 再替换命中行、需 `--yes` 或交互确认，`--restore` 还原；加密条目无授权密钥时只计入 `summary.encrypted`，`.md.enc` 后缀但内容是平文的文件按文本扫描并计入 `summary.mislabelled`；每条命中给命中片段与命中原文，凭证片段一律打码不回显）|
 
 ### 首启（非 TTY / GUI 宿主）
 
