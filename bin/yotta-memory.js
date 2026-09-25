@@ -27,7 +27,7 @@ const { AsyncLocalStorage } = require('async_hooks');
 
 const VERSION = '0.17.0';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path']);
-const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--yes']);
+const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--yes', '--keep-memories', '--keep-identity']);
 
 function helpOption(flag, arg, what, when, caution) {
   return { flag: flag, arg: arg || '', what: what, when: when || '', caution: caution || '' };
@@ -175,6 +175,16 @@ const HELP_MODEL = [
       helpOption('--user', '<用户>', '设置用户称呼', '登记或更新身份时', ''),
       helpOption('--relationship', '<关系>', '设置与用户的关系定位', '登记或更新身份时', ''),
     ] },
+    { name: 'identity', usage: 'identity remove <id> [选项]', what: '彻底删除一个 AI 身份与它的私密记忆', when: '某个 AI 不再使用、要把它的身份与私密记忆清干净时', subcommands: [
+      helpSub('remove', 'remove <id> [--dry-run] [--yes] [--keep-memories] [--keep-identity] [--password <口令> | --recovery-key <钥匙>]', '彻底删除身份 + 私密记忆（真删）', '确认某个 AI 不再使用、要一次清干净时', [
+        helpOption('--dry-run', '', '先列出将删除的内容', '想核对清单再决定时', '预演只读，不改任何文件'),
+        helpOption('--yes', '', '跳过交互确认', '自动化里执行删除时', '会立刻真删；请先跑 --dry-run 核对'),
+        helpOption('--keep-memories', '', '只删身份与授权，保留私密记忆', '想注销身份但保住记忆时', ''),
+        helpOption('--keep-identity', '', '只删私密记忆与授权，保留身份登记', '想清记忆但保留登记时', ''),
+        helpOption('--password', '<口令>', '用户主口令（加密库用它证明是用户本人）', '由用户本人在 CLI 执行时', '命令行会留下痕迹；优先交互输入'),
+        helpOption('--recovery-key', '<钥匙>', '用恢复钥匙证明用户身份', '忘记主口令时', '恢复钥匙只能由用户本人保管'),
+      ]),
+    ] },
     { name: 'whoami', usage: 'whoami [--json]', what: '查看当前身份和登记状态', when: '不确定当前是谁、是否已登记时', options: [helpOption('--json', '', '输出 JSON', '脚本读取身份状态时', '')] },
     { name: 'profile', usage: 'profile [--owner <id>] [--json]', what: '生成用户画像', when: '想按私密记忆原文结构化查看用户画像时', options: [
       helpOption('--owner', '<id>', '指定画像归属者', '查某个 owner 的私密画像时', '仍然受私密区权限约束'),
@@ -276,7 +286,7 @@ const HELP_MODEL = [
   ] },
 ];
 // @generated view-html:start
-const VIEW_HTML = "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>元忆 · 用户查看平台</title><style>\r\nbody{font-family:system-ui,-apple-system,\"Microsoft YaHei\",sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1f2328;background:#fafafa}\r\nh1{font-size:22px} .card{background:#fff;border:1px solid #e2e2e2;border-radius:10px;padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}\r\nbutton{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;margin:2px;font-size:14px}\r\nbutton.danger{background:#dc2626} button.ghost{background:#e5e7eb;color:#1f2328}\r\ninput,select{padding:8px;border:1px solid #c9c9c9;border-radius:6px;margin:2px;font-size:14px;box-sizing:border-box}\r\ntable{border-collapse:collapse;width:100%;font-size:13px} td,th{border:1px solid #ececec;padding:6px 8px;text-align:left;vertical-align:top}\r\n.owner{display:inline-flex;align-items:center;gap:6px;border:1px solid #ddd;border-radius:8px;padding:5px 10px;margin:4px 6px 4px 0;background:#f6f8fa}\r\n.entry{border-bottom:1px solid #eee;padding:8px 0} .meta{color:#8a8a8a;font-size:12px}\r\n.err{color:#dc2626;margin-top:8px} .ok{color:#16a34a;margin-top:8px}\r\n#app{display:none} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:12px}\r\n</style></head><body>\r\n<h1>元忆 · 用户查看平台 <span id=\"ver\" style=\"font-size:14px;color:#888\"></span></h1>\r\n<div id=\"lock\" class=\"card\">\r\n  <p><b>输入主口令解锁</b>（口令只在本地内存派生，不落盘、不发送远端）。忘口令可在 CLI 用恢复钥匙重设：<code>yotta-memory reset-password --recovery-key &lt;钥匙&gt;</code></p>\r\n  <input type=\"password\" id=\"pw\" placeholder=\"主口令\" style=\"width:260px\">\r\n  <button onclick=\"unlock()\">解锁</button>\r\n  <div class=\"err\" id=\"lockerr\"></div>\r\n</div>\r\n<div id=\"app\">\r\n  <div class=\"card\">\r\n    <b>AI 列表</b>（✅=已授权可读自己私密，🔒=未授权）\r\n    <div class=\"meta\" style=\"margin-top:6px\">「授权」由你（用户）操作：确认后生成只显示一次的 agent_key，请立即单独保存；服务端同时写临时待领取文件 <code>keys/pending/&lt;agent_id&gt;.key</code>，供该 AI 新会话领取，领取成功后自动删除。</div>\r\n    <div id=\"owners\" style=\"margin-top:8px\"></div>\r\n  </div>\r\n  <div class=\"card\">\r\n    <b>记忆</b>\r\n    <input id=\"q\" placeholder=\"搜索关键词\" style=\"width:220px\" onkeydown=\"if(event.key==='Enter'){off=0;load()}\">\r\n    <button onclick=\"off=0;load()\">搜索</button>\r\n    <button class=\"ghost\" onclick=\"doExport()\">导出 JSON</button>\r\n    <button class=\"ghost\" onclick=\"showRk()\">显示恢复钥匙</button>\r\n    <span id=\"rkout\" style=\"font-size:12px;color:#888;margin-left:8px\"></span>\r\n    <div id=\"meta\" style=\"margin-top:10px;font-size:12px;color:#666\"></div>\r\n    <div id=\"entries\" style=\"margin-top:6px\"></div>\r\n    <div id=\"pager\" style=\"margin-top:10px\">\r\n      <button class=\"ghost\" id=\"prevb\" onclick=\"prevPage()\">上一页</button>\r\n      <span id=\"pageinfo\" style=\"font-size:12px;color:#888;margin:0 8px\"></span>\r\n      <button class=\"ghost\" id=\"nextb\" onclick=\"nextPage()\">下一页</button>\r\n    </div>\r\n  </div>\r\n  <div class=\"card\">\r\n    <b>重设口令</b><br>\r\n    <input type=\"password\" id=\"cur\" placeholder=\"当前口令\">\r\n    <input type=\"password\" id=\"np1\" placeholder=\"新口令\">\r\n    <input type=\"password\" id=\"np2\" placeholder=\"确认新口令\">\r\n    <button onclick=\"resetPw()\">重设</button>\r\n    <span id=\"pwout\"></span>\r\n  </div>\r\n</div>\r\n<script>\r\nfunction esc(s){return String(s==null?'':s).replace(/[&<>\"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}\r\nasync function api(p,b){try{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return await r.json();}catch(e){return{error:String(e)};}}\r\nasync function boot(){const s=await api('/api/status');document.getElementById('ver').textContent='v'+(s.version||'');if(s.unlocked){showApp();}}\r\nfunction showApp(){document.getElementById('lock').style.display='none';document.getElementById('app').style.display='block';loadOwners();load();}\r\nasync function unlock(){const d=await api('/api/unlock',{password:document.getElementById('pw').value});if(d.error){document.getElementById('lockerr').textContent=d.error;return;}showApp();}\r\nasync function loadOwners(){const d=await api('/api/owners');const box=document.getElementById('owners');box.innerHTML='';if(!d.owners||!d.owners.length){box.innerHTML=esc(d.hint||'（无 owner）');return;}\r\n  for(const o of d.owners){const c=document.createElement('span');c.className='owner';c.innerHTML=esc(o.owner)+(o.authorized?' ✅':' 🔒')+' <button class=\"ghost\" data-a=\"'+esc(o.owner)+'\">授权</button><button class=\"danger\" data-r=\"'+esc(o.owner)+'\">吊销</button>';box.appendChild(c);}\r\n  box.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){var owner=b.getAttribute('data-a');if(!confirm('确认由你为用户授权 '+owner+' 读取其私密记忆？授权后将生成只显示一次的 agent_key，请立即保存；同时写入待领取文件供该 AI 新会话领取。AI 不应代为执行该授权操作。'))return;b.disabled=true;api('/api/authorize',{owner:owner}).then(function(d){b.disabled=false;if(!d||d.error){alert((d&&d.error)||'授权失败');loadOwners();return;}if(d.agentKey){showKey(d.agentKey);}loadOwners();});};});\r\n  box.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){if(!confirm('确认吊销 '+b.getAttribute('data-r')+' 的 agent_key？吊销后该智能体立即失去私密读写能力。'))return;api('/api/revoke',{owner:b.getAttribute('data-r')}).then(function(){loadOwners();});};});\r\nfunction showKey(k){var ov=document.createElement('div');ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99';var box=document.createElement('div');box.className='card';box.style.cssText='max-width:640px;word-break:break-all';var t=document.createElement('div');t.innerHTML='<b>agent_key（只显示一次）</b>';var hint=document.createElement('div');hint.className='meta';hint.textContent='请用户立即单独保存。AI 新会话先执行 yotta-memory key status <agent_id>，有 pending 再执行 key claim <agent_id>；默认写入 AI_HOME/.yotta-memory-agent-key，需要时用 --to 或 --agent-key-file 指定。若 key 丢失，可吊销后重新授权；旧 key 会立即校验失败。';var ta=document.createElement('textarea');ta.readOnly=true;ta.value=k;ta.style.cssText='width:100%;height:72px;margin-top:8px;font-family:monospace;font-size:12px';var close=document.createElement('button');close.textContent='我已保存，关闭';close.onclick=function(){ov.remove();};box.appendChild(t);box.appendChild(hint);box.appendChild(ta);box.appendChild(close);ov.appendChild(box);document.body.appendChild(ov);ta.focus();ta.select();}\r\n}\r\nlet off=0,PS=50;\r\nasync function load(){const d=await api('/api/entries',{query:document.getElementById('q').value,offset:off,limit:PS});const meta=document.getElementById('meta');const pg=document.getElementById('pageinfo');if(meta)meta.textContent='共 '+d.count+' 条';const lim=d.limit||PS;const totalPg=Math.max(1,Math.ceil(d.count/lim));const curPg=Math.floor((d.offset||0)/lim)+1;if(pg)pg.textContent='第 '+curPg+' / '+totalPg+' 页';const box=document.getElementById('entries');box.innerHTML='';if(d.entries)for(const e of d.entries){const div=document.createElement('div');div.className='entry';div.innerHTML='<b>['+esc(e.type)+'] '+esc(e.subject)+'</b><div>'+esc(e.statement)+'</div><div class=\"meta\">'+esc(e.file)+' · owner='+esc(e.owner||'-')+' · '+esc(e.updated||e.created||'')+'</div>';box.appendChild(div);}const pb=document.getElementById('prevb'),nb=document.getElementById('nextb');if(pb)pb.disabled=(d.offset||0)<=0;if(nb)nb.disabled=!d.hasMore;}\r\nfunction prevPage(){if(off>=PS){off-=PS;load();}}\r\nfunction nextPage(){off+=PS;load();}\r\nasync function doExport(){const d=await api('/api/export');if(d.error){alert(d.error);return;}const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='yottamemory-view-export.json';a.click();}\r\nasync function showRk(){const d=await api('/api/recovery-key');document.getElementById('rkout').textContent=d.recoveryKey?('恢复钥匙: '+d.recoveryKey):(d.error||'');}\r\nasync function resetPw(){const np1=document.getElementById('np1').value,np2=document.getElementById('np2').value;if(np1!==np2){document.getElementById('pwout').innerHTML='<span class=\"err\">两次新口令不一致</span>';return;}\r\n  const d=await api('/api/reset-password',{currentPassword:document.getElementById('cur').value,newPassword:np1});document.getElementById('pwout').innerHTML=d.error?('<span class=\"err\">'+esc(d.error)+'</span>'):('<span class=\"ok\">'+esc(d.text||'ok')+'</span>');}\r\nboot();\r\n</script></body></html>\r\n";
+const VIEW_HTML = "<!doctype html><html lang=\"zh\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>元忆 · 用户查看平台</title><style>\r\nbody{font-family:system-ui,-apple-system,\"Microsoft YaHei\",sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1f2328;background:#fafafa}\r\nh1{font-size:22px} .card{background:#fff;border:1px solid #e2e2e2;border-radius:10px;padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}\r\nbutton{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;margin:2px;font-size:14px}\r\nbutton.danger{background:#dc2626} button.ghost{background:#e5e7eb;color:#1f2328}\r\ninput,select{padding:8px;border:1px solid #c9c9c9;border-radius:6px;margin:2px;font-size:14px;box-sizing:border-box}\r\ntable{border-collapse:collapse;width:100%;font-size:13px} td,th{border:1px solid #ececec;padding:6px 8px;text-align:left;vertical-align:top}\r\n.owner{display:inline-flex;align-items:center;gap:6px;border:1px solid #ddd;border-radius:8px;padding:5px 10px;margin:4px 6px 4px 0;background:#f6f8fa}\r\n.entry{border-bottom:1px solid #eee;padding:8px 0} .meta{color:#8a8a8a;font-size:12px}\r\n.err{color:#dc2626;margin-top:8px} .ok{color:#16a34a;margin-top:8px}\r\n#app{display:none} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:12px}\r\n</style></head><body>\r\n<h1>元忆 · 用户查看平台 <span id=\"ver\" style=\"font-size:14px;color:#888\"></span></h1>\r\n<div id=\"lock\" class=\"card\">\r\n  <p><b>输入主口令解锁</b>（口令只在本地内存派生，不落盘、不发送远端）。忘口令可在 CLI 用恢复钥匙重设：<code>yotta-memory reset-password --recovery-key &lt;钥匙&gt;</code></p>\r\n  <input type=\"password\" id=\"pw\" placeholder=\"主口令\" style=\"width:260px\">\r\n  <button onclick=\"unlock()\">解锁</button>\r\n  <div class=\"err\" id=\"lockerr\"></div>\r\n</div>\r\n<div id=\"app\">\r\n  <div class=\"card\">\r\n    <b>AI 列表</b>（✅=已授权可读自己私密，🔒=未授权）\r\n    <div class=\"meta\" style=\"margin-top:6px\">「授权」由你（用户）操作：确认后生成只显示一次的 agent_key，请立即单独保存；服务端同时写临时待领取文件 <code>keys/pending/&lt;agent_id&gt;.key</code>，供该 AI 新会话领取，领取成功后自动删除。</div>\r\n    <div id=\"owners\" style=\"margin-top:8px\"></div>\r\n  </div>\r\n  <div class=\"card\">\r\n    <b>记忆</b>\r\n    <input id=\"q\" placeholder=\"搜索关键词\" style=\"width:220px\" onkeydown=\"if(event.key==='Enter'){off=0;load()}\">\r\n    <button onclick=\"off=0;load()\">搜索</button>\r\n    <button class=\"ghost\" onclick=\"doExport()\">导出 JSON</button>\r\n    <button class=\"ghost\" onclick=\"showRk()\">显示恢复钥匙</button>\r\n    <span id=\"rkout\" style=\"font-size:12px;color:#888;margin-left:8px\"></span>\r\n    <div id=\"meta\" style=\"margin-top:10px;font-size:12px;color:#666\"></div>\r\n    <div id=\"entries\" style=\"margin-top:6px\"></div>\r\n    <div id=\"pager\" style=\"margin-top:10px\">\r\n      <button class=\"ghost\" id=\"prevb\" onclick=\"prevPage()\">上一页</button>\r\n      <span id=\"pageinfo\" style=\"font-size:12px;color:#888;margin:0 8px\"></span>\r\n      <button class=\"ghost\" id=\"nextb\" onclick=\"nextPage()\">下一页</button>\r\n    </div>\r\n  </div>\r\n  <div class=\"card\">\r\n    <b>重设口令</b><br>\r\n    <input type=\"password\" id=\"cur\" placeholder=\"当前口令\">\r\n    <input type=\"password\" id=\"np1\" placeholder=\"新口令\">\r\n    <input type=\"password\" id=\"np2\" placeholder=\"确认新口令\">\r\n    <button onclick=\"resetPw()\">重设</button>\r\n    <span id=\"pwout\"></span>\r\n  </div>\r\n</div>\r\n<script>\r\nfunction esc(s){return String(s==null?'':s).replace(/[&<>\"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c];});}\r\nasync function api(p,b){try{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return await r.json();}catch(e){return{error:String(e)};}}\r\nasync function boot(){const s=await api('/api/status');document.getElementById('ver').textContent='v'+(s.version||'');if(s.unlocked){showApp();}}\r\nfunction showApp(){document.getElementById('lock').style.display='none';document.getElementById('app').style.display='block';loadOwners();load();}\r\nasync function unlock(){const d=await api('/api/unlock',{password:document.getElementById('pw').value});if(d.error){document.getElementById('lockerr').textContent=d.error;return;}showApp();}\r\nasync function loadOwners(){const d=await api('/api/owners');const box=document.getElementById('owners');box.innerHTML='';if(!d.owners||!d.owners.length){box.innerHTML=esc(d.hint||'（无 owner）');return;}\r\n  for(const o of d.owners){const c=document.createElement('span');c.className='owner';c.innerHTML=esc(o.owner)+(o.authorized?' ✅':' 🔒')+' <button class=\"ghost\" data-a=\"'+esc(o.owner)+'\">授权</button><button class=\"danger\" data-r=\"'+esc(o.owner)+'\">吊销</button><button class=\"danger\" data-d=\"'+esc(o.owner)+'\">删除</button>';box.appendChild(c);}\n  box.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){var owner=b.getAttribute('data-a');if(!confirm('确认由你为用户授权 '+owner+' 读取其私密记忆？授权后将生成只显示一次的 agent_key，请立即保存；同时写入待领取文件供该 AI 新会话领取。AI 不应代为执行该授权操作。'))return;b.disabled=true;api('/api/authorize',{owner:owner}).then(function(d){b.disabled=false;if(!d||d.error){alert((d&&d.error)||'授权失败');loadOwners();return;}if(d.agentKey){showKey(d.agentKey);}loadOwners();});};});\r\n  box.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){if(!confirm('确认吊销 '+b.getAttribute('data-r')+' 的 agent_key？吊销后该智能体立即失去私密读写能力。'))return;api('/api/revoke',{owner:b.getAttribute('data-r')}).then(function(){loadOwners();});};});\n  box.querySelectorAll('[data-d]').forEach(function(b){b.onclick=function(){var owner=b.getAttribute('data-d');var typed=prompt('彻底删除 '+owner+' 的身份与私密记忆（不可恢复；公共明文保留，其它 AI 不受影响）。请输入完整 ID 确认：');if(typed!==owner)return;b.disabled=true;api('/api/identity-remove',{owner:owner,confirm:typed}).then(function(d){b.disabled=false;if(!d||d.error){alert((d&&d.error)||'删除失败');loadOwners();return;}alert(d.text||'已删除');loadOwners();});};});\nfunction showKey(k){var ov=document.createElement('div');ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99';var box=document.createElement('div');box.className='card';box.style.cssText='max-width:640px;word-break:break-all';var t=document.createElement('div');t.innerHTML='<b>agent_key（只显示一次）</b>';var hint=document.createElement('div');hint.className='meta';hint.textContent='请用户立即单独保存。AI 新会话先执行 yotta-memory key status <agent_id>，有 pending 再执行 key claim <agent_id>；默认写入 AI_HOME/.yotta-memory-agent-key，需要时用 --to 或 --agent-key-file 指定。若 key 丢失，可吊销后重新授权；旧 key 会立即校验失败。';var ta=document.createElement('textarea');ta.readOnly=true;ta.value=k;ta.style.cssText='width:100%;height:72px;margin-top:8px;font-family:monospace;font-size:12px';var close=document.createElement('button');close.textContent='我已保存，关闭';close.onclick=function(){ov.remove();};box.appendChild(t);box.appendChild(hint);box.appendChild(ta);box.appendChild(close);ov.appendChild(box);document.body.appendChild(ov);ta.focus();ta.select();}\r\n}\r\nlet off=0,PS=50;\r\nasync function load(){const d=await api('/api/entries',{query:document.getElementById('q').value,offset:off,limit:PS});const meta=document.getElementById('meta');const pg=document.getElementById('pageinfo');if(meta)meta.textContent='共 '+d.count+' 条';const lim=d.limit||PS;const totalPg=Math.max(1,Math.ceil(d.count/lim));const curPg=Math.floor((d.offset||0)/lim)+1;if(pg)pg.textContent='第 '+curPg+' / '+totalPg+' 页';const box=document.getElementById('entries');box.innerHTML='';if(d.entries)for(const e of d.entries){const div=document.createElement('div');div.className='entry';div.innerHTML='<b>['+esc(e.type)+'] '+esc(e.subject)+'</b><div>'+esc(e.statement)+'</div><div class=\"meta\">'+esc(e.file)+' · owner='+esc(e.owner||'-')+' · '+esc(e.updated||e.created||'')+'</div>';box.appendChild(div);}const pb=document.getElementById('prevb'),nb=document.getElementById('nextb');if(pb)pb.disabled=(d.offset||0)<=0;if(nb)nb.disabled=!d.hasMore;}\r\nfunction prevPage(){if(off>=PS){off-=PS;load();}}\r\nfunction nextPage(){off+=PS;load();}\r\nasync function doExport(){const d=await api('/api/export');if(d.error){alert(d.error);return;}const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='yottamemory-view-export.json';a.click();}\r\nasync function showRk(){const d=await api('/api/recovery-key');document.getElementById('rkout').textContent=d.recoveryKey?('恢复钥匙: '+d.recoveryKey):(d.error||'');}\r\nasync function resetPw(){const np1=document.getElementById('np1').value,np2=document.getElementById('np2').value;if(np1!==np2){document.getElementById('pwout').innerHTML='<span class=\"err\">两次新口令不一致</span>';return;}\r\n  const d=await api('/api/reset-password',{currentPassword:document.getElementById('cur').value,newPassword:np1});document.getElementById('pwout').innerHTML=d.error?('<span class=\"err\">'+esc(d.error)+'</span>'):('<span class=\"ok\">'+esc(d.text||'ok')+'</span>');}\r\nboot();\r\n</script></body></html>\r\n";
 // @generated view-html:end
 // MCP 协议（2026-07-28 无状态 + 2025-11-25 legacy 握手，dual-era）
 const MCP_PROTOCOL_MODERN = '2026-07-28';
@@ -4870,6 +4880,66 @@ function promptPassword(promptText) {
   });
 }
 
+// 交互确认输入（回显明文，用于「输入 id 确认删除」这类非机密输入）。
+function promptLine(promptText) {
+  return new Promise(function (resolve) {
+    const stdin = process.stdin;
+    if (!stdin.isTTY) { resolve(null); return; }
+    process.stdout.write(promptText);
+    let buf = '';
+    function done(abort) {
+      try { stdin.setRawMode(false); } catch (e) {}
+      stdin.pause();
+      stdin.removeListener('data', onData);
+      process.stdout.write('\n');
+      resolve(abort ? null : buf);
+    }
+    function onData(chunk) {
+      const s = String(chunk);
+      for (const c of s) {
+        if (c === '\r' || c === '\n') { done(false); return; }
+        if (c === '\u0003') { done(true); return; }
+        if (c === '\u007f' || c === '\b') {
+          if (buf.length) { buf = buf.slice(0, -1); process.stdout.write('\b \b'); }
+          continue;
+        }
+        buf += c;
+        process.stdout.write(c);
+      }
+    }
+    try { stdin.setRawMode(true); } catch (e) { resolve(null); return; }
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    stdin.on('data', onData);
+  });
+}
+
+async function cmdIdentityRemove(id, opts) {
+  opts = opts || {};
+  const root = userRoot();
+  if (!id) {
+    console.error('请指定 <id>：yotta-memory identity remove <id> [--dry-run] [--yes] [--keep-memories] [--keep-identity]');
+    process.exit(2);
+  }
+  let local = Object.assign({}, opts);
+  if (!local.dryRun && !local.yes && process.stdin.isTTY) {
+    const typed = await promptLine('将彻底删除 ' + id + ' 的身份与私密记忆（不可恢复；公共明文保留）。请输入 ' + id + ' 确认: ');
+    if (typed !== id) {
+      console.log('已取消：未删除任何内容。');
+      process.exit(2);
+    }
+    local.yes = true;
+  }
+  if (!local.dryRun && isEncrypted(root) && !local.password && !local.recoveryKey && !process.env.YOTTA_MEMORY_PASS) {
+    const got = await resolvePasswordInput(local, '主口令: ');
+    if (got.error) { console.error(got.error); process.exit(2); }
+    local.password = got.password;
+  }
+  const result = identityRemoveCore(root, id, local);
+  console.log(result.text);
+  if (result.error) process.exit(result.exitCode || 2);
+}
+
 function readPasswordFromStdin() {
   try {
     const text = fs.readFileSync(0, 'utf8');
@@ -5097,6 +5167,250 @@ function keyRevokeCore(root, owner) {
   if (revokeOwnerKeyCache(root, owner)) removed = true;
   if (!removed) return { error: false, text: owner + ' 无 agent binding（已是未绑定状态）。' };
   return { error: false, text: '已吊销 ' + owner + ' 的 agent_key binding；该 agent 将无法解密其私密。' };
+}
+
+// ---- v0.17.0：彻底删除一个 AI 身份 + 它的私密记忆（只能用户本人执行；公共明文保留）----
+const IDENTITY_REMOVE_STEPS = [
+  ['agents', 'agents.json 身份登记'],
+  ['owner-key', 'keys/<id>.key.enc（owner 密钥与恢复侧文件）'],
+  ['binding', 'keys/bindings/<id>.key.agent（授权绑定）'],
+  ['pending', 'keys/pending/<id>.key（待领取 key）'],
+  ['cache', 'keys/cache/<id>.key（明文缓存）'],
+  ['memories', 'private/<id>/（私密记忆 + owner 索引 + profile / distill）'],
+  ['token', '.server/tokens.json 里的 token'],
+  ['grants', 'grants.json 里的授权引用'],
+  ['reindex', '重建索引并写审计'],
+];
+function countFilesInTree(dir) {
+  let count = 0;
+  (function walk(current) {
+    let items = [];
+    try { items = fs.readdirSync(current, { withFileTypes: true }); } catch (error) { return; }
+    for (const item of items) {
+      const fp = path.join(current, item.name);
+      if (item.isDirectory()) walk(fp);
+      else if (item.isFile()) count++;
+    }
+  })(dir);
+  return count;
+}
+function identityRemoveInventory(root, id) {
+  const agents = loadAgents(root);
+  const grants = loadGrants(root);
+  const tokens = loadTokens(root);
+  const grantRefs = [];
+  for (const key of Object.keys(grants)) {
+    if (key === id) grantRefs.push(key + ' → 其它 owner');
+    if (Array.isArray(grants[key]) && grants[key].indexOf(id) !== -1) grantRefs.push(key + ' → ' + id);
+  }
+  const privateDir = path.join(root, PRIVATE_DIR, id);
+  const hasDir = fs.existsSync(privateDir);
+  return {
+    registered: !!(agents.agents && agents.agents[id]),
+    ownerKey: fs.existsSync(encOwnerKeyPath(root, id)),
+    ownerRecovery: fs.existsSync(encOwnerRecPath(root, id)),
+    binding: fs.existsSync(encAgentBindingPath(root, id)),
+    pending: fs.existsSync(encPendingPath(root, id)),
+    cache: fs.existsSync(encCachePath(root, id)),
+    memories: hasDir,
+    memoryFiles: hasDir ? countFilesInTree(privateDir) : 0,
+    token: Object.prototype.hasOwnProperty.call(tokens, id),
+    grants: grantRefs,
+  };
+}
+function identityRemoveExists(inventory) {
+  return !!(inventory.registered || inventory.ownerKey || inventory.ownerRecovery || inventory.binding
+    || inventory.pending || inventory.cache || inventory.memories || inventory.token || inventory.grants.length);
+}
+// 用户授权证明：加密库要主口令（能解开任一 owner key 或恢复材料）或恢复钥匙；
+// view 已用主口令解锁的会话视为用户本人；明文库无机密凭据可校验，要求显式 --agent user。AI 不得删除身份。
+function verifyIdentityRemoveAuthority(root, id, opts) {
+  if (opts.userUnlocked === true) return { ok: true, mode: 'view-session' };
+  if (isEncrypted(root)) {
+    const candidates = [id].concat(collectOwners(root));
+    if (opts.recoveryKey) {
+      const rk = Buffer.from(String(opts.recoveryKey), 'base64');
+      if (rk.length !== 32) return { ok: false, error: '恢复钥匙须为 32 字节（base64），已拒绝删除。' };
+      for (const owner of candidates) {
+        if (!fs.existsSync(encOwnerKeyPath(root, owner))) continue;
+        try { if (unwrapOwnerKeyRecovery(root, owner, rk)) return { ok: true, mode: 'recovery-key' }; } catch (error) { /* 试下一个 */ }
+      }
+      return { ok: false, error: '恢复钥匙无法解开任何 owner key，已拒绝删除。' };
+    }
+    const password = String(opts.password || process.env.YOTTA_MEMORY_PASS || '');
+    if (!password) {
+      return { ok: false, error: '加密库删除身份必须由用户本人执行：请提供主口令（--password / YOTTA_MEMORY_PASS / 交互输入）或 --recovery-key，或用 yotta-memory view 操作。AI 不得删除身份。' };
+    }
+    const salt = loadSalt(root);
+    if (!salt) return { ok: false, error: '密钥库损坏（缺 keys/salt），无法校验主口令；请改用 --recovery-key。' };
+    const umk = deriveUmk(password, salt);
+    for (const owner of candidates) {
+      if (!fs.existsSync(encOwnerKeyPath(root, owner))) continue;
+      try { if (unwrapOwnerKey(root, owner, umk)) return { ok: true, mode: 'password' }; } catch (error) { /* 试下一个 */ }
+    }
+    let rk = null;
+    try { rk = unwrapRecoveryEnc(root, umk); } catch (error) { rk = null; }
+    if (rk) return { ok: true, mode: 'password' };
+    return { ok: false, error: '主口令不正确（用它解不开任何 owner 密钥与恢复材料），已拒绝删除；也可以改用 --recovery-key。' };
+  }
+  if (String(opts.agent || '').trim() !== 'user') {
+    return { ok: false, error: '明文库没有可校验的用户凭据：请显式声明用户身份（CLI 加 --agent user，或用 yotta-memory view 操作）。AI 不得删除身份。' };
+  }
+  return { ok: true, mode: 'user-claim' };
+}
+function renderIdentityRemoveInventory(id, inventory, opts) {
+  const lines = [
+    '# 删除 AI 身份与私密记忆: ' + id,
+    '',
+    '将删除（私密侧；公共明文 FACT 按口径保留，其它 owner 不受影响）:',
+    '- 身份登记 agents.json: ' + (inventory.registered ? '有' : '无'),
+    '- owner 密钥 keys/' + id + '.key.enc: ' + (inventory.ownerKey ? '有' : '无') + (inventory.ownerRecovery ? '（含恢复侧文件）' : ''),
+    '- 授权绑定 / 待领取 key / 明文缓存: ' + [inventory.binding, inventory.pending, inventory.cache].map(function (x) { return x ? '有' : '无'; }).join(' / '),
+    '- 私密记忆 private/' + id + '/: ' + (inventory.memories ? inventory.memoryFiles + ' 个文件' : '无'),
+    '- token / grants 引用: ' + (inventory.token ? '有 token' : '无 token') + ' / ' + (inventory.grants.length ? inventory.grants.join('；') : '无引用'),
+  ];
+  if (opts.keepMemories) lines.push('- 开关: --keep-memories 只删身份与授权，private/' + id + '/ 保留');
+  if (opts.keepIdentity) lines.push('- 开关: --keep-identity 只删私密记忆与授权，agents.json 登记保留');
+  return lines.join('\n');
+}
+function identityRemoveCore(root, id, opts) {
+  opts = opts || {};
+  root = path.resolve(root || userRoot());
+  if (!isSafeAgentId(id)) {
+    return { error: true, exitCode: 2, removed: [], steps: [], text: '非法 agent ID：只允许单段名称，禁止 /、\\、.. 和控制字符。' };
+  }
+  const inventory = identityRemoveInventory(root, id);
+  if (!identityRemoveExists(inventory)) {
+    return { error: false, exitCode: 0, removed: [], steps: [], inventory: inventory, text: id + ' 不存在（无需处理）。' };
+  }
+  const summary = renderIdentityRemoveInventory(id, inventory, opts);
+  if (opts.dryRun) {
+    return { error: false, exitCode: 0, dryRun: true, removed: [], steps: [], inventory: inventory, text: summary + '\n\n预演结束：未改动任何文件；确认后加 --yes 执行。' };
+  }
+  const authority = verifyIdentityRemoveAuthority(root, id, opts);
+  if (!authority.ok) {
+    return { error: true, exitCode: 2, removed: [], steps: [], inventory: inventory, text: authority.error + '\n\n' + summary };
+  }
+  if (!opts.yes) {
+    return { error: true, exitCode: 2, removed: [], steps: [], inventory: inventory, text: summary + '\n\n需要显式确认：CLI 加 --yes，或在交互提示里输入完整 id。' };
+  }
+  const guard = destructiveGuardCore({
+    root: root,
+    action: 'identity_remove:' + id,
+    snapshotDir: opts.snapshotDir,
+    backupDir: opts.backupDir,
+    allowSameVolumeForTest: !!opts.allowSameVolumeForTest,
+    sameVolumeFn: opts.sameVolumeFn,
+    now: opts.now,
+  });
+  if (guard.error) {
+    return { error: true, exitCode: 2, removed: [], steps: [], inventory: inventory, doctor: guard.doctor, text: guard.text + '\n\n' + summary };
+  }
+
+  const steps = [];
+  function step(stepId, changed, detail) {
+    const meta = IDENTITY_REMOVE_STEPS.filter(function (row) { return row[0] === stepId; })[0];
+    steps.push({ id: stepId, label: meta ? meta[1] : stepId, changed: !!changed, detail: detail || '' });
+  }
+
+  if (opts.keepIdentity) {
+    step('agents', false, '按 --keep-identity 保留');
+  } else {
+    const data = loadAgents(root);
+    if (data.agents && data.agents[id]) {
+      delete data.agents[id];
+      saveAgents(root, data);
+      step('agents', true, '');
+    } else {
+      step('agents', false, '未登记');
+    }
+  }
+
+  let keyChanged = false;
+  for (const fp of [encOwnerKeyPath(root, id), encOwnerRecPath(root, id)]) {
+    if (!fs.existsSync(fp)) continue;
+    fs.unlinkSync(fp);
+    keyChanged = true;
+  }
+  step('owner-key', keyChanged, keyChanged ? 'owner key 已删除（密文不可再解）' : '无密钥文件');
+
+  const bindingPath = encAgentBindingPath(root, id);
+  const bindingChanged = fs.existsSync(bindingPath);
+  if (bindingChanged) fs.unlinkSync(bindingPath);
+  step('binding', bindingChanged, '');
+
+  const pendingChanged = removePendingAgentKey(root, id);
+  step('pending', pendingChanged, '');
+
+  const cacheChanged = revokeOwnerKeyCache(root, id);
+  step('cache', cacheChanged, '');
+
+  const privateDir = path.join(root, PRIVATE_DIR, id);
+  if (opts.keepMemories) {
+    step('memories', false, '按 --keep-memories 保留');
+  } else if (fs.existsSync(privateDir)) {
+    fs.rmSync(privateDir, { recursive: true, force: true });
+    step('memories', true, inventory.memoryFiles + ' 个文件已删除');
+  } else {
+    step('memories', false, '无目录');
+  }
+
+  const tokens = loadTokens(root);
+  if (Object.prototype.hasOwnProperty.call(tokens, id)) {
+    delete tokens[id];
+    saveTokens(root, tokens);
+    step('token', true, '');
+  } else {
+    step('token', false, '无 token');
+  }
+
+  const grants = loadGrants(root);
+  let grantChanged = false;
+  if (Object.prototype.hasOwnProperty.call(grants, id)) {
+    delete grants[id];
+    grantChanged = true;
+  }
+  for (const key of Object.keys(grants)) {
+    if (!Array.isArray(grants[key]) || grants[key].indexOf(id) === -1) continue;
+    grants[key] = grants[key].filter(function (x) { return x !== id; });
+    grantChanged = true;
+  }
+  if (grantChanged) fs.writeFileSync(path.join(root, 'grants.json'), JSON.stringify(grants, null, 2), 'utf8');
+  step('grants', grantChanged, '');
+
+  let reindexed = false;
+  try { buildIndex(root); reindexed = true; } catch (error) { reindexed = false; }
+  const auditOk = appendAudit(root, 'audit', {
+    action: 'identity_remove',
+    ts: new Date().toISOString(),
+    transaction: guard.transaction,
+    owner: id,
+    snapshot: guard.snapshot ? guard.snapshot.id : '',
+    authority: authority.mode,
+    inventory: inventory,
+    removed: steps.filter(function (s) { return s.changed; }).map(function (s) { return s.id; }),
+  });
+  step('reindex', reindexed || auditOk, 'reindex=' + (reindexed ? 'ok' : 'failed') + ' audit=' + (auditOk ? 'ok' : 'failed'));
+
+  const removed = steps.filter(function (s) { return s.changed; }).map(function (s) { return s.id; });
+  const lines = [summary, '', '执行结果（' + removed.length + ' / ' + steps.length + ' 步有改动）:'];
+  for (const row of steps) {
+    lines.push('- [' + (row.changed ? '已删除' : '未改动') + '] ' + row.label + (row.detail ? '：' + row.detail : ''));
+  }
+  lines.push('');
+  lines.push('- 事务快照: ' + (guard.snapshot ? guard.snapshot.id : '(无)'));
+  lines.push('- 公共明文 FACT 属共享事实，本命令不会删除；如需清理请单独用 forget / maintain 处理。');
+  return {
+    error: false,
+    exitCode: 0,
+    removed: removed,
+    steps: steps,
+    inventory: inventory,
+    authority: authority.mode,
+    snapshot: guard.snapshot,
+    transaction: guard.transaction,
+    text: lines.join('\n'),
+  };
 }
 
 function keyClaimCore(root, owner, opts) {
@@ -5437,6 +5751,25 @@ function viewServerCore(root, port, host, opts) {
         removePendingAgentKey(root, owner);
         revokeOwnerKeyCache(root, owner);
         json(200, { ok: true });
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/identity-remove') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return readBody(function (d) {
+        const owner = String((d && d.owner) || '');
+        const confirm = String((d && d.confirm) || '');
+        if (!isSafeAgentId(owner)) return json(400, { error: '非法 owner ID：只允许单段名称，禁止 /、\\、.. 和控制字符。' });
+        if (confirm !== owner) return json(400, { error: '确认串不匹配：请输入完整 agent ID 以确认删除。' });
+        const result = identityRemoveCore(root, owner, {
+          yes: true,
+          userUnlocked: true,
+          snapshotDir: opts.snapshotDir,
+          backupDir: opts.backupDir,
+          allowSameVolumeForTest: !!opts.allowSameVolumeForTest,
+          now: opts.now,
+        });
+        if (result.error) return json(400, { error: result.text });
+        json(200, { ok: true, removed: result.removed, steps: result.steps, text: result.text });
       });
     }
     if (req.method === 'POST' && pathname === '/api/reset-password') {
@@ -8980,6 +9313,8 @@ async function main() {
     else if (a === '--quarantine') opts.quarantine = true;
     else if (a === '--restore') opts.restore = true;
     else if (a === '--yes') opts.yes = true;
+    else if (a === '--keep-memories') opts.keepMemories = true;
+    else if (a === '--keep-identity') opts.keepIdentity = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;
@@ -9068,6 +9403,12 @@ async function main() {
     case 'init': await cmdInit(opts); break;
     case 'whoami': cmdWhoami(opts); break;
     case 'iam': cmdIam(rest[0], opts); break;
+    case 'identity': {
+      const sub = rest[0];
+      if (sub === 'remove') await cmdIdentityRemove(rest[1], opts);
+      else { console.error('identity 子命令: remove <id> [--dry-run] [--yes] [--keep-memories] [--keep-identity] [--password <口令> | --recovery-key <钥匙>]'); process.exit(2); }
+      break;
+    }
     case 'config': {
       const sub = rest[0];
       if (sub === 'set') cmdConfigSet(rest[1], rest[2]);
@@ -9337,6 +9678,10 @@ module.exports = {
   keyBindCore: keyBindCore,
   keyRevokeCore: keyRevokeCore,
   keyClaimCore: keyClaimCore,
+  identityRemoveCore: identityRemoveCore,
+  identityRemoveInventory: identityRemoveInventory,
+  verifyIdentityRemoveAuthority: verifyIdentityRemoveAuthority,
+  IDENTITY_REMOVE_STEPS: IDENTITY_REMOVE_STEPS,
   keyStatusCore: keyStatusCore,
   writeAgentBinding: writeAgentBinding,
   unwrapAgentBinding: unwrapAgentBinding,

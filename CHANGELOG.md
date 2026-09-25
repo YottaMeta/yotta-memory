@@ -35,6 +35,14 @@
 - 凭证类命中的片段一律打码（`[已打码]`），报告与 JSON 都不会回显密钥原文；规则词表不另起一套：每条规则的 `ref` 指向家族规则表的原始规则 id（`PIJ-xxx@yotta-verify` / `github@yotta-secret` / `DEX-001@yotta-security-audit` / `CMD-*@yotta-guardian`），`test/memory-scan.test.js` 在源码仓库内逐条回查这些规则 id 在对应技能里是否仍存在（发布产物内自动跳过该用例）。分工口径：元钥扫源码仓库、元信扫技能包、元忆扫记忆库。
 - 帮助与回归：`--help` 新增 `doctor --baseline` / `--against` / `--template`、`backup drill --probe` 与 `scan` 的逐项中文说明（风险项 `--quarantine` / `--restore` / `--yes` 均带「注意」）；新增 `test/baseline-probe.test.js` 7 项（六类探针 / 身份缺失变红 / 差集缺失清单 / 模板期望 / 模板校验 / 只读 / `drill --probe`）+ `test/memory-scan.test.js` 9 项（七类命中 / 证据行号与出处 / 凭据打码 / 门禁 / 加密跳过与 `--path` / 只读 / 隔离与还原 / 规则出处回查）；全量 `npm test` 212/212 PASS（0.16.7 基线 171 + S2–S5 新增 41）。
 
+**彻底删除 AI 身份与私密记忆（identity remove）**
+
+- 新增 `yotta-memory identity remove <id> [--dry-run] [--yes] [--keep-memories] [--keep-identity]`，并在用户查看平台 `view` 的 AI 列表里加「删除」按钮：某个 AI 不再使用时，一次把它清干净——① `agents.json` 身份登记 ② `keys/<id>.key.enc`（owner 密钥与恢复侧文件）③ `keys/bindings/<id>.key.agent` 授权绑定 ④ `keys/pending/<id>.key` 待领取 key ⑤ `keys/cache/<id>.key` 明文缓存 ⑥ `private/<id>/` 整个目录（私密记忆 + owner 索引 + profile / distill）⑦ `.server/tokens.json` 里的 token ⑧ `grants.json` 里的授权引用 ⑨ 重建索引并写审计。**公共明文 FACT 不删**（共享事实），其它 owner 零影响。
+- 语义：**真删**（不可恢复）。删掉 owner 密钥后，该 owner 现存密文在密码学上也不可再解；需要保留记忆时用 `--keep-memories`（只注销身份与授权），需要保留登记时用 `--keep-identity`（只清私密记忆与授权）。`--dry-run` 先列清单且只读。
+- 权限边界：**只能由用户本人执行**。加密库要求提供主口令（能解开任一 owner key 或恢复材料）或 `--recovery-key`；明文库没有可校验的用户凭据，要求显式 `--agent user`；`view` 里已用主口令解锁的会话视为用户本人。AI 用自身身份调用一律拒绝——AI 不得删除自己或别的 AI 的身份。
+- 破坏性闸门：走既有 `doctor` + 独立备份 + 事务快照口径（未配置独立备份目录、或 doctor 严重项时直接拒绝），执行前写 `transaction_start`、执行后写 `identity_remove` 审计（含快照 id、授权方式、删除清单）。CLI 交互需输入完整 id 确认，或显式 `--yes`；`view` 侧要求确认串等于完整 agent ID。
+- 回归：新增 `test/identity-remove.test.js` 9 项（九步清单真删 / 公共明文与其它 owner 零变化 / `--dry-run` 只读 / 拒绝 AI 身份 / 加密库口令校验 / 明文库用户身份与备份闸门 / 幂等 / 两个保留开关 / view 端点确认串与闸门）；全量 `npm test` 221/221 PASS。
+
 ## v0.16.7 (2026-09-23)
 
 **迁移口令安全 + view 根指纹复用校验**

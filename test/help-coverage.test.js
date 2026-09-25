@@ -15,7 +15,7 @@ const REQUIRED_COMMANDS = [
   'maintain', 'consolidate', 'distill', 'feedback', 'explain', 'reindex',
   'export', 'import', 'iam', 'whoami', 'profile', 'context', 'token',
   'migrate', 'view', 'reset-password', 'key', 'config', 'runtime', 'serve',
-  'lan', 'bench', 'scan', '--version',
+  'lan', 'bench', 'scan', 'identity', '--version',
 ];
 
 const REQUIRED_SUBCOMMANDS = {
@@ -25,6 +25,7 @@ const REQUIRED_SUBCOMMANDS = {
   config: ['set', 'get'],
   runtime: ['install', 'use', 'rollback', 'status', 'list'],
   lan: ['enable', 'disable', 'status'],
+  identity: ['remove'],
 };
 
 const RISK_OPTIONS = ['--no-encrypt', '--unsafe', '--apply', '--force', '--purge', '--allow-same-volume', '--quarantine', '--restore', '--yes'];
@@ -95,7 +96,7 @@ test('HELP_MODEL is the single source for commands, subcommands and options', ()
       subcommandCount += 1;
     }
   }
-  assert.strictEqual(subcommandCount, 30, 'all 30 parser subcommand paths must be represented');
+  assert.strictEqual(subcommandCount, 31, 'all 31 parser subcommand paths must be represented');
 });
 
 test('registered parser options and HELP_MODEL stay bidirectionally consistent', () => {
@@ -132,7 +133,7 @@ test('top-level help remains render-stable', () => {
   const digest = crypto.createHash('sha256').update(stdout).digest('hex');
   assert.strictEqual(
     digest,
-    '34a725357d27516e6c5a76c83580068721b0790586672161a8cfc62b5638cce3',
+    'e242f19825d717662a37e78f9bd8dc3bbc981f2f9ec19ecd8c1d4a44f843197a',
     'top-level help changed; review every command/option line, then update the snapshot digest intentionally'
   );
 });

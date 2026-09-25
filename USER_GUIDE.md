@@ -442,6 +442,7 @@ yotta-memory key claim <本智能体ID>
 | `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>] [--baseline [--against <库路径>] [--template <文件>]]` | 开工可靠性检查（v0.12.2：根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入；v0.16.0：`--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；v0.17.0：`checks.scale` 规模体检 + `--baseline` 恢复 / 迁移六类只读探针，失败列出缺失清单并 exit 2）|
 | `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；保留年/月分层，私密入 `.archive/private/<owner>/<type>/<年>/<月>/`）|
 | `yotta-memory reindex` | 重建索引 |
+| `yotta-memory identity remove <id> [--dry-run] [--yes] [--keep-memories] [--keep-identity] [--password <口令> | --recovery-key <钥匙>]` | 彻底删除一个 AI 身份与私密记忆（v0.17.0：真删身份登记 / owner 密钥 / 授权绑定 / 待领取 key / 缓存 / `private/<id>/` / token / grants 并重建索引 + 写审计；公共明文 FACT 保留、其它 AI 零影响；只能由用户本人执行，`view` 里也有「删除」按钮；破坏性闸门 = doctor + 独立备份 + 事务快照）|
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |
 | `yotta-memory config set <键> <值>` / `config get [--json]` | 记忆库位置与引擎参数（`memory_home` / `embedding_cmd` / `embedding_timeout` / `maintain_archived_utility` / `maintain_decay_halflife_<TYPE>` / `consolidate_*` / `scale_*` 等；`get --json` 同时返回身份状态）|
 | `yotta-memory whoami --agent <id> [--json]` | 查看当前显式身份与登记状态；身份不从环境变量读取；`--json` 返回结构化身份状态 |
