@@ -98,3 +98,12 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 
 ## 18. 怎么证明改了检索 / 索引之后「没变差」？
 用 `yotta-memory bench`。默认按库内条目做确定性抽样生成基线评测集，也可以用 `--evalset <文件>` 固定一组查询（评测集 v1：`{"version":1,"queries":[{"query":"...","expect":["<记忆 id>"]}]}`，记忆 id 写相对路径或文件名都可以）。报告给 Recall@k / MRR / nDCG@k / HitRate + 固定种子 bootstrap 95% 置信区间，并写明库指纹与评测集指纹——同库、同评测集、同参数必须同输出，所以改前跑一次、改后再跑一次就能直接对比。接 CI 用 `--gate mrr=0.6`（不达标 exit 1）；`--ablate` 对比关键词 / 语义 × 融合 / 纯分四组；想要耗时再加 `--timing`（带上后报告标记为不可逐字节复算）。`bench` 全程只读：不重建索引、不写访问计数、不调用外部 embedding 插件；索引缺失或版本过旧时会提示先 `reindex`。
+
+## 19. 命中打点记录了什么？会不会泄露我的查询？
+每条被命中的记忆会在自己的 frontmatter 里记录 `hit_days`（按天 + 信号类型 `s` / `g` / `u` 计数，默认只保留最近 90 天）与 `hit_queries`（只存 `sha256(查询)` 前 8 位指纹 + 次数，默认最多 12 槽，**不保存查询原文**）。字段随记忆文件一起加密 / 备份 / 导出，不外传、不联网。全局关闭：`yotta-memory config set usage_enabled false`；单次关闭：`recall` / `explain` / `context` 加 `--no-usage`。`bench` / `doctor` / `scan` / `baseline` / `export` / `context --audit` 不写打点；跨 owner 私密条目不写（fail-closed）。保留窗口与槽位用 `usage_retention_days` / `usage_query_slots` 调整。
+
+## 20. 怎么知道记忆库该清理哪些条目？
+先跑 `yotta-memory maintain --capacity`（加 `--json` 供自动化读取）。它是只读报告：水位（条目 / 文件字节 / 索引 / 单目录 / 冷启动）、30 / 90 天活跃度、LRU（最久未用）与 LFU（命中最少）淘汰候选、晋升建议（90 天命中 ≥ 3 且不同查询 ≥ 3）。候选会排除 30 天冷却期与常青条目（immutable / BOUND / `evergreen` / `pinned`），并且只给可执行命令，不自动归档或改权重。阈值用 `capacity_warn_bytes` / `capacity_cooldown_days` / `capacity_candidate_limit` / `promotion_min_hits` / `promotion_min_queries` 调整；`doctor` 的规模分级用 `scale_info_*` / `scale_warn_*` 调整。
+
+## 21. consolidate --apply 为什么必须加 --yes？上下文压缩后怎么核对没丢决策？
+`consolidate --apply` 会移动原文并生成摘要，属于破坏性写入：交互式执行需要输入「X 组 / Y 条」确认串，脚本等非交互环境必须显式 `--yes`，否则拒绝执行（exit 2）。先跑 `yotta-memory consolidate`（等价 `--propose`）看结构化报告与回滚命令；原文一直保留在 `.archive/`，可 `consolidate --undo <batch>` 回滚。如果担心上下文被宿主压缩后丢了决策，用 `yotta-memory context --audit --from <压缩内容文件>`（或 `--from -` 读管道）核对：未落盘条目会给出 `remember` 建议命令，`--gate N` 可在未落盘条数超门槛时 exit 1。审计只读，不会自动补写记忆。

@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
-description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照、基线探针、恢复演练、记忆库安全扫描、scan
-version: 0.17.4
+description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照、基线探针、恢复演练、记忆库安全扫描、scan、命中打点、容量水位、--capacity、--propose、上下文压缩审计、context --audit
+version: 0.18.0
 license: MIT
 ---
 
@@ -28,6 +28,9 @@ license: MIT
 - **自我学习 / 自我进化 / 自我提升（v0.8.0）**：`recall` 语义检索（同义词 / 拼音 / 字段加权 / 模糊匹配，零依赖）；`feedback` 显式使用反馈闭环（useful / useless → weight / confidence / feedback_net 演化，越用越懂）；`maintain` 规则层自组织（统一效用分 + 年龄自动归档 / 遗忘候选 / 去重，默认 dry-run，immutable / BOUND 豁免）；`distill` 心理日志蒸馏（统计摘要 / 主题画像 / 知识地图，可选 `--model` 外部模型增强）；`explain` 查看单条记忆效用分项。
 - **召回质量与上下文选择（v0.9.0）**：`recall` 支持可选本地 embedding 插件（`--embedding <command>` / `config set embedding_cmd <command>`）；`context --focus <关键词>` 生成任务感知上下文；`--explain` 输出选择 trace，无插件时自动降级为词法检索。
 - **压缩遗忘（v0.10.0）**：记忆库长期可用不膨胀——`consolidate` 周期摘要压缩（把超龄 + 低效用 + 长期闲置的同主题旧记忆归纳成**带溯源**的摘要，原文整体进 `.archive/`，`--undo` 一键回滚）；`maintain --dedup` 近重复**自动合并**（置信度分档，`--apply` 批量执行高置信组）；效用分时效改为**分类型衰减**（FACT 慢 / PREF 中 / COMMIT 任务类快 / BOUND 不衰减）；`consolidate --batches` 批次审计可查。
+- **命中打点与容量水位（v0.18.0）**：`recall` / `explain` / `feedback --useful` / `context` 记录本地命中元数据（`hit_days` 稀疏日计数 + `hit_queries` 8 位查询指纹，不存查询原文；随文件加密 / 备份 / 导出）；`config set usage_enabled false` 或单命令 `--no-usage` 可关。`maintain --capacity` 只读报告容量水位、30 / 90 天活跃度、LRU / LFU 淘汰候选与晋升建议（只出建议命令，不自动动数据）；`archive` 默认豁免冷却期与 `evergreen` / `pinned` 条目，`--force` 可显式覆盖。开关与边界：只读命令（`bench` / `doctor` / `scan` / `context --audit` 等）不写打点；跨 owner 私密条目 fail-closed。
+- **consolidate 提案闸门（v0.18.0）**：`consolidate` 默认等价 `--propose`，输出结构化候选报告（分组 / 摘要预览 / 归档目标 / 保留期 / 回滚命令），`--json` 可读；`--apply` 需交互确认串，非交互必须显式 `--yes`。首次启用显示一次数据生命周期说明（检查 / 纠正 / 导出 / 停用 / 删除）。
+- **上下文压缩审计（v0.18.0）**：`context --audit [--from <文件|->] [--json] [--gate N]` 核对被压缩掉的内容里有没有还没落盘的决策，输出已落盘 / 未落盘 / 无法判定与 `remember` 建议命令；无 `--from` 时审计当前上下文包的 dropped 清单。只读，不自动补写。
 - **可靠性基线（v0.12.0）**：`init` 对非空记忆库默认拒绝覆盖（`--attach` 接入现有库）；`forget` 先移入 `.trash/` 并写审计；新增 `backup volumes / setup / status / ensure-daily / schedule / drill`（用户确认真实独立卷后默认每日自动备份）与 `backup create / list / doctor / restore`。
 - **可靠性收口（v0.12.2）**：新增 `yotta-memory doctor` 开工检查（根目录 / 密钥库 / 索引 / 身份 / 最近备份）；`maintain --apply`、`consolidate --apply`、`merge`、`archive`、`--purge` 在写入前自动创建事务快照，快照失败或严重检查异常时拒绝写入。
 - **运行时 hook 声明（v0.13.0）**：manifest 声明 `after_milestone` / `remember_commit`；里程碑记忆必须有真实文件路径证据才标 verified，缺证据时输出 `explicit-unverified` + 一次纠偏。
@@ -50,7 +53,7 @@ AI 更新流程：先运行 `yotta-memory --version` 记录当前引擎版本；
 
 1. **开工定向**：先按「开工第一步：确认记忆位置 + 智能体身份」检测记忆库与身份，再运行 `yotta-memory context`（主注入：身份 + 长期理解摘要 + 用户画像 + 近期走廊 + 近期高价值 + 边界 + 承诺 + 会话闭环契约）恢复上下文，需要细节再 `yotta-memory recall <关键词>`；若有明确任务关键词，用 `context --focus <关键词>` 获得任务相关记忆；项目级记忆优先，其次用户级。
 2. **进行中落盘**：出现事实 / 偏好 / 边界 / 纠正 / 承诺信号时立即 `yotta-memory remember <type> <subject> <statement> --verify`，不攒到收工。
-3. **收工归档**：收工前复盘本轮，检查是否留下 COMMIT / 会话小结；有关键结论但未落盘时补写并 `recall` 回读，无长期价值不硬凑。旧记录定期 `yotta-memory maintain --apply`（单条低效用归档）+ 记忆多了周期 `yotta-memory consolidate --apply`（同主题压缩成带溯源摘要，`--undo` 可回滚）。
+3. **收工归档**：收工前复盘本轮，检查是否留下 COMMIT / 会话小结；有关键结论但未落盘时补写并 `recall` 回读，无长期价值不硬凑。旧记录定期 `yotta-memory maintain --apply`（单条低效用归档）+ 记忆多了先 `yotta-memory consolidate`（propose 报告）→ 确认后 `yotta-memory consolidate --apply --yes`（非交互；同主题压缩成带溯源摘要，`--undo` 可回滚）。上下文被宿主压缩过、担心有决策只留在对话里时，把压缩内容喂给 `yotta-memory context --audit --from <文件>` 核对。
 4. **多智能体纪律**：FACT 写入公共区，PREF / BOUND / COMMIT 只写本智能体私密区；不读取其他智能体私密区。**一切读写一律走 `yotta-memory` CLI / MCP 工具**——禁止用 shell（`Get-ChildItem` / `Get-Content` / `cat` / `ls` / `type` 等）直接读或改记忆库目录下的 `.md` / `index.json` / `tokens.json` / `agents.json` / `grants.json` 等文件，否则会绕过权限边界、读到别的智能体私密内容。
 
 ## 会话闭环契约（v0.14.0，AI 必做）

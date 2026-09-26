@@ -93,7 +93,7 @@ ageFile(recentFp, 0);
 const dry = engine.consolidateCore({});
 chk('consolidate dry-run lists summary group', /周期摘要组/.test(dry.text));
 chk('consolidate dry-run changes nothing', engine.collectEntryFiles(pub).length === 5 && !hasSummary(pub));
-const ap = engine.consolidateCore(Object.assign({}, SNAPSHOT_OPTS, { apply: true }));
+const ap = engine.consolidateCore(Object.assign({}, SNAPSHOT_OPTS, { apply: true, yes: true }));
 const batchPub = findBatch(ap.text);
 chk('consolidate apply creates summary (active)', hasSummary(pub));
 chk('consolidate apply archives 3 old originals to .archive/facts', mdCountDeep(path.join(pub, '.archive', 'facts')) === 3);
@@ -112,7 +112,7 @@ engine.rememberCore('PREF', '界面偏好', '偏好深色主题与紧凑布局',
 engine.rememberCore('PREF', '界面偏好', '偏好键盘快捷键操作', Object.assign({}, CODEX, { owner: 'codex' }));
 engine.rememberCore('PREF', '界面偏好', '偏好中文本地化界面', Object.assign({}, CODEX, { owner: 'codex' }));
 ageAll(priv, 700);
-const apPriv = engine.consolidateCore(Object.assign({}, CODEX, SNAPSHOT_OPTS, { apply: true }));
+const apPriv = engine.consolidateCore(Object.assign({}, CODEX, SNAPSHOT_OPTS, { apply: true, yes: true }));
 const batchPriv = findBatch(apPriv.text);
 chk('consolidate private archives into .archive/private/codex/prefs', mdCountDeep(path.join(priv, '.archive', 'private', 'codex', 'prefs')) === 3);
 chk('consolidate private summary lives in private/codex/prefs', activeOf(priv, 'private/codex/prefs/').length === 1 && hasSummary(priv));
@@ -125,13 +125,13 @@ writeMem(ex, 'facts/2020-01-01-0001.md', { type: 'FACT', subject: '红线主题'
 writeMem(ex, 'facts/2020-01-01-0002.md', { type: 'FACT', subject: '红线主题', statement: '不可变红线二', confidence: 1, created: '2020-01-01', updated: '2020-01-01', tags: [], immutable: true, scope: 'public', owner: '', source: '', weight: 1, access_count: 0, feedback_net: 0 });
 writeMem(ex, 'private/codex/bounds/2020-01-01-0001.md', { type: 'BOUND', subject: '边界主题', statement: '边界一', confidence: 1, created: '2020-01-01', updated: '2020-01-01', tags: [], immutable: false, scope: 'private', owner: 'codex', source: '', weight: 0.5, access_count: 0, feedback_net: 0 });
 writeMem(ex, 'private/codex/bounds/2020-01-01-0002.md', { type: 'BOUND', subject: '边界主题', statement: '边界二', confidence: 1, created: '2020-01-01', updated: '2020-01-01', tags: [], immutable: false, scope: 'private', owner: 'codex', source: '', weight: 0.5, access_count: 0, feedback_net: 0 });
-engine.consolidateCore(Object.assign({}, CODEX, SNAPSHOT_OPTS, { apply: true }));
+engine.consolidateCore(Object.assign({}, CODEX, SNAPSHOT_OPTS, { apply: true, yes: true }));
 chk('consolidate exempts immutable + BOUND (nothing archived)', engine.collectEntryFiles(ex).length === 4 && !hasSummary(ex) && mdCountDeep(path.join(ex, '.archive')) === 0);
 
 const solo = useLib('solo');
 engine.rememberCore('FACT', '独苗主题', '只有一条旧记忆', {});
 ageAll(solo, 700);
-const soloRes = engine.consolidateCore(Object.assign({}, SNAPSHOT_OPTS, { apply: true }));
+const soloRes = engine.consolidateCore(Object.assign({}, SNAPSHOT_OPTS, { apply: true, yes: true }));
 chk('consolidate group < min-group -> no summary (leave to maintain)', /无可归纳组/.test(soloRes.text) && engine.collectEntryFiles(solo).length === 1 && !hasSummary(solo));
 
 // ============ S5 maintain archive owner-scoped path + BOUND archive skip ============

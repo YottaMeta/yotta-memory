@@ -126,6 +126,7 @@ test('consolidateCore refuses to apply without a snapshot directory', () => {
   withStore(root, () => {
     const result = memory.consolidateCore({
       apply: true,
+      yes: true,
       minAge: 1,
       minIdle: 1,
       maxUtility: 1,
@@ -144,6 +145,7 @@ test('consolidateCore snapshots before writing summaries', () => {
   withStore(root, () => {
     const result = memory.consolidateCore({
       apply: true,
+      yes: true,
       minAge: 1,
       minIdle: 1,
       maxUtility: 1,

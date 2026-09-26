@@ -207,8 +207,12 @@ test('doctor reports a scale section with defaults', () => {
     assert.strictEqual(typeof report.checks.scale.cold_start_ms, 'number');
     assert.ok(report.checks.scale.index_bytes > 0);
 
-    const warnKeys = Object.keys(report.checks.scale.thresholds).sort();
-    assert.deepStrictEqual(warnKeys, [
+    const thresholdKeys = Object.keys(report.checks.scale.thresholds).sort();
+    assert.deepStrictEqual(thresholdKeys, [
+      'scale_info_cold_start_ms',
+      'scale_info_entries',
+      'scale_info_files_per_dir',
+      'scale_info_index_bytes',
       'scale_warn_cold_start_ms',
       'scale_warn_entries',
       'scale_warn_files_per_dir',

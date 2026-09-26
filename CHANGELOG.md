@@ -1,3 +1,35 @@
+## v0.18.0 (2026-09-26)
+
+第二波 P1：命中打点与容量水位 / consolidate 提案闸门 / 规模分级 / 上下文压缩审计。
+
+**命中打点与容量水位（A3）**
+
+- `recall` / `explain` / `feedback --useful` / `context` 记录本地命中元数据：`hit_days`（按天计数，默认保留 90 天，窗口可配）与 `hit_queries`（`sha256(query)` 前 8 位指纹计数，默认最多 12 槽，不保存查询原文）；字段随记忆文件一起加密 / 备份 / 导出。
+- 开关：`config set usage_enabled false` 全局关闭；`recall` / `explain` / `context` 支持 `--no-usage` 单次关闭。只读命令（`bench` / `doctor` / `scan` / `baseline` / `export` / `context --audit`）不写打点；跨 owner 私密条目不写（fail-closed）。
+- 新 `maintain --capacity [--json]`：只读报告水位（条目 / 记忆文件字节 / 索引字节 / 单目录最大文件数 / 冷启动）、30 / 90 天活跃度、LRU 与 LFU 淘汰候选、晋升建议（90 天命中 ≥ 3 且不同查询 ≥ 3，只打印建议命令）。淘汰候选排除冷却期（默认 30 天）与常青条目（immutable / BOUND / `evergreen` / `pinned`）。
+- `archive` 尊重冷却期与 `evergreen` / `pinned` 标签；`--force` 显式关闭这两项豁免（immutable 与 BOUND 始终豁免）。
+- 修复：加密库私密条目命中后，owner 加密索引在同一次调用内同步，不再滞等到 `reindex`。
+
+**consolidate 授权闸门（A5）**
+
+- `consolidate` 默认等价 `--propose`：输出结构化候选报告（候选统计 / 分组 / 摘要预览 / 归档目标 / 保留期 / 回滚命令），`--json` 供自动化读取；不写盘。
+- `--apply` 新增确认门：交互式需输入「X 组 / Y 条」确认串；非交互必须显式 `--yes`，否则拒绝退出（exit 2）。破坏性闸门（doctor + 独立备份 + 事务快照）与 `--undo <batch>` 回滚不变。
+- 首次启用时显示一次数据生命周期说明（保留期 + 检查 / 纠正 / 导出 / 停用 / 删除），按 `.archive` 审计记录判定，不新建标记文件；AI 不得代替用户执行 `--apply`。
+
+**规模与健康度分级（A6）**
+
+- `doctor` 规模体检新增四个 `scale_info_*` 阈值键与 `metrics[]` 逐项 `ok | info | warning`；文本增加健康度行（正常 / 提示 / 告警 + 最高项）。
+- `doctor.ok` 语义不变（只看 critical）：info / warning 都不锁定破坏性写入；`maintain --capacity` 复用同一套阈值与分级。
+
+**context --audit（A7）**
+
+- `context --audit [--from <文件|->] [--json] [--gate N]`：把被压缩掉的内容（宿主摘要或丢弃段落）喂进来，逐条核对是否已落盘；输出已落盘 / 未落盘 / 无法判定与 `remember` 建议命令；`--gate N` 在未落盘条数超过门槛时 exit 1。
+- 无 `--from` 时审计当前上下文包的 dropped 清单（duplicate / budget_exceeded），给出仍可召回的 `recall` 命令。全程只读：不复制输入、不自动补写、不写打点；只匹配当前身份可读条目。
+
+**测试**
+
+- 新增 `test/usage-hits.test.js` / `test/capacity-report.test.js` / `test/consolidate-propose.test.js` / `test/doctor-scale-levels.test.js` / `test/context-audit.test.js`；`npm test` 262 / 262 通过，帮助快照同步重算。
+
 ## v0.17.4 (2026-09-26)
 
 新增 `rename`：给单条记忆改名，用来消除「平铺 / 分层同序号」冲突。

@@ -95,6 +95,7 @@ yotta-memory iam <id> --name 元忆 --user 用户 --relationship 伙伴   # 自�
 
 - `profile` 引擎零推断：只按类型 / 主题 / 标签归组呈现原文，画像结论由 AI 内部形成，不当面贴标签。
 - `context` 是每次会话开工的主注入，替代裸 `recall`；长期摘要优先、近期走廊按时间取样、近期高价值补位按文件去重；无画像时自动生成一次或降级，不报错；`--budget` 控制动态记忆字符预算，长期摘要 / 身份 / 铁律 / 画像 / 边界 / 承诺 / 闭环契约必保（token 恒定）。
+- `context --audit [--from <文件|->] [--json] [--gate N]`：把宿主压缩后的摘要或丢弃段落喂给元忆，逐条核对是否已落盘；输出已落盘 / 未落盘 / 无法判定与 `remember` 建议命令（只打印、不执行）。`--gate N` 在未落盘条数超过 N 时 exit 1，可接自动化。不传 `--from` 时审计当前上下文包的 dropped 清单。审计全程只读：不复制输入、不自动补写、不写命中打点。
 - `remember --verify` 写后回读校验；`remember --no-hint` 关闭「疑似偏好，建议 PREF」的提示。
 
 ### 记忆库位置：本机智能体如何找到记忆
@@ -218,6 +219,7 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 - `maintain --dedup`：查重复候选并给**置信度分档**——≥0.85 高置信（可自动合并）/ 0.65–0.85 建议手动 / 其余忽略。
 - `maintain --dedup --apply`：自动合并同归属（同类型 + 同 scope/owner）高置信组：保留 confidence 最高的一条，合并 tags / 使用次数 / 反馈，其余移入 `.archive/` 并写批次审计（可 `consolidate --undo <batch>` 回滚）。**注意 `--dedup` 与归档互斥**：`--dedup [--apply]` 只查重 / 自动合并，不会顺手归档单条旧记忆——要归档请单独跑 `maintain --apply`。
 - `maintain --merge A,B`：手动合并两条相似记忆（保留高 confidence，低 confidence 归档）。
+- `maintain --capacity [--json]`：只读容量报告——水位（条目 / 文件字节 / 索引 / 单目录 / 冷启动）、30 / 90 天活跃度、LRU 与 LFU 淘汰候选、晋升建议（≥3 次命中且 ≥3 个不同查询）。候选排除 30 天冷却期与常青条目（immutable / BOUND / `evergreen` / `pinned`）；每条候选 / 建议都带可执行命令，报告本身不改任何文件。
 - 阈值与半衰可用 `config set maintain_archived_utility 0.3` / `config set maintain_decay_halflife_FACT 1000` 等调整（`config get` 查看）；审计在 `.archive/audit-<日期>.jsonl`。
 
 **分类型衰减曲线（v0.10.0）**
@@ -231,7 +233,8 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 
 - 干什么：记忆库长期使用后，同一主题会积累大量「又老又不常用」的旧条目。`consolidate` 把这类旧记忆归纳成 **1 条带溯源的周期摘要**（留在活跃区，recall 能搜到），原文整体进 `.archive/`——主题叙事不丢、记忆库不膨胀。
 - 候选条件（全部满足才收）：created 距今 ≥ 180 天（`--min-age`）∧ 长期闲置 ≥ 90 天（`--min-idle`，最近用过的不收）∧ 效用 ≤ 0.6（`--max-utility`，重要的不收）；同主题 ≥ 2 条成组（`--min-group`）。**immutable / BOUND 永远豁免**。
-- 用法：先 `yotta-memory consolidate` 看预览（列出每组摘要计划与影响条数），确认后 `yotta-memory consolidate --apply` 执行。
+- 用法：先 `yotta-memory consolidate`（默认等价 `--propose`）看结构化报告——每组主题 / 条数 / 天龄区间 / 平均效用 / 摘要预览 / 原文归档目标，以及保留期与回滚命令；确认后 `yotta-memory consolidate --apply` 执行（交互式需输入「X 组 / Y 条」确认串；脚本等非交互环境必须显式加 `--yes`）。首次执行会显示一次数据生命周期说明（检查 / 纠正 / 导出 / 停用 / 删除）。也可以用 `--json` 让自动化读取候选报告。
+- 保留期与回滚：原文移入 `.archive/` 后一直保留，直到你显式 `maintain --purge` 或 `consolidate --undo <batch>`；`--apply` 前的 doctor + 独立备份 + 事务快照闸门不变。
 - 摘要形态：新记忆 `subject = 周期摘要 <主题>（<N>天窗）`、tags 含 `consolidate` / `summary`、正文含主题要点 + **溯源清单**（每条原文路径 / 日期 / confidence），statement 简短可检索。
 - 归属：公共 FACT 摘要进 `facts/`；私密 PREF / COMMIT 摘要进 `private/<owner>/<type>/`（密文库自动加密）。
 - 可选模型提炼：`consolidate --apply --model <命令>`（仅本机 CLI，stdin→stdout 协议同 distill；失败自动降级启发式）。

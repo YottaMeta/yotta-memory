@@ -133,7 +133,7 @@ test('top-level help remains render-stable', () => {
   const digest = crypto.createHash('sha256').update(stdout).digest('hex');
   assert.strictEqual(
     digest,
-    'e881a5baff1b9c258fb0b7be0f7daedadac9811e20e4c0c8a9410d3ce83c07cd',
+    '36e763bfa73b7f07662e42667245c953f3175f15aa97051a19a9b219acd5be56',
     'top-level help changed; review every command/option line, then update the snapshot digest intentionally'
   );
 });
