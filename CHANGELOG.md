@@ -1,3 +1,8 @@
+## v0.17.3 (2026-09-26)
+
+帮助可读性微调：顶层 `--help` 的每个选项去掉逐项重复的「做什么：」前缀，直接写说明正文；
+「什么时候用：」与「注意：」保留不变。仅影响帮助文案输出，命令行为、参数与退出码零变化。
+
 ## v0.17.2 (2026-09-25)
 
 安全修复：私密维护的 owner 门（explain fail-closed / archive / maintain 跨 owner 跳过）。
@@ -311,8 +316,6 @@
 - README 中英：新增「命令输出样例」（init / remember / recall / context 屏幕输出示意）+「常见问题 FAQ 速查」。
 - SKILL.md：新增「常见问题 FAQ（速查）」小节，指向 references/faq.md。
 - 版本四件对齐 0.8.7（package.json / SKILL.md / CHANGELOG / 引擎 VERSION）。
-
-# 更新日志
 
 ## v0.8.5 (2026-08-29)
 
