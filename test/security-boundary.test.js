@@ -47,14 +47,15 @@ m.callTool('remember',{type:'PREF',subject:'b',statement:'y'},{agent:'codex'});
 const rd=m.callTool('distill',{subject:'t'},{agent:'codex'});
 chk('MCP distill (no model) works', /蒸馏/.test(rd.text||''));
 
-// ---- 7. MCP must NOT expose v0.10 management actions (consolidate / maintain / undo / batches stay CLI-only) ----
+// ---- 7. MCP consolidate 只读 propose；apply / undo / batches 必须 fail-closed（v0.18.0 拍板方案 A）----
 const rmc=m.callTool('consolidate',{},{agent:'codex'});
-chk('MCP consolidate not exposed', /未知工具/.test(rmc.text||''));
+chk('MCP consolidate propose（只读）可用', /propose/.test(rmc.text||'') && !/未知工具/.test(rmc.text||''));
+const rma=m.callTool('consolidate',{apply:true,yes:true},{agent:'codex'});
+chk('MCP consolidate --apply 被拒绝', /拒绝/.test(rma.text||'') && !/未知工具/.test(rma.text||''));
 const rmu=m.callTool('consolidate',{undo:'x'},{agent:'codex'});
-chk('MCP consolidate --undo not exposed', /未知工具/.test(rmu.text||''));
+chk('MCP consolidate --undo 被拒绝', /拒绝/.test(rmu.text||''));
 const rmb=m.callTool('consolidate',{batches:true},{agent:'codex'});
-chk('MCP consolidate --batches not exposed', /未知工具/.test(rmb.text||''));
+chk('MCP consolidate --batches 被拒绝', /拒绝/.test(rmb.text||''));
 
 console.log('SECURITY_BOUNDARY_RESULTS:',JSON.stringify({pass:pass,fail:fail}));
 process.exit(fail?1:0);
-

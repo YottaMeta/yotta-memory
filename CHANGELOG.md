@@ -26,9 +26,21 @@
 - `context --audit [--from <文件|->] [--json] [--gate N]`：把被压缩掉的内容（宿主摘要或丢弃段落）喂进来，逐条核对是否已落盘；输出已落盘 / 未落盘 / 无法判定与 `remember` 建议命令；`--gate N` 在未落盘条数超过门槛时 exit 1。
 - 无 `--from` 时审计当前上下文包的 dropped 清单（duplicate / budget_exceeded），给出仍可召回的 `recall` 命令。全程只读：不复制输入、不自动补写、不写打点；只匹配当前身份可读条目。
 
+**MCP 只读 / 预演面**
+
+- MCP 工具面同步本批能力，但只补「只读 + 预演」子集：`archive` 新增 `dryRun`（只预览、零写入）；`maintain` 新增 `capacity`（只读容量水位报告）；`context` 新增 `audit` + `auditText` + `gate`（内联文本审计，**不接受文件路径**，也不读 stdin —— stdio MCP 的 fd 0 是协议流）；新增 `consolidate` 工具，只出 propose 报告。
+- 破坏性覆盖留在本机 CLI，MCP fail-closed：`archive --force` 不入 MCP（透传会被忽略）；`consolidate` 的 `--apply` / `--undo` / `--batches` 在 MCP 侧显式拒绝并提示改走 CLI（A5 闸门口径：AI 不得代替用户执行 `--apply`）。
+- 这样 MCP-first 宿主（只接 MCP 的客户端）也能用上容量水位 / 压缩审计 / 归档预演与压缩候选报告，同时不放开常青豁免与确认闸门。
+
+**修正（2026-09-26 验收回执）**
+
+- `archive --dry-run` 此前被静默吞掉（帮助声明「只预览归档结果」，`archiveCore` 却整段没读 `opts.dryRun`，照常移文件 + 建整库快照 + 写审计）。现在补齐预演分支：只打印将归档清单（文件 / 类型 / 天龄 / 效用 / subject）与跳过统计，**不动文件、不建事务快照、不写审计、不改索引**，输出以「预览（未改动）」开头；CLI 与 MCP（`dryRun`）共用同一条路径。
+- 顺带收口同批两处：`archive` 在没有候选时不再创建整库事务快照（无写入就不建快照）；`archive` 支持 `--json` 输出结构化报告（`mode / candidates / archived / skipped`，此前 `--json` 也被静默吞掉）；`archive` 被破坏性闸门拒绝时明确 exit 2。
+- `context --audit` 的 `remember` 建议命令 subject 改为在非标点边界截断（此前硬截 20 字符会切在「（」中间）。
+
 **测试**
 
-- 新增 `test/usage-hits.test.js` / `test/capacity-report.test.js` / `test/consolidate-propose.test.js` / `test/doctor-scale-levels.test.js` / `test/context-audit.test.js`；`npm test` 262 / 262 通过，帮助快照同步重算。
+- 新增 `test/usage-hits.test.js` / `test/capacity-report.test.js` / `test/consolidate-propose.test.js` / `test/doctor-scale-levels.test.js` / `test/context-audit.test.js` / `test/archive-preview.test.js` / `test/mcp-v018-readonly-surface.test.js`；`npm test` 275 / 275 通过，帮助快照同步重算（`5bde7ffa…`）。
 
 ## v0.17.4 (2026-09-26)
 

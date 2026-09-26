@@ -79,7 +79,7 @@ const HELP_MODEL = [
     { name: 'archive', usage: 'archive [选项]', what: '把低价值或过期记忆归档', when: '库变大，想让旧记忆退出主检索但保留可回溯时', options: [
       helpOption('--days', '<天数>', '按未使用天数判断归档', '想调整「多久没用才归档」时', ''),
       helpOption('--threshold', '<数值>', '按效用分阈值判断归档', '想调整「用得少不少」时', ''),
-      helpOption('--dry-run', '', '只预览归档结果', '先看会动哪些记忆，再决定是否执行时', ''),
+      helpOption('--dry-run', '', '只预览归档结果', '先看会动哪些记忆，再决定是否执行时', '预演只读，不改任何文件'),
       helpOption('--force', '', '关闭冷却期与标签常青豁免', '确认新条目或 evergreen / pinned 条目也要归档时', 'immutable 与 BOUND 仍然豁免；先确认清单'),
     ] },
     { name: 'backup', usage: 'backup <子命令> [选项]', what: '备份、恢复和演练记忆库', when: '配置自动备份、创建备份、恢复误删或验证备份可用时', subcommands: [
@@ -4979,23 +4979,17 @@ function archiveCore(opts) {
   const cooldownDays = capacityNumber(cfg, 'capacity_cooldown_days');
   const root = userRoot();
   if (!fs.existsSync(root)) return { error: false, text: '记忆库不存在。' };
-  const guard = destructiveGuardCore({
-    root: root,
-    action: 'archive',
-    snapshotDir: opts.snapshotDir,
-    backupDir: opts.backupDir,
-    allowSameVolumeForTest: opts.allowSameVolumeForTest,
-    sameVolumeFn: opts.sameVolumeFn,
-    now: opts.now,
-  });
-  if (guard.error) return { error: true, text: guard.text };
+  const dryRun = !!opts.dryRun;
+  const force = !!opts.force;
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-  let moved = 0;
+  const selfAgent = resolveIdentity(opts).id;
+  // v0.18.0 修正：先只读扫描候选与跳过统计，再决定要不要过破坏性闸门 ——
+  // 预演（--dry-run）与「没有候选」两种情况下都不写盘。
+  // 旧行为是进门就建整库快照 + 写审计，且 --dry-run 标志被静默吞掉（照常归档）。
+  const candidates = [];
   let deniedCrossOwner = 0;
   let skippedCooldown = 0;
   let skippedEvergreen = 0;
-  const movedFiles = [];
-  const selfAgent = resolveIdentity(opts).id;
   for (const fp of collectEntryFiles(root)) {
     const owner = ownerFromPrivatePath(root, fp);
     // v0.17.2：只归档自己有权写的条目 —— 旧行为遍历全部 owner，
@@ -5012,29 +5006,86 @@ function archiveCore(opts) {
     if (isNaN(createdTs)) continue;
     const t = (meta.type || 'FACT').toUpperCase();
     if (t === 'BOUND') continue; // v0.10.0 BOUND 豁免归档（边界常驻）
-    if (!opts.force && isEvergreenTagged(meta)) { skippedEvergreen++; continue; }
+    if (!force && isEvergreenTagged(meta)) { skippedEvergreen++; continue; }
     const ageDays = meta.created ? daysBetween(meta.created, today()) : -1;
-    if (!opts.force && ageDays >= 0 && ageDays < cooldownDays) { skippedCooldown++; continue; }
+    if (!force && ageDays >= 0 && ageDays < cooldownDays) { skippedCooldown++; continue; }
     // v0.8.0 统一效用分（盖棺分）替代 vitality
-    if (utilityScore(meta) < threshold && createdTs < cutoff) {
-      const rel = relOf(root, fp);
-      const dest = path.join(root, archiveRelFor(root, rel, t, owner));
-      const destDir = path.dirname(dest);
-      fs.mkdirSync(destDir, { recursive: true });
-      fs.renameSync(fp, dest);
-      movedFiles.push(rel);
-      moved++;
+    const score = utilityScore(meta);
+    if (score < threshold && createdTs < cutoff) {
+      candidates.push({
+        fp: fp,
+        owner: owner,
+        entry: {
+          file: relOf(root, fp),
+          type: t,
+          subject: String(meta.subject || ''),
+          age_days: ageDays,
+          utility: round3(score),
+        },
+      });
     }
   }
-  if (movedFiles.length) removeIndexEntries(root, movedFiles);
-  let text = '已归档 ' + moved + ' 条旧记忆到 ' + path.join(root, ARCHIVE_DIR) + '\n事务快照: ' + guard.snapshot.id;
+  const skippedLines = [];
   if (deniedCrossOwner) {
-    text += '\n跨 owner 私密条目已跳过（' + deniedCrossOwner + ' 条）：请用 --agent <id> 声明自己的身份；只有用户显式授权（--unsafe）才能越界维护。';
+    skippedLines.push('跨 owner 私密条目已跳过（' + deniedCrossOwner + ' 条）：请用 --agent <id> 声明自己的身份；只有用户显式授权（--unsafe）才能越界维护。');
   }
   if (skippedCooldown || skippedEvergreen) {
-    text += '\n因冷却期 / 常青豁免跳过 ' + (skippedCooldown + skippedEvergreen) + ' 条（冷却期 ' + skippedCooldown + ' / 常青 ' + skippedEvergreen + '）；确认要一并归档时加 --force（immutable 与 BOUND 仍豁免）。';
+    skippedLines.push('因冷却期 / 常青豁免跳过 ' + (skippedCooldown + skippedEvergreen) + ' 条（冷却期 ' + skippedCooldown + ' / 常青 ' + skippedEvergreen + '）；确认要一并归档时加 --force（immutable 与 BOUND 仍豁免）。');
   }
-  return { error: false, text: text };
+  const report = {
+    schemaVersion: 1,
+    root: root,
+    mode: dryRun ? 'dry-run' : 'apply',
+    days: days,
+    threshold: threshold,
+    cooldown_days: cooldownDays,
+    force: force,
+    candidates: candidates.map(function (c) { return c.entry; }),
+    archived: [],
+    skipped: { cooldown: skippedCooldown, evergreen: skippedEvergreen, cross_owner: deniedCrossOwner },
+  };
+  if (dryRun) {
+    // 预演只读：不动文件、不建事务快照、不写审计、不改索引。
+    const lines = ['预览（未改动）: 将归档 ' + candidates.length + ' 条旧记忆到 ' + path.join(root, ARCHIVE_DIR)];
+    lines.push('- 判定: 效用 < ' + threshold + ' 且未使用 > ' + days + ' 天' + (force
+      ? '（--force：冷却期与常青标签不再豁免）'
+      : '（冷却期 ' + cooldownDays + ' 天内与 immutable / BOUND / evergreen / pinned 豁免）'));
+    for (const c of candidates) {
+      lines.push('- [' + c.entry.type + '] ' + c.entry.file + '（' + c.entry.age_days + ' 天龄，utility ' + c.entry.utility + '）— ' + c.entry.subject);
+    }
+    if (!candidates.length) lines.push('（无符合条件的记忆）');
+    lines.push('- 预演只读：未创建事务快照、未写审计、未移动文件；去掉 --dry-run 才执行（执行前先过破坏性写入闸门：doctor + 独立备份目录 + 异卷）。');
+    lines.push.apply(lines, skippedLines);
+    return { error: false, dryRun: true, text: lines.join('\n'), report: report };
+  }
+  if (!candidates.length) {
+    // 无候选 = 无写入：不创建整库事务快照，也不写审计。
+    const lines = ['已归档 0 条旧记忆到 ' + path.join(root, ARCHIVE_DIR), '没有符合条件的记忆：未创建事务快照（无写入）。'];
+    lines.push.apply(lines, skippedLines);
+    return { error: false, text: lines.join('\n'), report: report };
+  }
+  const guard = destructiveGuardCore({
+    root: root,
+    action: 'archive',
+    snapshotDir: opts.snapshotDir,
+    backupDir: opts.backupDir,
+    allowSameVolumeForTest: opts.allowSameVolumeForTest,
+    sameVolumeFn: opts.sameVolumeFn,
+    now: opts.now,
+  });
+  if (guard.error) return { error: true, text: guard.text };
+  const movedFiles = [];
+  for (const c of candidates) {
+    const dest = path.join(root, archiveRelFor(root, c.entry.file, c.entry.type, c.owner));
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(c.fp, dest);
+    movedFiles.push(c.entry.file);
+  }
+  if (movedFiles.length) removeIndexEntries(root, movedFiles);
+  report.archived = movedFiles;
+  let text = '已归档 ' + movedFiles.length + ' 条旧记忆到 ' + path.join(root, ARCHIVE_DIR) + '\n事务快照: ' + guard.snapshot.id;
+  if (skippedLines.length) text += '\n' + skippedLines.join('\n');
+  return { error: false, text: text, report: report };
 }
 
 // ---- v0.8.0 自我学习/自我进化/自我提升：feedback / explain / maintain / distill ----
@@ -6622,7 +6673,9 @@ function cmdRename(fileRef, newName, opts) {
 }
 function cmdArchive(opts) {
   const r = archiveCore(opts);
-  console.log(r.text);
+  if (opts.json && r.report) console.log(JSON.stringify(r.report, null, 2));
+  else console.log(r.text);
+  if (r.error) process.exit(2);
 }
 function cmdBackupCreate(opts) {
   const r = backupCreateCore(opts);
@@ -7426,8 +7479,17 @@ function contextAuditCoverage(candidate, entries, minCoverage) {
 function contextAuditRememberCommand(text) {
   const clean = String(text || '').replace(/"/g, "'").trim();
   const specificity = clean.replace(/^[^：:]*[：:]\s*/, '').trim();
-  const subject = (specificity || clean).slice(0, 20);
+  const subject = contextAuditSuggestionSubject(specificity || clean, 20);
   return 'yotta-memory remember FACT "' + subject + '" "' + clean + '" --verify';
+}
+function contextAuditSuggestionSubject(text, max) {
+  // v0.18.0 修正：截断回退到非标点边界，避免切在「（」这类标点中间。
+  const limit = parseInt(max, 10) || 20;
+  const clean = String(text || '').trim();
+  if (clean.length <= limit) return clean;
+  const cut = clean.slice(0, limit);
+  const trimmed = cut.replace(/[\s，。；：、,.;:!?！？（）()【】\[\]「」『』“”'"—–\-]+$/, '');
+  return trimmed.length >= 8 ? trimmed : cut;
 }
 function contextAuditCore(opts) {
   opts = opts || {};
@@ -7452,7 +7514,11 @@ function contextAuditCore(opts) {
   const minCoverage = (rawMin > 0 && rawMin <= 1) ? rawMin : 0.5;
   let input = null;
   let source = '';
-  if (opts.from !== undefined && opts.from !== null && String(opts.from) !== '') {
+  if (opts.text !== undefined && opts.text !== null && String(opts.text) !== '') {
+    // v0.18.0：内联文本输入（MCP 侧用它替代文件路径，避免把 --from 变成任意文件读取通道）。
+    input = String(opts.text);
+    source = 'inline';
+  } else if (opts.from !== undefined && opts.from !== null && String(opts.from) !== '') {
     if (String(opts.from) === '-') {
       input = fs.readFileSync(0, 'utf8');
       source = 'stdin';
@@ -7463,7 +7529,8 @@ function contextAuditCore(opts) {
       source = fp;
     }
   } else {
-    const piped = contextAuditReadStdin();
+    // noStdin：MCP（stdio）的 fd 0 是协议流，绝不能被当成待审计内容读走。
+    const piped = opts.noStdin ? null : contextAuditReadStdin();
     if (piped !== null && piped.trim()) { input = piped; source = 'stdin'; }
   }
   const entries = [];
@@ -8713,17 +8780,18 @@ function mcpTools(profile) {
     { name: 'remember', description: '写入一条记忆。参数 type(FACT/PREF/BOUND/COMMIT)、subject、statement 必填；owner 可选，默认当前智能体', inputSchema: { type: 'object', properties: { type: { type: 'string', description: 'FACT/PREF/BOUND/COMMIT' }, subject: { type: 'string' }, statement: { type: 'string' }, owner: { type: 'string' } }, required: ['type', 'subject', 'statement'] } },
     { name: 'recall', description: '检索记忆。query 可选；type 可选；limit 可选（默认 20）；explain 可选。只返回当前智能体可读记忆；embedding 插件只能由本机 config 配置，远端不可传命令', inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string' }, limit: { type: 'number' }, embeddingTimeout: { type: 'number' }, explain: { type: 'boolean' } } } },
     { name: 'search', description: '检索记忆（同 recall）。query 可选；type 可选；limit 可选（默认 20）；explain 可选；embedding 插件只能由本机 config 配置，远端不可传命令', inputSchema: { type: 'object', properties: { query: { type: 'string' }, type: { type: 'string' }, limit: { type: 'number' }, embeddingTimeout: { type: 'number' }, explain: { type: 'boolean' } } } },
-    { name: 'context', description: '生成开工上下文包。focus 可选；limit 可选；budget 可选；explain 可选；embedding 插件只能由本机 config 配置，远端不可传命令', inputSchema: { type: 'object', properties: { focus: { type: 'string' }, limit: { type: 'number' }, budget: { type: 'number' }, explain: { type: 'boolean' }, embeddingTimeout: { type: 'number' } } } },
+    { name: 'context', description: '生成开工上下文包。focus 可选；limit 可选；budget 可选；explain 可选；audit=true 时改为上下文压缩审计（用 auditText 传待审计文本，只读），gate 控制未落盘条数门槛；embedding 插件只能由本机 config 配置，远端不可传命令', inputSchema: { type: 'object', properties: { focus: { type: 'string' }, limit: { type: 'number' }, budget: { type: 'number' }, explain: { type: 'boolean' }, embeddingTimeout: { type: 'number' }, audit: { type: 'boolean' }, auditText: { type: 'string' }, gate: { type: 'number' } } } },
     { name: 'doctor', description: '开工可靠性检查：检查记忆库根目录、密钥库、索引、身份登记与最近备份；只读，不会修改记忆', inputSchema: { type: 'object', properties: {} } },
     { name: 'forget', description: '删除一条记忆。file 为记忆文件路径（如 facts/2026-08-24-0001.md 或文件名）', inputSchema: { type: 'object', properties: { file: { type: 'string' } }, required: ['file'] } },
-    { name: 'archive', description: '归档旧记忆。days 默认 180；threshold 默认 0.4', inputSchema: { type: 'object', properties: { days: { type: 'number' }, threshold: { type: 'number' } } } },
+    { name: 'archive', description: '归档旧记忆。days 默认 180；threshold 默认 0.4；dryRun=true 只预览、不落盘。破坏性覆盖 --force 仅本机 CLI 提供（MCP 不接受）', inputSchema: { type: 'object', properties: { days: { type: 'number' }, threshold: { type: 'number' }, dryRun: { type: 'boolean' } } } },
     { name: 'reindex', description: '重建索引（手动改 .md 后校正；扫描 facts/prefs/bounds/commits 四目录）', inputSchema: { type: 'object', properties: {} } },
     { name: 'export', description: '导出全部记忆到记忆库内的 JSON 文件。out 可选（默认 <记忆库>/yottamemory-export-<日期>.json；仅限记忆库内路径）', inputSchema: { type: 'object', properties: { out: { type: 'string' } } } },
     { name: 'import', description: '从记忆库内的 JSON 文件导入记忆。src 为文件路径（相对记忆库目录，或记忆库内绝对路径；仅限记忆库内）', inputSchema: { type: 'object', properties: { src: { type: 'string' } }, required: ['src'] } },
     { name: 'agent_info', description: '查看当前智能体身份与登记状态（HTTP 读经 token 校验的 X-Agent-Id；stdio 读 --agent-id 显式参数）。开工先确认「我是谁」，禁止从记忆里抄别人的 ID', inputSchema: { type: 'object', properties: {} } },
     { name: 'profile', description: '生成当前智能体的用户画像（只读聚合 private/<owner>/ 下 PREF/BOUND/COMMIT 原文，零推断，写入 private/<owner>/profile.md）。owner 默认当前智能体', inputSchema: { type: 'object', properties: { owner: { type: 'string' } } } },
     { name: 'feedback', description: '显式使用反馈（自我学习）：useful/useless 调整记忆 weight/confidence/feedback_net。file 为记忆文件路径或文件名', inputSchema: { type: 'object', properties: { file: { type: 'string' }, useful: { type: 'boolean' }, useless: { type: 'boolean' }, reason: { type: 'string' } }, required: ['file'] } },
-    { name: 'maintain', description: '记忆自组织（自我进化）：规则层归档/遗忘/去重预览。默认 dry-run；apply 才执行，purge 才真删', inputSchema: { type: 'object', properties: { apply: { type: 'boolean' }, purge: { type: 'boolean' }, dedup: { type: 'boolean' }, threshold: { type: 'number' }, age: { type: 'number' } } } },
+    { name: 'maintain', description: '记忆自组织（自我进化）：规则层归档/遗忘/去重预览。默认 dry-run；apply 才执行，purge 才真删；capacity=true 改为只读容量水位报告', inputSchema: { type: 'object', properties: { apply: { type: 'boolean' }, purge: { type: 'boolean' }, dedup: { type: 'boolean' }, capacity: { type: 'boolean' }, limit: { type: 'number' }, threshold: { type: 'number' }, age: { type: 'number' } } } },
+    { name: 'consolidate', description: '周期摘要压缩候选报告（只读 propose 模式）。MCP 不提供 --apply / --undo / --batches；执行与回滚请在本机 CLI 由用户确认后运行', inputSchema: { type: 'object', properties: { minAge: { type: 'number' }, minIdle: { type: 'number' }, maxUtility: { type: 'number' }, minGroup: { type: 'number' }, period: { type: 'number' }, type: { type: 'string' } } } },
     { name: 'distill', description: '心理日志蒸馏（自我提升）：统计摘要/主题画像/知识地图。owner 默认当前智能体（MCP 不支持 --model 外部命令）', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, subject: { type: 'string' } } } },
     { name: 'explain', description: '解释单条记忆效用分项（为什么靠前/归档/遗忘）。file 为记忆文件路径或文件名', inputSchema: { type: 'object', properties: { file: { type: 'string' } }, required: ['file'] } },
   ];
@@ -8765,6 +8833,16 @@ function callToolInner(name, args, ctx) {
       return { text: r.text, error: r.error };
     }
     if (name === 'context') {
+      if (args.audit) {
+        // v0.18.0 A7：MCP 侧只接受内联文本（不接受文件路径，避免把 --from 变成任意文件读取通道），
+        // 也不读 stdin（stdio MCP 的 fd 0 是协议流）。
+        const auditText = (args.auditText !== undefined && args.auditText !== null) ? String(args.auditText) : '';
+        if (!auditText.trim()) {
+          return { text: '拒绝: MCP 的 context audit 只接受内联文本（auditText）。审计本地文件或标准输入请在本机 CLI 运行 yotta-memory context --audit --from <文件|->。', error: true };
+        }
+        const r = contextAuditCore({ selfAgent: agent, owner: agent, text: auditText, gate: args.gate, noStdin: true });
+        return { text: r.text, error: r.error };
+      }
       const r = contextCore({
         focus: args.focus ? String(args.focus) : '',
         limit: args.limit || 10,
@@ -8784,7 +8862,7 @@ function callToolInner(name, args, ctx) {
       return { text: r.text, error: r.error };
     }
     if (name === 'archive') {
-      const r = archiveCore({ selfAgent: agent, days: args.days, threshold: args.threshold });
+      const r = archiveCore({ selfAgent: agent, days: args.days, threshold: args.threshold, dryRun: !!args.dryRun });
       return { text: r.text, error: r.error };
     }
     if (name === 'reindex') {
@@ -8841,7 +8919,17 @@ function callToolInner(name, args, ctx) {
       return { text: r.text, error: r.error };
     }
     if (name === 'maintain') {
-      const r = maintainCore({ selfAgent: agent, apply: !!args.apply, purge: !!args.purge, dedup: !!args.dedup, threshold: args.threshold, age: args.age });
+      const r = args.capacity
+        ? capacityCore({ selfAgent: agent, limit: args.limit })
+        : maintainCore({ selfAgent: agent, apply: !!args.apply, purge: !!args.purge, dedup: !!args.dedup, threshold: args.threshold, age: args.age });
+      return { text: r.text, error: r.error };
+    }
+    if (name === 'consolidate') {
+      // v0.18.0 A5：MCP 只读 propose；apply / undo / batches 留在本机 CLI（由用户确认后执行）。
+      if (args.apply || args.undo || args.batches || args.yes) {
+        return { text: '拒绝: MCP 的 consolidate 只提供只读 propose 报告；--apply / --undo / --batches 请在本机 CLI 由用户确认后运行（AI 不得代替用户执行 --apply）。', error: true };
+      }
+      const r = consolidateCore({ selfAgent: agent, apply: false, minAge: args.minAge, minIdle: args.minIdle, maxUtility: args.maxUtility, minGroup: args.minGroup, period: args.period, type: args.type });
       return { text: r.text, error: r.error };
     }
     if (name === 'distill') {

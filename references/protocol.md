@@ -155,7 +155,7 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 | `remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入；同 subject+statement 已存在则更新 `updated` 且 `weight` 取 max；`--source` 记录来源；`--weight` 重要性权重；`--verify` 写后回读校验；`--no-hint` 关闭类型启发式提示 |
 | `recall [关键词] [--type T] [--limit N] [--year <yyyy>] [--agent <id>] [--owner <id>] [--all] [--unsafe]` | 索引+TF 打分匹配；读取分区过滤；越界（读其它智能体私密）默认拒绝，需 grant / identity=user / `--unsafe` 授权；项目级优先；默认 50 条；v0.17.0 起 `--year` 只读该年份分片（可重复传多次，不传即全量）|
 | `forget <文件>` | 删除（按路径或文件名）|
-| `archive [--days 180] [--threshold 0.4]` | 按盖棺分+年龄移入 `.archive/`（`vitality < threshold` 且超过 N 天）|
+| `archive [--days 180] [--threshold 0.4] [--dry-run] [--force] [--json]` | 按效用分 + 年龄移入 `.archive/`（`utility < threshold` 且超过 N 天）；v0.18.0 起默认豁免冷却期与 `evergreen` / `pinned`（`--force` 覆盖，immutable / BOUND 始终豁免）；`--dry-run` 只预览（零写入，不建快照 / 不写审计），无候选时不建整库快照，`--json` 输出结构化报告 |
 | `reindex` | 全量扫描重建 `index.json`（手动改 .md 后校正）|
 | `export [--out f.json]` | 导出全部记忆为 JSON |
 | `import <f.json>` | 从 JSON 导入（幂等）|
@@ -199,8 +199,9 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 ### MCP 工具分组（v0.15.0）
 
 - `yotta-memory serve --stdio --tools core`：只暴露 `context / recall / search / remember`，适合常驻 MCP。
-- `yotta-memory serve --stdio --tools full`：暴露现有 16 个工具，适合诊断、维护、导入导出与自我学习操作。
+- `yotta-memory serve --stdio --tools full`：暴露现有 17 个工具（v0.18.0 起含 `consolidate` 只读候选报告），适合诊断、维护、导入导出与自我学习操作。
 - 未指定 `--tools`：默认 `full`，保持旧配置兼容；`tools/list` 按当前分组返回，`tools/call` 越组调用会被拒绝并提示切换到 full。
+- v0.18.0 只读面（方案 A）：`archive.dryRun` / `maintain.capacity` / `context.audit` + `auditText`（内联文本，不接受文件路径、不读 stdin）/ `consolidate`（只出 propose 报告）。破坏性覆盖（`archive --force`、`consolidate --apply / --undo / --batches`）不暴露给 MCP，调用会被忽略或显式拒绝。
 
 ### remember / iam 扩展（v0.6.0）
 
@@ -267,9 +268,33 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 
 **权限与安全边界（不变式）**
 
-- consolidate / undo / batches 为管理动作，**不进 MCP**；maintain / archive 维持既有 MCP 暴露。
+- consolidate 的只读 propose 报告自 v0.18.0 起进 MCP（`consolidate` 工具，无 apply / undo / batches 入参）；`--apply` / `--undo` / `--batches` 为管理动作，**不进 MCP**（MCP 侧显式拒绝并提示改走本机 CLI，AI 不得代替用户执行 `--apply`）。maintain / archive 维持既有 MCP 暴露，v0.18.0 起追加只读 / 预演入参（`maintain.capacity`、`archive.dryRun`）。
 - 自动合并 / 压缩只写「公共 FACT + 本 owner 私密」；其它 owner 只预览，`--unsafe` 显式授权才处理。
 - 路径全程 `resolveWithinRoot` 校验；.archive 目标由引擎按 rel 生成。
+
+### v0.18.0：命中打点 / 容量水位 / 压缩审计 / 归档预演
+
+**命中打点（usage hit tracking）**
+
+- 写点：`recall`（含 MCP `recall` / `search`）命中、`explain <ref>`、`feedback --useful`、`context` 纳入条目。每次写 `hit_days`（按天聚合，信号 `s` / `g` / `u`，默认保留 90 天）与 `hit_queries`（`sha256(query)` 前 8 位指纹 + 次数，默认 12 槽，不存查询原文）。
+- 开关：`config set usage_enabled false` 全局关闭；`recall` / `explain` / `context` 支持 `--no-usage` 单次关闭。只读命令（`bench` / `doctor` / `scan` / `baseline` / `export` / `context --audit`）不写打点；跨 owner 私密条目 fail-closed（不写对方文件）。
+- 加密库：私密条目命中后 owner 加密索引在同一次调用内同步，不需要额外 `reindex`。
+
+**容量水位与规模分级**
+
+- `maintain --capacity [--json]`：只读报告水位（条目 / 记忆文件字节 / 索引字节 / 单目录最大文件数 / 冷启动）、30 / 90 天活跃度、LRU / LFU 淘汰候选、晋升建议（90 天命中 ≥ `promotion_min_hits` 且不同查询 ≥ `promotion_min_queries`）；候选排除冷却期（`capacity_cooldown_days`）与常青条目（immutable / BOUND / `evergreen` / `pinned`）。
+- `doctor` 规模体检：`scale_warn_*` / `scale_info_*` 双阈值 + `checks.scale.metrics[]` 逐项 `ok | info | warning`；`doctor.ok` 仍只看 critical（info / warning 不锁定破坏性写入）。
+
+**consolidate 提案闸门与上下文压缩审计**
+
+- `consolidate` 默认等价 `--propose`（结构化报告 + `--json`，不写盘）；`--apply` 交互式需输入「X 组 / Y 条」确认串，非交互必须 `--yes`；首次启用显示一次数据生命周期说明。
+- `context --audit [--from <文件|->] [--json] [--gate N]`：核对被压缩掉的内容是否已落盘，输出已落盘 / 未落盘 / 无法判定与 `remember` 建议命令（subject 在非标点边界截断）；无 `--from` 时审计当前上下文包的 dropped 清单。只读。
+
+**archive 预演与无写入短路（2026-09-26 修正）**
+
+- `archive --dry-run`：只打印将归档清单（文件 / 类型 / 天龄 / 效用 / subject）与跳过统计，不动文件、不建事务快照、不写审计、不改索引；输出前缀「预览（未改动）」。
+- 无候选（apply 模式）时不创建整库事务快照；有候选时维持原闸门（doctor + 独立备份 + 异卷 + 事务快照），闸门拒绝时 exit 2。
+- `archive --json`：`{schemaVersion, root, mode: 'dry-run'|'apply', days, threshold, cooldown_days, force, candidates[], archived[], skipped{cooldown,evergreen,cross_owner}}`。
 
 ## 6. 与其他系统互操作
 

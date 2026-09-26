@@ -31,6 +31,8 @@ license: MIT
 - **命中打点与容量水位（v0.18.0）**：`recall` / `explain` / `feedback --useful` / `context` 记录本地命中元数据（`hit_days` 稀疏日计数 + `hit_queries` 8 位查询指纹，不存查询原文；随文件加密 / 备份 / 导出）；`config set usage_enabled false` 或单命令 `--no-usage` 可关。`maintain --capacity` 只读报告容量水位、30 / 90 天活跃度、LRU / LFU 淘汰候选与晋升建议（只出建议命令，不自动动数据）；`archive` 默认豁免冷却期与 `evergreen` / `pinned` 条目，`--force` 可显式覆盖。开关与边界：只读命令（`bench` / `doctor` / `scan` / `context --audit` 等）不写打点；跨 owner 私密条目 fail-closed。
 - **consolidate 提案闸门（v0.18.0）**：`consolidate` 默认等价 `--propose`，输出结构化候选报告（分组 / 摘要预览 / 归档目标 / 保留期 / 回滚命令），`--json` 可读；`--apply` 需交互确认串，非交互必须显式 `--yes`。首次启用显示一次数据生命周期说明（检查 / 纠正 / 导出 / 停用 / 删除）。
 - **上下文压缩审计（v0.18.0）**：`context --audit [--from <文件|->] [--json] [--gate N]` 核对被压缩掉的内容里有没有还没落盘的决策，输出已落盘 / 未落盘 / 无法判定与 `remember` 建议命令；无 `--from` 时审计当前上下文包的 dropped 清单。只读，不自动补写。
+- **MCP 只读面（v0.18.0）**：本批能力在 MCP 侧只补「只读 + 预演」子集——`archive.dryRun`（预演）、`maintain.capacity`（容量水位）、`context.audit` + `auditText`（内联文本审计，不接受文件路径、不读 stdin）、`consolidate`（只出 propose 报告）。破坏性覆盖 `archive --force` 与 `consolidate --apply / --undo` 仍只在 CLI，由用户确认后执行；MCP 侧调用会被忽略或显式拒绝（fail-closed）。
+- **归档预演与 JSON（v0.18.0 修正）**：`archive --dry-run` 只打印将归档清单与跳过统计，不动文件、不建事务快照、不写审计；无候选时不建整库快照；`archive --json` 输出结构化报告（`mode / candidates / archived / skipped`）。
 - **可靠性基线（v0.12.0）**：`init` 对非空记忆库默认拒绝覆盖（`--attach` 接入现有库）；`forget` 先移入 `.trash/` 并写审计；新增 `backup volumes / setup / status / ensure-daily / schedule / drill`（用户确认真实独立卷后默认每日自动备份）与 `backup create / list / doctor / restore`。
 - **可靠性收口（v0.12.2）**：新增 `yotta-memory doctor` 开工检查（根目录 / 密钥库 / 索引 / 身份 / 最近备份）；`maintain --apply`、`consolidate --apply`、`merge`、`archive`、`--purge` 在写入前自动创建事务快照，快照失败或严重检查异常时拒绝写入。
 - **运行时 hook 声明（v0.13.0）**：manifest 声明 `after_milestone` / `remember_commit`；里程碑记忆必须有真实文件路径证据才标 verified，缺证据时输出 `explicit-unverified` + 一次纠偏。
@@ -300,7 +302,7 @@ yotta-memory doctor --json
 | `yotta-memory backup volumes / setup --dir <目录> / status / ensure-daily / schedule enable|disable|status` | 每日自动备份（v0.12.0；只展示实际枚举的异卷、用户确认一次位置后默认每日执行，Windows Task Scheduler / systemd timer / launchd 调度，`serve` 补跑）|
 | `yotta-memory backup create / list / doctor / restore <ID> --to <目录> / drill [<ID>] [--probe] [--against <库路径>]` | 备份、恢复与恢复演练（v0.12.0；独立盘校验、SHA-256 清单、排除 `keys/cache`、恢复默认只写新目录；drill 验证 manifest / 索引 / 测试私密解密；v0.17.0 起 `--probe` 在恢复副本上追加六类基线探针，`--against` 校验备份没有落后于源库）|
 | `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>] [--baseline [--against <库路径>] [--template <文件>]]` | 开工可靠性检查（v0.12.2；根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）；全新空库的缺失 index / agents 降为 info；输出 agent home 发现规则与 `YOTTA_MEMORY_AGENT_HOME` 提示；加 `--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；v0.16.4 起 `--json` 含身份 / agent-key 状态；v0.16.5 起顶层含 `schemaVersion` / `encryption` / `migration_required`；v0.17.0 起 `checks.scale` 给规模体检（条数 / 单目录文件数 / 索引体积 / 冷启动耗时，阈值 `scale_*`），`--baseline` 追加恢复 / 迁移基线探针（结果进 `checks.baseline`，失败 exit 2）|
-| `yotta-memory archive [--days 180] [--threshold 0.35]` | 归档旧记忆（v0.8.0 统一效用分 + v0.10.0 分类型衰减；immutable / BOUND 豁免；私密归档入 `.archive/private/<owner>/<type>/`；阈值默认读 config `maintain_archived_utility`）|
+| `yotta-memory archive [--days 180] [--threshold 0.35] [--dry-run] [--force] [--json]` | 归档旧记忆（v0.8.0 统一效用分 + v0.10.0 分类型衰减；immutable / BOUND 豁免；v0.18.0 起默认豁免冷却期与 `evergreen` / `pinned`，`--force` 显式覆盖；私密归档入 `.archive/private/<owner>/<type>/`；阈值默认读 config `maintain_archived_utility`）。`--dry-run` 只预览、零写入（不动文件 / 不建快照 / 不写审计），无候选时不建整库快照，`--json` 输出结构化报告 |
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
 | `yotta-memory config set memory_home <目录>` / `config set backup_dir <目录>` / `config get [--json]` | 持久记住 / 查看记忆库位置与备份目录（`~/.yottamemory/config.json`；`get --json` 同时返回身份状态）；数值类键含 `maintain_*` / `consolidate_*` / `scale_*` / `backup_max_age_hours` |
@@ -568,7 +570,7 @@ MCP 模式由宿主显式声明身份：stdio 用 `--agent-id <agent_id> --agent
 4. 按当前智能体机制重载 MCP（必要时请用户重启会话）；
 5. 用 MCP tools 读写记忆。
 
-> MCP 工具集与 CLI 一致：remember / recall / search / forget / archive / reindex / export / import / profile；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露；MCP export/import 路径限记忆库内、distill 不支持 `--model`（仅本地 CLI）。
+> MCP 工具集（full 17 个）：remember / recall / search / context / doctor / forget / archive / reindex / export / import / agent_info / profile / feedback / maintain / distill / explain / consolidate；管理动作（init / config / token / lan / serve）不进 MCP，token 管理不远程暴露；MCP export/import 路径限记忆库内、distill 不支持 `--model`（仅本地 CLI）。v0.18.0 起 MCP 只补只读 / 预演能力（`archive.dryRun`、`maintain.capacity`、`context.audit` + 内联 `auditText`、`consolidate` 只出 propose）；破坏性覆盖（`archive --force`、`consolidate --apply / --undo`）只在 CLI，MCP 侧忽略或拒绝。
 
 > 工具分组（v0.15.0）：常驻场景用 `yotta-memory serve --stdio --tools core --agent-id <id> --agent-key-file <path>`，只暴露 `context / recall / search / remember`；需要诊断、维护、导入导出时用 `--tools full`。调用不属于当前分组的工具会返回明确提示，不会静默执行。
 

@@ -35,7 +35,7 @@
 - **越用越懂（v0.14.0）**：AI 按「记忆守则」主动捕获信号，`context` 开工注入长期摘要、画像、近期走廊、边界、承诺与会话闭环契约——用得越久越懂你。
 - **自我学习 / 自我进化 / 自我提升（v0.8.0 + v0.9.0）**：`recall` 语义检索（同义词 / 拼音 / 字段加权 / 模糊，v0.9.0 可选本地 embedding 插件）+ `feedback` 使用反馈闭环 + `maintain` 规则层自组织 + `distill` 心理日志蒸馏——记忆系统会自己整理、提炼、演化。
 - **可靠性基线（v0.12.0 / v0.12.2）**：`init` 对已有库拒绝覆盖；`forget` 进回收区；`backup volumes/setup/status/ensure-daily/schedule/drill` 在用户确认真实独立卷后默认每日自动备份，并提供校验、恢复与恢复演练；`doctor` 开工检查风险，破坏性操作写入前自动创建事务快照。
-- **MCP 工具分组（v0.15.0）**：`serve --tools core` 只暴露 `context / recall / search / remember`，适合常驻；`--tools full` 提供完整诊断与维护工具。未指定时默认 `full`。
+- **MCP 工具分组（v0.15.0）**：`serve --tools core` 只暴露 `context / recall / search / remember`，适合常驻；`--tools full` 提供完整诊断与维护工具。未指定时默认 `full`。v0.18.0 起 MCP 追加只读 / 预演能力（`archive.dryRun`、`maintain.capacity`、`context.audit` + 内联 `auditText`、`consolidate` 只出 propose 报告）；`archive --force` 与 `consolidate --apply / --undo` 只在命令行，MCP 调用会被忽略或拒绝。
 
 ## 2. 安装（CLI + 技能）
 
@@ -221,6 +221,12 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 - `maintain --merge A,B`：手动合并两条相似记忆（保留高 confidence，低 confidence 归档）。
 - `maintain --capacity [--json]`：只读容量报告——水位（条目 / 文件字节 / 索引 / 单目录 / 冷启动）、30 / 90 天活跃度、LRU 与 LFU 淘汰候选、晋升建议（≥3 次命中且 ≥3 个不同查询）。候选排除 30 天冷却期与常青条目（immutable / BOUND / `evergreen` / `pinned`）；每条候选 / 建议都带可执行命令，报告本身不改任何文件。
 - 阈值与半衰可用 `config set maintain_archived_utility 0.3` / `config set maintain_decay_halflife_FACT 1000` 等调整（`config get` 查看）；审计在 `.archive/audit-<日期>.jsonl`。
+
+**归档（archive）**
+
+- `archive [--days 180] [--threshold 0.35] [--dry-run] [--json]`：把「效用低于阈值且超过 N 天没用」的旧记忆移入 `.archive/`（可恢复）。`--dry-run` 只打印将归档清单（文件 / 类型 / 天龄 / 效用 / subject）与跳过统计，**不动文件、不建事务快照、不写审计**。
+- 默认豁免：冷却期（`config set capacity_cooldown_days`，默认 30 天）与常青条目（immutable / BOUND / `evergreen` / `pinned`）。`--force` 只覆盖冷却期与标签常青，immutable 与 BOUND 始终豁免。
+- 真正执行前先过破坏性写入闸门（doctor + 独立备份 + 异卷）并创建事务快照；没有候选时不会建快照。`--json` 输出结构化报告（`mode / candidates / archived / skipped`），便于自动化读取。
 
 **分类型衰减曲线（v0.10.0）**
 
@@ -445,7 +451,7 @@ yotta-memory key claim <本智能体ID>
 | `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--year <yyyy>] [--explain] [--embedding <命令>]` | 开工上下文包（身份+铁律+画像+长期摘要+任务相关记忆+近期走廊+近期高价值+边界+承诺+会话闭环契约；--budget 控制动态记忆字符预算；--focus 任务聚焦；v0.17.0 起 `--year` 只装载指定年份；--explain 输出 included/dropped 选择解释）|
 | `yotta-memory forget <文件>` | 删除一条记忆 |
 | `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>] [--baseline [--against <库路径>] [--template <文件>]]` | 开工可靠性检查（v0.12.2：根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入；v0.16.0：`--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；v0.17.0：`checks.scale` 规模体检 + `--baseline` 恢复 / 迁移六类只读探针，失败列出缺失清单并 exit 2）|
-| `yotta-memory archive [--days 180] [--threshold 0.4]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免；保留年/月分层，私密入 `.archive/private/<owner>/<type>/<年>/<月>/`）|
+| `yotta-memory archive [--days 180] [--threshold 0.4] [--dry-run] [--force] [--json]` | 归档旧记忆（分类型衰减效用分 + 年龄；immutable / BOUND 豁免，默认豁免冷却期与 `evergreen` / `pinned`、`--force` 覆盖；保留年/月分层，私密入 `.archive/private/<owner>/<type>/<年>/<月>/`）；`--dry-run` 零写入预览 |
 | `yotta-memory reindex` | 重建索引 |
 | `yotta-memory identity remove <id> [--dry-run] [--yes] [--keep-memories] [--keep-identity] [--password <口令> | --recovery-key <钥匙>]` | 彻底删除一个 AI 身份与私密记忆（v0.17.0：真删身份登记 / owner 密钥 / 授权绑定 / 待领取 key / 缓存 / `private/<id>/` / token / grants 并重建索引 + 写审计；公共明文 FACT 保留、其它 AI 零影响；只能由用户本人执行，`view` 里也有「删除」按钮；破坏性闸门 = doctor + 独立备份 + 事务快照）|
 | `yotta-memory export [--out 文件.json]` / `import <文件.json>` | 导出 / 导入 |
@@ -457,8 +463,8 @@ yotta-memory key claim <本智能体ID>
 | `yotta-memory runtime list / install <tarball|版本> [--from-current] [--force] / use <版本> [--restart] / rollback [--restart] / status` | 运行时稳定入口（runtime.json + versions + current；安装 / 切换 / 回滚 / 查看漂移；`--restart` 尝试重启受管 server）|
 | `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务/用户级 Startup 静默自启；Linux：systemd 用户单元/用户 crontab @reboot）|
 | `yotta-memory feedback <文件|主题> --useful|--useless [--reason <原因>] [--undo]` | 使用反馈（v0.8.0：useful/useless 调 weight/confidence/feedback_net；--undo 回滚）|
-| `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--dedup --apply] [--merge A,B]` | 记忆自组织（v0.8.0 + v0.10.0 自动合并）：归档 / 遗忘候选 / 置信度查重 / 自动合并；默认 dry-run，`--dedup` 与归档互斥 |
-| `yotta-memory consolidate [--min-age N] [--min-idle N] [--max-utility N] [--min-group N] [--period N] [--type T] [--model <cmd>] [--apply] [--undo <batch>] [--batches]` | 周期摘要压缩（v0.10.0：同主题旧记忆 → 带溯源摘要 + 原文归档；默认 dry-run；`--undo <batch>` 回滚批次；`--batches` 查批次）|
+| `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--dedup --apply] [--merge A,B] [--capacity [--json]]` | 记忆自组织（v0.8.0 + v0.10.0 自动合并 + v0.18.0 容量水位）：归档 / 遗忘候选 / 置信度查重 / 自动合并；默认 dry-run，`--dedup` 与归档互斥；`--capacity` 只读报告水位、LRU / LFU 候选与晋升建议 |
+| `yotta-memory consolidate [--min-age N] [--min-idle N] [--max-utility N] [--min-group N] [--period N] [--type T] [--model <cmd>] [--apply] [--yes] [--undo <batch>] [--batches]` | 周期摘要压缩（v0.10.0 起：同主题旧记忆 → 带溯源摘要 + 原文归档；v0.18.0 起默认等价 `--propose` 只出报告，`--apply` 非交互必须 `--yes`，`--undo <batch>` 回滚批次，`--batches` 查批次）|
 | `yotta-memory distill [--owner <id>] [--subject <主题>] [--model <cmd>] [--out <路径>]` | 心理日志蒸馏（v0.8.0：统计摘要 / 主题画像 / 知识地图）|
 | `yotta-memory explain <文件|主题>` | 查看单条记忆效用分项（v0.8.0）|
 | `yotta-memory bench [--evalset <文件>] [--k N] [--seed N] [--bootstrap N] [--ablate] [--gate <指标>=<数值>] [--timing] [--year <yyyy>] [--json] [--out <文件>]` | 可复算检索基准评测（v0.17.0：默认按库内条目确定性抽样；`--evalset` 指定评测集 v1；指标 Recall@k / MRR / nDCG@k / HitRate + 95% 置信区间；报告含库指纹、默认不含墙钟时间；`--ablate` 消融对比；`--gate` 供 CI；`--timing` 附带耗时后不可逐字节复算；全程只读）|

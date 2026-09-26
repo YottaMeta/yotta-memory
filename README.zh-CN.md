@@ -23,7 +23,7 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
-> 🆕 **v0.18.0（命中打点 + 容量水位 + consolidate 提案闸门 + 上下文压缩审计）**：`recall` / `explain` / `feedback --useful` / `context` 记录本地命中元数据（`hit_days` 默认保留 90 天；`hit_queries` 只存查询 8 位指纹、最多 12 槽，不存原文；随文件加密 / 备份 / 导出），`config set usage_enabled false` 或命令级 `--no-usage` 可关；只读命令与跨 owner 私密条目不写。`maintain --capacity` 只读报告容量水位、30 / 90 天活跃度、LRU / LFU 淘汰候选（冷却期 30 天 + immutable / BOUND / evergreen / pinned 豁免）与晋升建议（≥3 次命中且 ≥3 个不同查询，只出建议命令）；`archive` 默认豁免冷却期与标签常青，`--force` 可显式覆盖。`consolidate` 默认等价 `--propose`（结构化报告 + `--json`），`--apply` 交互式需确认串、非交互必须 `--yes`；首次启用显示一次数据生命周期说明。`doctor` 规模体检新增 `scale_info_*` 与逐项 `ok / info / warning` 分级（`doctor.ok` 仍只看 critical）。新增 `context --audit [--from <文件|->] [--json] [--gate N]`：核对被压缩掉的内容是否已落盘，输出未落盘清单与 `remember` 建议命令，只读、不自动补写。上一版 v0.17.4：`rename` 消除平铺 / 分层同序号冲突（跨布局 fail-closed + 破坏性闸门 + 审计）。
+> 🆕 **v0.18.0（命中打点 + 容量水位 + consolidate 提案闸门 + 上下文压缩审计）**：`recall` / `explain` / `feedback --useful` / `context` 记录本地命中元数据（`hit_days` 默认保留 90 天；`hit_queries` 只存查询 8 位指纹、最多 12 槽，不存原文；随文件加密 / 备份 / 导出），`config set usage_enabled false` 或命令级 `--no-usage` 可关；只读命令与跨 owner 私密条目不写。`maintain --capacity` 只读报告容量水位、30 / 90 天活跃度、LRU / LFU 淘汰候选（冷却期 30 天 + immutable / BOUND / evergreen / pinned 豁免）与晋升建议（≥3 次命中且 ≥3 个不同查询，只出建议命令）；`archive` 默认豁免冷却期与标签常青，`--force` 可显式覆盖。`consolidate` 默认等价 `--propose`（结构化报告 + `--json`），`--apply` 交互式需确认串、非交互必须 `--yes`；首次启用显示一次数据生命周期说明。`doctor` 规模体检新增 `scale_info_*` 与逐项 `ok / info / warning` 分级（`doctor.ok` 仍只看 critical）。新增 `context --audit [--from <文件|->] [--json] [--gate N]`：核对被压缩掉的内容是否已落盘，输出未落盘清单与 `remember` 建议命令，只读、不自动补写。`archive --dry-run` 只预览不改库（不动文件 / 不建事务快照 / 不写审计），无候选时不建整库快照，`archive --json` 输出结构化报告；MCP 侧只补只读 / 预演能力（`archive.dryRun`、`maintain.capacity`、`context.audit` + 内联 `auditText`、`consolidate` 只出 propose 报告），`archive --force` 与 `consolidate --apply / --undo` 仍只在命令行。上一版 v0.17.4：`rename` 消除平铺 / 分层同序号冲突（跨布局 fail-closed + 破坏性闸门 + 审计）。
 > 🆕 **v0.17.4（rename 改名）**：`yotta-memory rename <记忆 id> <YYYY-MM-DD-NNNN.md>` 给单条记忆改名，用于消除「平铺 / 分层同序号」冲突。身份键 = 类型 + owner + 文件名，跨两种布局检查；目标名被占用或文件已存在一律拒绝（fail-closed）。走破坏性闸门（doctor + 独立备份 + 事务快照），改名后重建索引并写 `rename` 审计；`--dry-run` 只预览零写入。仅 CLI 提供，MCP 工具面不变。
 > 🆕 **v0.17.3（帮助可读性）**：顶层 `--help` 不再逐项重复「做什么：」前缀——每条命令与选项直接写说明正文，「什么时候用：」与「注意：」保留不变。仅帮助文案变化，命令、参数与退出码零改动。
 > 🆕 **v0.17.2（私密维护的 owner 门）**：`explain` 对其它 owner 的私密条目改为直接拒绝，不再打印 subject / statement；`archive` / `maintain` 跳过不属于当前身份的私密条目（用 `--agent <id>` 声明身份，只有用户显式 `--unsafe` 才越界）。安装器加固：拒绝对符号链接目标写入，不做整目录删除。上一版 v0.17.1：`view` 删除 AI 身份时确认 ID 输入错误会立即提示「ID 不匹配，请输入完整 agent ID」，不再静默返回；用户取消仍保持静默，后端确认校验与破坏性操作闸门不变。
@@ -85,10 +85,10 @@
 | **检索与生命周期** | 语义检索（v0.8.0：同义词 / 拼音 / 字段加权 / 模糊，零依赖）+ 效用分融合排序；统一效用分（盖棺分）规则层自动归档 / 遗忘候选 / 去重（`maintain`，默认 dry-run），记忆库越用越精简 |
 | **压缩遗忘（v0.10.0）** | `consolidate` 周期摘要压缩（旧记忆 → 带溯源摘要 + 原文归档，可回滚）+ 近重复自动合并（置信度 + `--apply`）+ 分类型衰减（FACT 730 / PREF 365 / COMMIT 90 天半衰，BOUND 不衰减）+ 批次审计（`--batches` / `--undo`），长期使用不膨胀、主题不丢 |
 | **越用越懂（v0.14.0）** | `context` 长期摘要优先 + `profile` 画像聚合（零推断）+ 近期走廊（按时间）+ 近期高价值补位 + 边界 / 承诺 + 会话闭环契约，记忆随使用成长 |
-| **容量水位与压缩审计（v0.18.0）** | 命中打点（查询只存指纹，可关）+ `maintain --capacity` 只读水位 / LRU·LFU 候选 / 晋升建议 + `consolidate` propose → `--apply --yes` 确认闸门 + `context --audit` 上下文压缩审计（未落盘决策清单） |
+| **容量水位与压缩审计（v0.18.0）** | 命中打点（查询只存指纹，可关）+ `maintain --capacity` 只读水位 / LRU·LFU 候选 / 晋升建议 + `consolidate` propose → `--apply --yes` 确认闸门 + `context --audit` 上下文压缩审计（未落盘决策清单）+ `archive --dry-run` 零写入预演；MCP 侧提供同一批能力的只读 / 预演子集 |
 | **生态分发** | GitHub + npm 双源同步发布；npx / git clone / Download ZIP / install.sh 四种安装方式，覆盖 17+ 类智能体目录 |
 | **便携记忆盘（随盘走）** | 记忆库即引擎：装在硬盘 / 主机上，插上即恢复全部记忆；引擎主机只需装 CLI 当存放点，无需装任何 AI 智能体 |
-| **局域网共享与自启** | 每智能体独立 token（Bearer + X-Agent-Id + X-Agent-Key）鉴权、可吊销；`lan enable` 注册开机自启（Windows：优先计划任务，非管理员自动降级用户级 Startup 静默自启；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）；MCP 工具集与 CLI 一致（8 个工具），管理动作不远程暴露 |
+| **局域网共享与自启** | 每智能体独立 token（Bearer + X-Agent-Id + X-Agent-Key）鉴权、可吊销；`lan enable` 注册开机自启（Windows：优先计划任务，非管理员自动降级用户级 Startup 静默自启；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）；MCP 工具集按 core（4 个）/ full（17 个）分组暴露，管理动作（init / config / token / lan / serve）与破坏性覆盖（`archive --force`、`consolidate --apply / --undo`）不远程暴露 |
 | **本地 / 局域网双模式** | 本地 `serve --stdio` 零进程、按需拉起（无常驻）；局域网 streamable HTTP 常驻——两种模式可并存、按需选用 |
 
 ## 功能详解

@@ -143,3 +143,16 @@ test('context --audit without --from audits the dropped context list instead', (
     assert.ok(/丢弃/.test(r.stdout), 'audit fallback must describe the dropped context list: ' + r.stdout);
   });
 });
+
+test('context --audit 的 remember 建议 subject 不在标点中间截断', () => {
+  withStore((root) => {
+    const input = writeInput(root, 'audit-truncate.md', '# 决策\n- 决定采用 Rust 重写洞觅的扫描内核（这条没有落盘）\n');
+    const r = memory.contextCore({ audit: true, from: input, selfAgent: 'codex' });
+    assert.strictEqual(r.error, false, r.text);
+    const cmd = (r.text.match(/yotta-memory remember FACT "[^"]*"/) || [])[0];
+    assert.ok(cmd, 'missing items must carry a remember suggestion: ' + r.text);
+    const subject = /FACT "([^"]*)"/.exec(cmd)[1];
+    assert.ok(subject.length > 0 && subject.length <= 20, 'subject 必须控制在 20 字符内: ' + subject);
+    assert.ok(!/[\s，。；：、,.;:!?！？（）()【】\[\]「」『』“”'"—–\-]$/.test(subject), 'subject 不应以标点结尾: ' + subject);
+  });
+});
