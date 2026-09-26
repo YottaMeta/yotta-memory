@@ -25,7 +25,7 @@ const net = require('net');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.17.3';
+const VERSION = '0.17.4';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path']);
 const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--yes', '--keep-memories', '--keep-identity']);
 
@@ -69,6 +69,11 @@ const HELP_MODEL = [
     { name: 'forget', usage: 'forget <记忆 id> [选项]', what: '删除一条记忆', when: '确认某条记忆不应继续保留时', options: [
       helpOption('--reason', '<原因>', '记录删除原因', '需要留下为什么删除的审计线索时', ''),
       helpOption('--unsafe', '', '跳过越界删除保护', '只有获得明确授权处理隔离库时', '会放宽删除边界，误删风险很高'),
+    ] },
+    { name: 'rename', usage: 'rename <记忆 id> <新文件名> [选项]', what: '给单条记忆改名（内容与身份不变）', when: '平铺 / 分层出现同序号冲突、或想整理文件名时', options: [
+      helpOption('--dry-run', '', '只预览，不改库', '想先确认改到哪个文件名时', '预演只读，不改任何文件'),
+      helpOption('--reason', '<原因>', '记录改名原因', '需要留下为什么改名的审计线索时', ''),
+      helpOption('--unsafe', '', '跳过越界写入保护', '只有获得明确授权处理隔离库时', '会放宽写入边界，谨慎使用'),
     ] },
     { name: 'archive', usage: 'archive [选项]', what: '把低价值或过期记忆归档', when: '库变大，想让旧记忆退出主检索但保留可回溯时', options: [
       helpOption('--days', '<天数>', '按未使用天数判断归档', '想调整「多久没用才归档」时', ''),
@@ -4456,6 +4461,77 @@ function appendTrashAudit(root, record) {
   fs.mkdirSync(dir, { recursive: true });
   fs.appendFileSync(path.join(dir, 'audit-' + today() + '.jsonl'), JSON.stringify(record) + '\n', 'utf8');
 }
+
+// v0.17.4：给单条记忆改名（消除「平铺 / 分层同序号」冲突的最小手段）。
+// 身份键 = 类型 + owner + 文件名：目标名必须避开同身份占用，跨平铺 / 分层一起查；
+// 走 destructiveGuardCore（doctor + 独立备份 + 事务快照），改名后重建索引并写审计。
+function renameCore(fileRef, newName, opts) {
+  opts = opts || {};
+  const selfAgent = resolveIdentity(opts).id;
+  const target = resolveMemoryTarget(fileRef);
+  if (!target) return { error: true, text: '未找到记忆文件: ' + fileRef };
+  const deny = checkOwnerWritable(target.root, target.rel, selfAgent, opts.unsafe);
+  if (deny) return { error: true, text: deny };
+  const name = String(newName || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}-\d{4}\.md$/.test(name)) {
+    return { error: true, text: '新文件名需形如 YYYY-MM-DD-NNNN.md（例：2026-09-25-0354.md）' };
+  }
+  const oldBase = path.basename(target.fp);
+  if (name === oldBase) return { error: true, text: '新文件名与原名相同，无需改名。' };
+  const owner = ownerFromPrivatePath(target.root, target.fp);
+  let meta;
+  try { meta = parseFrontmatter(readMemoryText(target.root, target.fp, owner)).meta; }
+  catch (e) { return { error: true, text: '读取失败: ' + e.message }; }
+  const type = (meta.type || 'FACT').toUpperCase();
+  const conflicts = [];
+  for (const fp of collectEntryFiles(target.root)) {
+    if (fp === target.fp) continue;
+    if (path.basename(fp) !== name) continue;
+    const otherOwner = ownerFromPrivatePath(target.root, fp);
+    if (otherOwner !== owner) continue;
+    let otherMeta;
+    try { otherMeta = parseFrontmatter(readMemoryText(target.root, fp, otherOwner)).meta; }
+    catch (e) { conflicts.push(relOf(target.root, fp)); continue; }
+    if ((otherMeta.type || 'FACT').toUpperCase() === type) conflicts.push(relOf(target.root, fp));
+  }
+  if (conflicts.length) {
+    return { error: true, text: '目标文件名已被同 owner 同类型记忆占用，拒绝改名（跨平铺 / 分层检查）: ' + conflicts.join('、') };
+  }
+  const dest = path.join(path.dirname(target.fp), name);
+  if (fs.existsSync(dest)) return { error: true, text: '目标文件已存在，拒绝覆盖: ' + relOf(target.root, dest) };
+  const destRel = relOf(target.root, dest);
+  if (opts.dryRun) {
+    return { error: false, text: '预览（未改动）: ' + target.rel + ' → ' + destRel };
+  }
+  const guard = destructiveGuardCore({
+    root: target.root,
+    action: 'rename',
+    snapshotDir: opts.snapshotDir,
+    backupDir: opts.backupDir,
+    allowSameVolumeForTest: opts.allowSameVolumeForTest,
+    sameVolumeFn: opts.sameVolumeFn,
+    now: opts.now,
+  });
+  if (guard.error) return { error: true, text: guard.text };
+  try {
+    fs.renameSync(target.fp, dest);
+  } catch (e) {
+    return { error: true, text: '改名失败，原文件未动: ' + e.message };
+  }
+  try {
+    removeIndexEntry(target.root, target.rel);
+    buildIndex(target.root);
+  } catch (e) { /* 索引失败不回滚文件改名；下一次 reindex 会重建 */ }
+  appendAudit(target.root, 'audit', {
+    ts: new Date().toISOString(),
+    file: target.rel,
+    action: 'rename',
+    to: destRel,
+    reason: opts.reason ? String(opts.reason) : '',
+  });
+  return { error: false, text: '已改名: ' + target.rel + ' → ' + destRel + '\n事务快照: ' + guard.snapshot.id };
+}
+
 function forgetCore(fileRef, opts) {
   opts = opts || {};
   const selfAgent = resolveIdentity(opts).id;
@@ -6107,6 +6183,22 @@ function cmdForget(fileRef, opts) {
   const r = forgetCore(fileRef, {
     selfAgent: ident.id,
     unsafe: !!(opts && opts.unsafe),
+  });
+  console.log(r.text);
+  if (r.error) process.exit(2);
+}
+
+function cmdRename(fileRef, newName, opts) {
+  const ident = resolveIdentity(opts);
+  if (ident.error) {
+    console.log(ident.error);
+    process.exit(3);
+  }
+  const r = renameCore(fileRef, newName, {
+    selfAgent: ident.id,
+    unsafe: !!(opts && opts.unsafe),
+    dryRun: !!(opts && opts.dryRun),
+    reason: opts && opts.reason,
   });
   console.log(r.text);
   if (r.error) process.exit(2);
@@ -9559,6 +9651,7 @@ async function main() {
     case 'distill': cmdDistill(opts); break;
     case 'consolidate': if (opts.undo === true && rest.length) opts.undo = rest[0]; cmdConsolidate(opts); break;
     case 'forget': cmdForget(rest[0], opts); break;
+    case 'rename': cmdRename(rest[0], rest[1], opts); break;
     case 'archive': cmdArchive(opts); break;
     case 'backup': {
       const sub = rest[0];
@@ -9646,6 +9739,7 @@ module.exports = {
   contextCore: contextCore,
   importanceScore: importanceScore,
   forgetCore: forgetCore,
+  renameCore: renameCore,
   archiveCore: archiveCore,
   maintainCore: maintainCore,
   consolidateCore: consolidateCore,

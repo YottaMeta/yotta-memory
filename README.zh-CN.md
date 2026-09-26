@@ -23,6 +23,7 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 
+> 🆕 **v0.17.4（rename 改名）**：`yotta-memory rename <记忆 id> <YYYY-MM-DD-NNNN.md>` 给单条记忆改名，用于消除「平铺 / 分层同序号」冲突。身份键 = 类型 + owner + 文件名，跨两种布局检查；目标名被占用或文件已存在一律拒绝（fail-closed）。走破坏性闸门（doctor + 独立备份 + 事务快照），改名后重建索引并写 `rename` 审计；`--dry-run` 只预览零写入。仅 CLI 提供，MCP 工具面不变。
 > 🆕 **v0.17.3（帮助可读性）**：顶层 `--help` 不再逐项重复「做什么：」前缀——每条命令与选项直接写说明正文，「什么时候用：」与「注意：」保留不变。仅帮助文案变化，命令、参数与退出码零改动。
 > 🆕 **v0.17.2（私密维护的 owner 门）**：`explain` 对其它 owner 的私密条目改为直接拒绝，不再打印 subject / statement；`archive` / `maintain` 跳过不属于当前身份的私密条目（用 `--agent <id>` 声明身份，只有用户显式 `--unsafe` 才越界）。安装器加固：拒绝对符号链接目标写入，不做整目录删除。上一版 v0.17.1：`view` 删除 AI 身份时确认 ID 输入错误会立即提示「ID 不匹配，请输入完整 agent ID」，不再静默返回；用户取消仍保持静默，后端确认校验与破坏性操作闸门不变。
 > 🆕 **v0.17.0（规模：文件分层 + doctor 规模体检 + 索引按需加载 + bench 基准评测）**：新写入按年/月分层——公共 `facts/<年>/<月>/`、私密 `private/<owner>/<type>/<年>/<月>/`；v0.16 及更早的平铺文件留在原位继续可读，不做自动迁移。归档保留分层，不同月份的同名文件不会互相覆盖。`doctor` 新增规模段（记忆条数 / 单目录最大文件数 / 索引总体积 / 索引冷启动耗时），阈值用 `config set scale_warn_entries` / `scale_warn_files_per_dir` / `scale_warn_index_bytes` / `scale_warn_cold_start_ms` 调整，超阈值只告警，不锁定破坏性写入。大库检索可以按年份只读对应分片：`recall --year <yyyy>` / `context --year <yyyy>`（可重复传多次，不传即全量、行为与旧版一致）。新增 `bench` 可复算基准评测：默认按库内条目确定性抽样，`--evalset <文件>` 也可指定评测集；输出 Recall@k / MRR / nDCG@k / HitRate + 95% 置信区间、库指纹与评测集指纹，`--gate <指标>=<数值>` 可接 CI，同库同评测集同参数必得同结果；全程只读，不重建索引、不写访问计数、不调用外部 embedding。上一版 v0.16.7：明文库转加密推荐交互式 `yotta-memory migrate --recovery-key-out "$env:USERPROFILE\yotta-memory-recovery.key"`，自动化使用 `YOTTA_MEMORY_PASS`；`view` 复用端口前校验 memory_home 指纹。

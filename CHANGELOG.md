@@ -1,3 +1,14 @@
+## v0.17.4 (2026-09-26)
+
+新增 `rename`：给单条记忆改名，用来消除「平铺 / 分层同序号」冲突。
+
+- 用法：`yotta-memory rename <记忆 id> <新文件名> [--dry-run] [--reason <原因>] [--unsafe]`；新文件名需形如 `YYYY-MM-DD-NNNN.md`。
+- 身份键 = 类型 + owner + 文件名：目标名会**跨平铺 / 分层**检查同身份占用，占用即拒绝；目标文件已存在也拒绝覆盖（fail-closed）。
+- 写入闸门复用 `destructiveGuardCore`（doctor + 独立备份 + 事务快照）；改名后重建索引并写 `action: rename` 审计（含目标路径与原因）。
+- 权限：走 `checkOwnerWritable`，其它 owner 的私密记忆默认拒绝，需 `--unsafe` 显式授权。
+- `--dry-run` 只预览、零写入。命令仅 CLI 提供（写操作不进 MCP 工具面，工具数不变）。
+- 回归：新增 `test/rename.test.js` 5 项（冲突消除 + 跨布局占用拒绝 + 非法名 / 已存在拒绝 + owner 门 + dry-run 零写入）。
+
 ## v0.17.3 (2026-09-26)
 
 帮助可读性微调：顶层 `--help` 的每个选项去掉逐项重复的「做什么：」前缀，直接写说明正文；
