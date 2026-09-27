@@ -9096,8 +9096,10 @@ async function cmdScan(opts) {
 function isNumericConfigKey(key) { return /^(maintain_|consolidate_|scale_|backup_max_age_hours$|usage_retention_days$|usage_query_slots$|capacity_|promotion_|context_audit_min_coverage$)/.test(key); }
 // v0.17.0 B2：doctor 规模体检阈值键（0 表示只要超过 0 就告警，便于压测与演练）
 const SCALE_CONFIG_KEYS = ['scale_warn_entries', 'scale_warn_files_per_dir', 'scale_warn_index_bytes', 'scale_warn_cold_start_ms', 'scale_info_entries', 'scale_info_files_per_dir', 'scale_info_index_bytes', 'scale_info_cold_start_ms'];
+// v0.18.1 验收修正：config set / get 共用一份键列表，新增配置键不会再出现「读端认、写端拒」。
+const CONFIG_VALUE_KEYS = ['memory_home', 'backup_dir', 'backup_enabled', 'backup_schedule', 'backup_time', 'backup_max_age_hours', 'backup_setup_choice', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'maintain_rule_min_hits', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period', 'usage_enabled', 'usage_retention_days', 'usage_query_slots', 'capacity_cooldown_days', 'capacity_warn_bytes', 'capacity_candidate_limit', 'promotion_min_hits', 'promotion_min_queries', 'context_audit_min_coverage'].concat(SCALE_CONFIG_KEYS);
 function cmdConfigSet(key, value) {
-  const known = ['memory_home', 'embedding_cmd', 'embedding_timeout', 'backup_dir', 'backup_enabled', 'backup_schedule', 'backup_time', 'backup_max_age_hours', 'backup_setup_choice', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period', 'usage_enabled', 'usage_retention_days', 'usage_query_slots', 'capacity_cooldown_days', 'capacity_warn_bytes', 'capacity_candidate_limit', 'promotion_min_hits', 'promotion_min_queries', 'context_audit_min_coverage'].concat(SCALE_CONFIG_KEYS);
+  const known = CONFIG_VALUE_KEYS;
   if (known.indexOf(key) === -1) { console.error('未知配置项: ' + key + '（可用: memory_home / backup_dir / embedding_cmd / embedding_timeout / maintain_* / consolidate_* / scale_* / usage_* / capacity_* / promotion_*）'); process.exit(2); }
   if (value === undefined || value === null || value === '') { console.error('缺少值: config set ' + key + ' <值>'); process.exit(2); }
   const cfg = loadConfig();
@@ -9133,7 +9135,7 @@ function cmdConfigGet(opts) {
   console.log('usage_enabled: ' + (cfg.usage_enabled === undefined ? '(默认 true)' : cfg.usage_enabled));
   console.log('embedding_cmd: ' + (cfg.embedding_cmd || '(未设置)'));
   console.log('embedding_timeout: ' + (cfg.embedding_timeout || 3000));
-  const keys = ['memory_home', 'backup_dir', 'backup_enabled', 'backup_schedule', 'backup_time', 'backup_max_age_hours', 'backup_setup_choice', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period', 'usage_enabled', 'usage_retention_days', 'usage_query_slots', 'capacity_cooldown_days', 'capacity_warn_bytes', 'capacity_candidate_limit', 'promotion_min_hits', 'promotion_min_queries', 'context_audit_min_coverage'].concat(SCALE_CONFIG_KEYS);
+  const keys = CONFIG_VALUE_KEYS;
   for (const k of keys) {
     if (k === 'memory_home' || k === 'backup_dir' || k === 'backup_enabled' || k === 'backup_schedule' || k === 'backup_time' || k === 'embedding_cmd' || k === 'embedding_timeout' || k === 'usage_enabled') continue;
     if (cfg[k] !== undefined) console.log(k + ': ' + cfg[k]);

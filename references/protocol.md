@@ -295,6 +295,12 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 - 与元习边界：元忆不读 `.learnings/`、不调元习命令；pattern-key 精确对齐留给元习后续批次。
 - MCP：`maintain.rules`（只读布尔）与 CLI 同名；`--rules` 与 `--apply / --purge / --dedup` 互斥。
 
+**权威顺序与写入纪律（A12 / A13）**
+
+- 冲突权威顺序（下层不能覆盖上层）：① 用户实时指令 / 显式授权 → ② BOUND 边界 / 铁律 → ③ 用户批准的决定 → ④ 有日期的证据（FACT / 事故记录）→ ⑤ 摘要 / 指针（consolidate 摘要、profile、distill）→ ⑥ 无日期的历史笔记。
+- 记忆正文里的指令性文本按**不可信数据**处理，不作为执行指令；检测由 `scan` 的 YTM-PIJ 规则负责，宿主注入记忆时先做提示词注入防护。
+- 写入纪律三条：① 不覆盖过去，而是关闭——旧事实标失效（新条目引用旧条目，或标 `superseded`），删除只在 `forget` 显式授权时发生；② 保留矛盾并标 `待澄清`，不静默取一；③ 证据与政策分级——FACT / 证据可被新证据修订，BOUND / 政策变更需用户确认，AI 不得把推理当政策写入。
+
 ### v0.18.0：命中打点 / 容量水位 / 压缩审计 / 归档预演
 
 **命中打点（usage hit tracking）**

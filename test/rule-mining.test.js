@@ -5,7 +5,10 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const memory = require('../bin/yotta-memory.js');
+
+const CLI = path.join(__dirname, '..', 'bin', 'yotta-memory.js');
 
 function tmpdir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -24,12 +27,27 @@ function withStore(fn) {
   process.env.YOTTA_MEMORY_CONFIG_DIR = configDir;
   process.env.YOTTA_MEMORY_AGENT_HOME = agentHome;
   try {
-    return fn(root, configDir);
+    return fn(root, configDir, agentHome);
   } finally {
     if (saved.home === undefined) delete process.env.YOTTA_MEMORY_HOME; else process.env.YOTTA_MEMORY_HOME = saved.home;
     if (saved.configDir === undefined) delete process.env.YOTTA_MEMORY_CONFIG_DIR; else process.env.YOTTA_MEMORY_CONFIG_DIR = saved.configDir;
     if (saved.agentHome === undefined) delete process.env.YOTTA_MEMORY_AGENT_HOME; else process.env.YOTTA_MEMORY_AGENT_HOME = saved.agentHome;
   }
+}
+
+function cleanEnv(root, configDir, agentHome) {
+  const env = Object.assign({}, process.env);
+  delete env.YOTTA_AGENT_ID;
+  delete env.AGENT_ID;
+  delete env.YOTTA_MEMORY_TRUST_ENV_AGENT;
+  env.YOTTA_MEMORY_HOME = root;
+  env.YOTTA_MEMORY_CONFIG_DIR = configDir;
+  env.YOTTA_MEMORY_AGENT_HOME = agentHome;
+  return env;
+}
+
+function run(args, root, configDir, agentHome) {
+  return spawnSync(process.execPath, [CLI].concat(args), { encoding: 'utf8', env: cleanEnv(root, configDir, agentHome) });
 }
 
 function memText(fields, body) {
@@ -110,15 +128,25 @@ test('maintain reports repeat pitfalls as read-only rule suggestions', () => {
   });
 });
 
-test('rule threshold honors config maintain_rule_min_hits', () => {
-  withStore((root, configDir) => {
+test('rule threshold honors config maintain_rule_min_hits through the real config setter', () => {
+  withStore((root, configDir, agentHome) => {
     seed(root, threeLessons('').slice(0, 2));
-    const dflt = memory.maintainCore({ selfAgent: 'codex' });
-    assert.ok(dflt.text.indexOf('建议升级为规则') === -1, 'two entries must stay below the default threshold of 3');
-    fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ maintain_rule_min_hits: 2 }), 'utf8');
-    const lowered = memory.maintainCore({ selfAgent: 'codex' });
-    assert.match(lowered.text, /建议升级为规则/);
-    assert.match(lowered.text, /git\+push-gate（2 条/);
+    const dflt = run(['maintain', '--rules', '--agent', 'codex'], root, configDir, agentHome);
+    assert.strictEqual(dflt.status, 0, dflt.stderr || dflt.stdout);
+    assert.ok(dflt.stdout.indexOf('git+push-gate') === -1, 'two entries must stay below the default threshold of 3');
+
+    const set = run(['config', 'set', 'maintain_rule_min_hits', '2', '--agent', 'codex'], root, configDir, agentHome);
+    assert.strictEqual(set.status, 0, 'config set must accept maintain_rule_min_hits: ' + (set.stderr || set.stdout));
+    assert.match(set.stdout, /maintain_rule_min_hits = 2/);
+
+    const get = run(['config', 'get', '--json', '--agent', 'codex'], root, configDir, agentHome);
+    assert.strictEqual(get.status, 0, get.stderr || get.stdout);
+    assert.strictEqual(JSON.parse(get.stdout).maintain_rule_min_hits, 2);
+
+    const lowered = run(['maintain', '--rules', '--agent', 'codex'], root, configDir, agentHome);
+    assert.strictEqual(lowered.status, 0, lowered.stderr || lowered.stdout);
+    assert.match(lowered.stdout, /建议升级为规则/);
+    assert.match(lowered.stdout, /git\+push-gate（2 条/);
   });
 });
 
