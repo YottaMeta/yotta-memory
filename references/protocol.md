@@ -201,7 +201,7 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 - `yotta-memory serve --stdio --tools core`：只暴露 `context / recall / search / remember`，适合常驻 MCP。
 - `yotta-memory serve --stdio --tools full`：暴露现有 17 个工具（v0.18.0 起含 `consolidate` 只读候选报告），适合诊断、维护、导入导出与自我学习操作。
 - 未指定 `--tools`：默认 `full`，保持旧配置兼容；`tools/list` 按当前分组返回，`tools/call` 越组调用会被拒绝并提示切换到 full。
-- v0.18.0 只读面（方案 A）：`archive.dryRun` / `maintain.capacity` / `context.audit` + `auditText`（内联文本，不接受文件路径、不读 stdin）/ `consolidate`（只出 propose 报告）。破坏性覆盖（`archive --force`、`consolidate --apply / --undo / --batches`）不暴露给 MCP，调用会被忽略或显式拒绝。
+- v0.18.0 只读面（方案 A）：`archive.dryRun` / `maintain.capacity` / `context.audit` + `auditText`（内联文本，不接受文件路径、不读 stdin）/ `consolidate`（只出 propose 报告）；v0.18.1 追加 `maintain.rules`（只读规则晋升建议）。破坏性覆盖（`archive --force`、`consolidate --apply / --undo / --batches`）不暴露给 MCP，调用会被忽略或显式拒绝。
 
 ### remember / iam 扩展（v0.6.0）
 
@@ -268,9 +268,32 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 
 **权限与安全边界（不变式）**
 
-- consolidate 的只读 propose 报告自 v0.18.0 起进 MCP（`consolidate` 工具，无 apply / undo / batches 入参）；`--apply` / `--undo` / `--batches` 为管理动作，**不进 MCP**（MCP 侧显式拒绝并提示改走本机 CLI，AI 不得代替用户执行 `--apply`）。maintain / archive 维持既有 MCP 暴露，v0.18.0 起追加只读 / 预演入参（`maintain.capacity`、`archive.dryRun`）。
+- consolidate 的只读 propose 报告自 v0.18.0 起进 MCP（`consolidate` 工具，无 apply / undo / batches 入参）；`--apply` / `--undo` / `--batches` 为管理动作，**不进 MCP**（MCP 侧显式拒绝并提示改走本机 CLI，AI 不得代替用户执行 `--apply`）。maintain / archive 维持既有 MCP 暴露，v0.18.0 起追加只读 / 预演入参（`maintain.capacity`、`archive.dryRun`），v0.18.1 起 maintain 追加 `rules` 只读入参。
 - 自动合并 / 压缩只写「公共 FACT + 本 owner 私密」；其它 owner 只预览，`--unsafe` 显式授权才处理。
 - 路径全程 `resolveWithinRoot` 校验；.archive 目标由引擎按 rel 生成。
+
+### v0.18.1：蒸馏溯源 / 日期绝对化 / 巩固标记 / 规则晋升建议
+
+**distill 分类型提取与溯源锚点**
+
+- 分类（先标签词表、后类型兜底，`BOUND` 优先归「规则边界」）：事件 / 教训 / 待办 / 成长 / 规则边界 / 其他。
+- 每条提取项带 `[溯源: <相对路径>#L<a>-L<b>]`（行号 = 本次提取实际读取的原文行范围）；要素缺失显式写「未记录」，不编造。
+- 质量指标：实测压缩比（源正文 ÷ 提取要点）/ 条目覆盖率 / 溯源覆盖率（目标 100%）/ 要素提取率（确定性回归护栏，不是语义保真承诺）；不承诺压缩倍数。
+- 边界：空文件 / 非 UTF-8 → 跳过并计数；BOM → 解析前剥离；无 frontmatter → 按裸文本进「其他」；单字段超 500 字符 → 截断 + 全文指向溯源。
+- `distill --json` 输出 `{schemaVersion, generated, root, scope, classes[], metrics{}, skipped[], written}`；MCP `distill` 仍返回文本，`--model` 仍仅本地 CLI。
+
+**consolidate 日期绝对化与巩固标记**
+
+- 基准 = 条目 `created`（缺则 `updated`；都缺跳过）；把「今天 / 昨天 / 大前天 / 上周 / 本月 / 今年」等写成 `词（绝对日期或范围）`；「最近 / 前几天 / 刚才」等模糊词不归一；只改摘要正文，不改原文与 frontmatter。
+- 归档副本末尾追加 `<!-- yotta-memory: consolidated to <摘要> | batch <id> | <date> -->`；`--undo` 先剥离标记再归位（按审计 `had_trailing_newline` 还原原始换行）；标记失败不阻断批次，只在报告 / 审计记 `marker_errors`。
+- `--json` 报告新增 `date_normalized` / `markers_written` / `marker_errors`；propose 报告每组带 `date_normalized_preview`。
+
+**maintain 规则晋升建议（只读）**
+
+- `maintain --rules`（默认维护报告附带非空结果）：候选 = `COMMIT / FACT / PREF` 且 tags / subject 命中教训词表；分组键优先级 = `pattern-key:` 标签 → 元习 `yotta-learn: <area>` + `[<category>]` → 领域标签排序集合 → subject 归一化指纹；同组 ≥ `maintain_rule_min_hits`（默认 3）出报告。
+- 输出组键 / 时间跨度 / 代表条目 / `remember BOUND` 建议命令；不自动写规则、不改权重、不建快照；跨 owner 私密条目 fail-closed。
+- 与元习边界：元忆不读 `.learnings/`、不调元习命令；pattern-key 精确对齐留给元习后续批次。
+- MCP：`maintain.rules`（只读布尔）与 CLI 同名；`--rules` 与 `--apply / --purge / --dedup` 互斥。
 
 ### v0.18.0：命中打点 / 容量水位 / 压缩审计 / 归档预演
 

@@ -25,9 +25,9 @@ const net = require('net');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.18.0';
+const VERSION = '0.18.1';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path', '--from']);
-const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--propose', '--audit', '--capacity', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--no-usage', '--yes', '--keep-memories', '--keep-identity']);
+const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--propose', '--audit', '--capacity', '--rules', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--no-usage', '--yes', '--keep-memories', '--keep-identity']);
 
 function helpOption(flag, arg, what, when, caution) {
   return { flag: flag, arg: arg || '', what: what, when: when || '', caution: caution || '' };
@@ -118,6 +118,7 @@ const HELP_MODEL = [
     ] },
     { name: 'maintain', usage: 'maintain [选项]', what: '记忆自组织：归档、遗忘候选、去重和合并', when: '定期清理低价值记忆、合并重复条目时', options: [
       helpOption('--capacity', '', '查看容量水位与淘汰 / 晋升建议', '库变大，想看哪些条目值得清理或提升时', '只读报告，不会自动归档或改权重'),
+      helpOption('--rules', '', '查看重复踩坑 → 建议升级为规则的清单', '同一类问题反复出现、想把它固化成 BOUND 规则时', '只读报告，不自动写规则；阈值走 config maintain_rule_min_hits'),
       helpOption('--dedup', '', '只做重复检查并给置信度', '想先看哪些条目重复时', ''),
       helpOption('--apply', '', '真正执行，而不是只预览', '确认预览结果后要落盘时', '会改动记忆库并创建事务快照；先跑 dry-run'),
       helpOption('--purge', '', '对遗忘候选执行真删', '确认候选确实不再需要时', '真删不可逆；通常先用归档而不是 purge'),
@@ -146,6 +147,8 @@ const HELP_MODEL = [
     { name: 'distill', usage: 'distill [--model <命令>] [选项]', what: '把心理日志蒸馏成统计摘要、主题画像和知识地图', when: '想把长期记录整理成更高层的自我画像时', options: [
       helpOption('--model', '<命令>', '调用本地外部模型辅助蒸馏', '需要更高质量摘要、且已准备本地模型命令时', '命令在本地执行；不要指向会外传原文的服务'),
       helpOption('--subject', '<标题>', '指定蒸馏输出主题', '想给这次摘要一个固定标题时', ''),
+      helpOption('--owner', '<id>', '指定蒸馏归属的智能体', '想蒸馏某个 owner 的记忆时', '默认当前身份；跨 owner 私密仍按 owner 门跳过'),
+      helpOption('--out', '<路径>', '把蒸馏报告导出到指定路径', '想把报告放到自定义位置时', '不指定时按归属写入 distills 目录'),
       helpOption('--json', '', '输出 JSON', '自动化处理蒸馏结果时', ''),
     ] },
     { name: 'feedback', usage: 'feedback <记忆 id> [--useful | --useless | --undo]', what: '记录记忆是否有用', when: '一条记忆刚刚帮助了你，或明显误导了你时', options: [
@@ -5233,12 +5236,100 @@ function subjectsSimilar(a, b) {
   return editDistance(sa, sb) <= 3;
 }
 // 记忆自组织：规则层自动归档/遗忘/去重（默认 dry-run，--apply 才执行，--purge 才真删）
+// ---- v0.18.1 A10：重复踩坑 → 建议升级为规则（只读报告）----
+function normalizeRuleSubject(s) {
+  return String(s || '').toLowerCase().replace(/[^\u4e00-\u9fa5a-z]+/g, '');
+}
+function ruleGroupKeyFor(entry) {
+  for (const t of (entry.tags || [])) {
+    const m = /^pattern-key:(.+)$/i.exec(String(t));
+    if (m) return { key: 'pattern-key:' + m[1].trim(), kind: 'pattern-key' };
+  }
+  const sm = /^yotta-learn:\s*(.+)$/i.exec(String(entry.subject || ''));
+  const cm = /^\[([a-z_]+)\]/i.exec(String(entry.statement || '').trim());
+  if (sm && cm) return { key: cm[1].toLowerCase() + '@' + sm[1].trim(), kind: 'yotta-learn' };
+  const domains = (entry.tags || []).filter(function (t) {
+    return !distillHasWord(t, DISTILL_LESSON_WORDS) && !/^pattern-key:/i.test(String(t)) && String(t) !== '规则' && String(t) !== '边界';
+  }).map(function (t) { return String(t).toLowerCase(); }).sort();
+  if (domains.length) return { key: domains.join('+'), kind: 'tags' };
+  return { key: normalizeRuleSubject(entry.subject), kind: 'subject' };
+}
+function isRuleLessonCandidate(entry) {
+  const hay = (entry.tags || []).join(',') + ' ' + String(entry.subject || '');
+  if (distillHasWord(hay, DISTILL_LESSON_WORDS)) return true;
+  const head = String(entry.statement || '').trim().slice(0, 40);
+  return /^\[([a-z_]+)\]/i.test(head) && distillHasWord(head, DISTILL_LESSON_WORDS);
+}
+function ruleMiningCore(root, opts) {
+  opts = opts || {};
+  const cfg = loadConfig();
+  const rawMin = (opts.ruleMinHits !== undefined && opts.ruleMinHits !== null) ? opts.ruleMinHits : cfg.maintain_rule_min_hits;
+  const minHits = Math.max(2, parseInt(rawMin || '3', 10) || 3);
+  const selfAgent = resolveIdentity(opts).id;
+  const buckets = {};
+  let scanned = 0, candidates = 0, denied = 0;
+  for (const fp of collectEntryFiles(root)) {
+    const rel = relOf(root, fp);
+    if (checkOwnerWritable(root, rel, selfAgent, opts.unsafe)) { denied += 1; continue; }
+    let e;
+    try { e = readEntry(fp, root); } catch (err) { continue; }
+    scanned += 1;
+    if (['COMMIT', 'FACT', 'PREF'].indexOf(e.type) === -1) continue;
+    if (!isRuleLessonCandidate(e)) continue;
+    const gk = ruleGroupKeyFor(e);
+    if (!gk.key) continue;
+    candidates += 1;
+    (buckets[gk.key] = buckets[gk.key] || []).push({ e: e, kind: gk.kind, file: rel });
+  }
+  const groups = Object.keys(buckets).map(function (key) {
+    const items = buckets[key].slice().sort(function (a, b) {
+      return String(b.e.updated || b.e.created || '').localeCompare(String(a.e.updated || a.e.created || ''));
+    });
+    const best = items.slice().sort(function (a, b) { return (b.e.confidence || 0) - (a.e.confidence || 0); })[0].e;
+    const dates = items.map(function (x) { return x.e.created || x.e.updated || ''; }).filter(Boolean).sort();
+    return {
+      key: key,
+      kind: items[0].kind,
+      count: items.length,
+      files: items.map(function (x) { return x.file; }),
+      span: dates.length ? dates[0] + ' ~ ' + dates[dates.length - 1] : '',
+      best: best,
+    };
+  }).filter(function (g) { return g.count >= minHits; }).sort(function (a, b) {
+    return b.count - a.count || a.key.localeCompare(b.key);
+  });
+  return { error: false, groups: groups, scanned: scanned, candidates: candidates, denied: denied, minHits: minHits };
+}
+function ruleMiningLines(result) {
+  const lines = ['### 建议升级为规则（只读，不自动写入）'];
+  if (!result.groups.length) {
+    lines.push('- （无重复踩坑组达到阈值：同组 ≥ ' + result.minHits + ' 条；可用 config set maintain_rule_min_hits N 调整）');
+    return lines;
+  }
+  for (const g of result.groups) {
+    lines.push('- 组键: ' + g.key + '（' + g.count + ' 条' + (g.span ? '，' + g.span : '') + '）');
+    lines.push('  代表: [' + g.best.type + '] ' + (g.best.subject || '') + ' — ' + String(g.best.statement || '').slice(0, 60));
+    lines.push('  建议: 人工确认后执行 yotta-memory remember BOUND "规则：' + g.key + '" "<陈述>"');
+  }
+  lines.push('- 说明: 元忆只给晋升信号，不自动写 BOUND；与元习 .learnings/ 的分工见 SKILL「记忆守则」。');
+  return lines;
+}
+
 function maintainCore(opts) {
   opts = opts || {};
   const apply = !!opts.apply;
   const purge = !!opts.purge;
   const root = userRoot();
   if (!fs.existsSync(root)) return { error: false, text: '记忆库不存在。' };
+  if (opts.rules && (apply || purge || opts.dedup)) {
+    return { error: true, exitCode: 2, text: '拒绝: --rules 是只读筛选，不能与 --apply / --purge / --dedup 同时使用。' };
+  }
+  if (opts.rules) {
+    const lines = ['## yotta-memory maintain --rules（重复踩坑 → 规则晋升建议）', ''];
+    const result = ruleMiningCore(root, opts);
+    lines.push.apply(lines, ruleMiningLines(result));
+    return { error: false, text: lines.join('\n'), report: result };
+  }
   let guard = null;
   if (apply) {
     guard = destructiveGuardCore({
@@ -5347,6 +5438,13 @@ function maintainCore(opts) {
     lines.push('');
     lines.push('- 跨 owner 私密条目已跳过（' + deniedCrossOwner + ' 条）：请用 --agent <id> 声明自己的身份；只有用户显式授权（--unsafe）才能越界维护。');
   }
+  if (!opts.dedup) {
+    const ruleResult = ruleMiningCore(root, opts);
+    if (ruleResult.groups.length) {
+      lines.push('');
+      lines.push.apply(lines, ruleMiningLines(ruleResult));
+    }
+  }
   // 去重（v0.10.0：置信度分档 + --apply 自动合并；--dedup 与归档/遗忘互斥）
   if (opts.dedup) appendDedupBlock(lines, root, opts);
   return { error: false, text: lines.join('\n') };
@@ -5393,7 +5491,263 @@ function mergeCore(refA, refB, opts) {
   appendAudit(root, 'audit', { ts: new Date().toISOString(), file: drop.file, action: 'merge', reason: '并入 ' + keep.file, utility: round3(utilityScore(keep)) });
   return { error: false, text: '已合并: ' + drop.file + ' -> ' + keep.file + '\n  保留: [' + keep.type + '] ' + keep.subject + ': ' + keep.statement + '\n  归档低 confidence: ' + drop.file + '\n  事务快照: ' + guard.snapshot.id };
 }
-// 心理日志蒸馏：统计摘要 / 主题画像 / 知识地图（启发式默认，可选 --model）
+// ---- v0.18.1 A8：蒸馏分类型提取 / 溯源锚点 / 质量指标（确定性，零依赖）----
+const DISTILL_CLASS_NAMES = ['教训', '待办', '成长', '事件', '规则边界', '其他'];
+const DISTILL_LESSON_WORDS = ['教训', '踩坑', '失误', '错误', '故障', '事故', '纠正', 'learning', 'error', 'correction', 'incident'];
+const DISTILL_TASK_WORDS = ['待办', '任务', 'action', 'next', '跟进'];
+const DISTILL_TASK_TAG_RE = /^t(o)?do$/i;
+const DISTILL_GROWTH_WORDS = ['成长', '改进', '提升', '洞见', '最佳实践', '复盘', 'insight', 'growth', 'improvement', 'best-practice'];
+const DISTILL_EVENT_WORDS = ['事件', '里程碑', '发布', '上线', '会议', '活动', 'release', 'milestone'];
+const DISTILL_FIELD_LIMIT = 500;
+function distillHasWord(haystack, words) {
+  const s = String(haystack || '').toLowerCase();
+  for (const w of words) if (s.indexOf(String(w).toLowerCase()) !== -1) return true;
+  return false;
+}
+function distillClassify(entry, meta) {
+  if (!meta || !meta.type) return '其他';
+  if (entry.type === 'BOUND') return '规则边界';
+  const hay = (entry.tags || []).join(',') + ' ' + String(entry.subject || '');
+  if (distillHasWord(hay, DISTILL_LESSON_WORDS)) return '教训';
+  const hasTaskTag = (entry.tags || []).some(function (t) { return DISTILL_TASK_TAG_RE.test(String(t).trim()); });
+  if (distillHasWord(hay, DISTILL_TASK_WORDS) || hasTaskTag) return '待办';
+  if (distillHasWord(hay, DISTILL_GROWTH_WORDS)) return '成长';
+  if (distillHasWord(hay, DISTILL_EVENT_WORDS)) return '事件';
+  if (entry.type === 'COMMIT') return '待办';
+  if (entry.type === 'PREF') return '成长';
+  if (entry.type === 'FACT') return '事件';
+  return '其他';
+}
+function distillSentences(body) {
+  return String(body || '').replace(/([。！？])/g, '$1\n').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+}
+function distillLineOf(lines, needle) {
+  const n = String(needle || '');
+  if (!n) return 0;
+  for (let i = 0; i < lines.length; i++) if (lines[i].indexOf(n) !== -1) return i + 1;
+  return 0;
+}
+function distillClamp(value, limit) {
+  const s = String(value === undefined || value === null ? '' : value);
+  const max = limit || DISTILL_FIELD_LIMIT;
+  if (s.length <= max) return { value: s, truncated: false };
+  return { value: s.slice(0, max) + '…（截断 ' + (s.length - max) + ' 字符，全文见溯源）', truncated: true };
+}
+function distillDateNear(sentences, body) {
+  const dateRe = /\d{4}-\d{2}-\d{2}/;
+  for (const s of sentences) {
+    if (dateRe.test(s) && /(截止|前完成|之前|deadline|due)/i.test(s)) return s.match(dateRe)[0];
+  }
+  const all = String(body || '');
+  if (/(截止|前完成|deadline|due)/i.test(all)) {
+    const m = all.match(dateRe);
+    if (m) return m[0];
+  }
+  return '';
+}
+function distillExtract(entry, cls, body, lines) {
+  const sents = distillSentences(body);
+  const statement = String(entry.statement || '');
+  const subject = String(entry.subject || '');
+  const tags = (entry.tags || []).join(', ');
+  const fields = {};
+  const used = [];
+  const take = function (name, value) {
+    const ok = value !== undefined && value !== null && String(value) !== '';
+    fields[name] = ok ? String(value) : '未记录';
+    if (ok) used.push(String(value));
+  };
+  let fieldNames = [];
+  if (cls === '教训') {
+    fieldNames = ['教训', '触发条件', '规避方法'];
+    const avoid = sents.filter(function (s) { return /(避免|应该|下次|教训)/.test(s); })[0];
+    take('教训', statement);
+    take('触发条件', tags || subject);
+    take('规避方法', avoid);
+    if (avoid) used.push(avoid);
+  } else if (cls === '待办') {
+    fieldNames = ['任务', '优先级', '截止'];
+    let priority = '';
+    for (const t of (entry.tags || [])) if (/^(high|medium|low|高|中|低)$/i.test(String(t))) { priority = t; break; }
+    const due = distillDateNear(sents.concat([statement]), body + ' ' + statement);
+    take('任务', statement);
+    take('优先级', priority);
+    take('截止', due);
+    if (due) used.push(due);
+  } else if (cls === '成长') {
+    fieldNames = ['改进点', '前后对比', '效果'];
+    const before = sents.filter(function (s) { return /(之前|后来|从.+到)/.test(s); })[0];
+    const effect = sents.filter(function (s) { return /(效果|提升|%|更好)/.test(s); })[0];
+    take('改进点', statement);
+    take('前后对比', before);
+    take('效果', effect);
+    if (before) used.push(before);
+    if (effect) used.push(effect);
+  } else if (cls === '事件') {
+    fieldNames = ['时间', '内容', '结果'];
+    const last = sents.length ? sents[sents.length - 1] : '';
+    take('时间', entry.created || entry.updated);
+    take('内容', subject + (statement ? ': ' + statement : ''));
+    take('结果', last);
+    if (last) used.push(last);
+  } else if (cls === '规则边界') {
+    fieldNames = ['规则', '适用范围', '例外'];
+    const ex = sents.filter(function (s) { return /(除非|例外)/.test(s); })[0];
+    take('规则', statement);
+    take('适用范围', tags || subject);
+    take('例外', ex);
+    if (ex) used.push(ex);
+  } else {
+    fieldNames = ['内容'];
+    take('内容', statement || (sents[0] || String(body || '').trim().slice(0, 200)));
+  }
+  const lineNumbers = used.map(function (v) { return distillLineOf(lines, v); }).filter(Boolean);
+  if (!lineNumbers.length) {
+    const fallback = distillLineOf(lines, statement) || distillLineOf(lines, subject) || 1;
+    lineNumbers.push(fallback);
+  }
+  let truncated = false;
+  for (const name of fieldNames) {
+    if (fields[name] === '未记录') continue;
+    const clamped = distillClamp(fields[name]);
+    if (clamped.truncated) { fields[name] = clamped.value; truncated = true; }
+  }
+  return {
+    fields: fields,
+    fieldNames: fieldNames,
+    anchor: { start: Math.min.apply(null, lineNumbers), end: Math.max.apply(null, lineNumbers) },
+    truncated: truncated,
+  };
+}
+function distillElementStats(entry, cls, body) {
+  const sents = distillSentences(body);
+  const tags = (entry.tags || []).join(', ');
+  const hasPriority = (entry.tags || []).some(function (t) { return /^(high|medium|low|高|中|低)$/i.test(String(t)); });
+  let specs = [];
+  if (cls === '教训') specs = [!!entry.statement, !!(tags || entry.subject), /(避免|应该|下次|教训)/.test(body)];
+  else if (cls === '待办') specs = [!!entry.statement, hasPriority, !!distillDateNear(sents.concat([String(entry.statement || '')]), body + ' ' + String(entry.statement || ''))];
+  else if (cls === '成长') specs = [!!entry.statement, /(之前|后来|从.+到)/.test(body), /(效果|提升|%|更好)/.test(body)];
+  else if (cls === '事件') specs = [!!(entry.created || entry.updated), !!(entry.subject || entry.statement), sents.length > 0];
+  else if (cls === '规则边界') specs = [!!entry.statement, !!(tags || entry.subject), /(除非|例外)/.test(body)];
+  else specs = [!!(entry.statement || body)];
+  const detected = specs.filter(Boolean).length;
+  return { detected: detected, expected: specs.length };
+}
+function distillAnalyze(root, entries, owner) {
+  const classes = {};
+  for (const name of DISTILL_CLASS_NAMES) classes[name] = { name: name, count: 0, items: [] };
+  const skipped = [];
+  let analyzed = 0, entriesWithItems = 0, itemCount = 0, traceOk = 0;
+  let sourceChars = 0, extractedChars = 0, detected = 0, filled = 0;
+  const refusedRe = /\uFFFD/;
+  for (const e of entries) {
+    const entryRoot = e._root || root;
+    const fp = path.join(entryRoot, e.file);
+    const entryOwner = ownerFromPrivatePath(entryRoot, fp) || owner;
+    let raw;
+    try {
+      raw = readMemoryText(entryRoot, fp, entryOwner);
+    } catch (err) {
+      skipped.push({ file: e.file, reason: 'encoding', detail: String(err.message || err) });
+      continue;
+    }
+    raw = String(raw).replace(/^\uFEFF/, '');
+    if (!raw.trim()) {
+      skipped.push({ file: e.file, reason: 'empty', detail: '' });
+      continue;
+    }
+    if (refusedRe.test(raw)) {
+      skipped.push({ file: e.file, reason: 'encoding', detail: 'UTF-8 解码失败' });
+      continue;
+    }
+    const parsed = parseFrontmatter(raw);
+    const hasMeta = !!(parsed.meta && parsed.meta.type);
+    const local = Object.assign({}, e);
+    if (hasMeta) {
+      local.type = String(parsed.meta.type || e.type).toUpperCase();
+      local.subject = parsed.meta.subject || e.subject;
+      local.statement = parsed.meta.statement || e.statement;
+      local.tags = parseTags(parsed.meta.tags);
+      local.created = parsed.meta.created || e.created;
+      local.updated = parsed.meta.updated || e.updated;
+    } else {
+      local.type = '';
+      local.tags = [];
+      local.subject = path.basename(e.file).replace(/\.md(\.enc)?$/, '');
+      local.statement = String(parsed.body || raw).trim().split('\n')[0].slice(0, 200);
+      skipped.push({ file: e.file, reason: 'no-structure', detail: '按裸文本处理', analyzed: true });
+    }
+    const cls = distillClassify(local, hasMeta ? parsed.meta : null);
+    const body = String(parsed.body || '');
+    const lines = raw.split('\n');
+    const ex = distillExtract(local, cls, body, lines);
+    const stats = distillElementStats(local, cls, body);
+    detected += stats.detected;
+    filled += ex.fieldNames.filter(function (n) { return ex.fields[n] !== '未记录'; }).length;
+    const anchorText = '[溯源: ' + e.file + '#L' + ex.anchor.start + '-L' + ex.anchor.end + ']';
+    const item = {
+      ref: e.file,
+      type: local.type || 'UNKNOWN',
+      subject: local.subject,
+      statement: local.statement,
+      fields: ex.fields,
+      anchor: e.file + '#L' + ex.anchor.start + '-L' + ex.anchor.end,
+      anchorText: anchorText,
+      truncated: ex.truncated,
+    };
+    classes[cls].items.push(item);
+    classes[cls].count += 1;
+    analyzed += 1;
+    entriesWithItems += 1;
+    itemCount += 1;
+    traceOk += 1;
+    sourceChars += String(local.statement || '').length + body.length;
+    for (const n of ex.fieldNames) if (ex.fields[n] !== '未记录') extractedChars += String(ex.fields[n]).length;
+    if (ex.truncated) skipped.push({ file: e.file, reason: 'truncated', detail: '超长字段已截断到 ' + DISTILL_FIELD_LIMIT + ' 字符', analyzed: true });
+  }
+  const mainLines = ['## 二、分类型提取清单', ''];
+  if (!itemCount) mainLines.push('（无可提取条目）');
+  for (const name of DISTILL_CLASS_NAMES) {
+    const c = classes[name];
+    if (!c.count) continue;
+    mainLines.push('### ' + name + '（' + c.count + ' 条）');
+    for (const item of c.items) {
+      mainLines.push('- [' + item.type + '] ' + item.subject);
+      for (const fn of Object.keys(item.fields)) mainLines.push('  - ' + fn + ': ' + item.fields[fn]);
+      mainLines.push('  - ' + item.anchorText);
+      mainLines.push('');
+    }
+  }
+  const compression = extractedChars > 0 ? Math.round((sourceChars / extractedChars) * 100) / 100 : 0;
+  const entryCoverage = analyzed > 0 ? round4(entriesWithItems / analyzed) : 1;
+  const traceCoverage = itemCount > 0 ? round4(traceOk / itemCount) : 1;
+  const elementRate = detected > 0 ? round4(filled / detected) : 1;
+  mainLines.push('## 三、质量指标', '');
+  mainLines.push('- 源正文字符: ' + sourceChars + ' / 提取要点字符: ' + extractedChars + ' → 实测压缩比 ' + compression + '（只报本次实测，不承诺倍数）');
+  mainLines.push('- 条目覆盖率: ' + Math.round(entryCoverage * 100) + '%（' + entriesWithItems + '/' + analyzed + '）');
+  mainLines.push('- 溯源覆盖率: ' + Math.round(traceCoverage * 100) + '%（' + traceOk + '/' + itemCount + '，目标 100%）');
+  mainLines.push('- 要素提取率: ' + Math.round(elementRate * 100) + '%（' + filled + '/' + detected + '，确定性回归护栏，不是语义保真承诺）');
+  const tailLines = ['## 六、跳过与边界', ''];
+  if (!skipped.length) tailLines.push('（无跳过项）');
+  for (const s of skipped) {
+    tailLines.push('- ' + s.file + ': ' + s.reason + (s.detail ? '（' + s.detail + '）' : '') + (s.analyzed ? '（已分析）' : '（已跳过）'));
+  }
+  return {
+    classes: DISTILL_CLASS_NAMES.map(function (n) { return classes[n]; }).filter(function (c) { return c.count > 0; }),
+    skipped: skipped,
+    mainLines: mainLines,
+    tailLines: tailLines,
+    analyzed: analyzed,
+    metrics: {
+      compression_ratio: compression,
+      entry_coverage: entryCoverage,
+      trace_coverage: traceCoverage,
+      element_extract_rate: elementRate,
+    },
+  };
+}
+
+// 心理日志蒸馏：统计摘要 / 分类型提取 / 质量指标 / 主题画像 / 知识地图（启发式默认，可选 --model）
 function distillCore(opts) {
   opts = opts || {};
   const root = userRoot();
@@ -5404,15 +5758,16 @@ function distillCore(opts) {
   for (const r of memoryRoots()) {
     for (const e of ensureIndex(r)) {
       if (classifyRead(e, owner, '', !!opts.unsafe, selfAgent) === 'denied') continue;
-      entries.push(e);
+      entries.push(Object.assign({}, e, { _root: r }));
     }
   }
   const lines = [];
-  lines.push('# 元忆记忆蒸馏报告（v0.8.0）');
+  lines.push('# 元忆记忆蒸馏报告（v' + VERSION + '）');
   lines.push('');
   lines.push('> 生成: yotta-memory distill | 启发式蒸馏（零依赖）；--model <cmd> 可选外部模型增强');
   lines.push('> 时间: ' + new Date().toISOString() + ' / 可读条目: ' + entries.length + ' 条');
   lines.push('');
+  const analysis = distillAnalyze(root, entries, owner);
   // 1) 统计摘要
   lines.push('## 一、统计摘要');
   lines.push('');
@@ -5434,8 +5789,10 @@ function distillCore(opts) {
   for (const e of entries) { const n = e.feedback_net || 0; fbSum += n; if (n > 0) usefulN++; else if (n < 0) uselessN++; }
   lines.push('- 反馈统计: feedback_net 总和 ' + fbSum + '（正 ' + usefulN + ' 条 / 负 ' + uselessN + ' 条）');
   lines.push('');
+  lines.push.apply(lines, analysis.mainLines);
+  lines.push('');
   // 2) 主题画像（按 subject 聚类合并）
-  lines.push('## 二、主题画像（按 subject 聚类，启发式合并）');
+  lines.push('## 四、主题画像（按 subject 聚类，启发式合并）');
   lines.push('');
   const groups = {};
   for (const e of entries) {
@@ -5454,7 +5811,7 @@ function distillCore(opts) {
     lines.push('');
   }
   // 3) 知识地图（type + tags 层级）
-  lines.push('## 三、知识地图（type → tags）');
+  lines.push('## 五、知识地图（type → tags）');
   lines.push('');
   const map = {};
   for (const e of entries) {
@@ -5469,6 +5826,8 @@ function distillCore(opts) {
       lines.push('- ' + tk + ': ' + map[t][tk].map(function (e) { return e.subject; }).join(' / '));
     }
   }
+  lines.push('');
+  lines.push.apply(lines, analysis.tailLines);
   let body = lines.join('\n') + '\n';
   // 可选模型增强：--model <cmd>，stdin 传结构化摘要，stdout 取提炼文本
   let modelOut = '';
@@ -5478,12 +5837,24 @@ function distillCore(opts) {
       const r = runDistillModel(String(opts.model), payload);
       if (r.stdout) modelOut = String(r.stdout).trim();
       if (!modelOut) modelOut = '（模型无输出）';
-      body += '\n## 四、模型提炼（--model ' + opts.model + '）\n\n' + modelOut + '\n';
+      body += '\n## 七、模型提炼（--model ' + opts.model + '）\n\n' + modelOut + '\n';
     } catch (e) {
       modelOut = '（模型调用失败: ' + e.message + '）';
-      body += '\n## 四、模型提炼\n\n' + modelOut + '\n';
+      body += '\n## 七、模型提炼\n\n' + modelOut + '\n';
     }
   }
+  const makeReport = function (writtenPath) {
+    return {
+      schemaVersion: 1,
+      generated: new Date().toISOString(),
+      root: root,
+      scope: { owner: owner, entries: entries.length, analyzed: analysis.analyzed },
+      classes: analysis.classes,
+      metrics: analysis.metrics,
+      skipped: analysis.skipped,
+      written: writtenPath || '',
+    };
+  };
   // 落盘：--out 指定 / 私密 distills / 公共 facts/distills
   let written = '';
   try {
@@ -5514,9 +5885,9 @@ function distillCore(opts) {
       }
     }
   } catch (e) {
-    return { error: false, text: lines.join('\n') + '\n\n[落盘失败] ' + e.message };
+    return { error: false, text: lines.join('\n') + '\n\n[落盘失败] ' + e.message, report: makeReport('') };
   }
-  return { error: false, text: body + '\n[已写入] ' + written };
+  return { error: false, text: body + '\n[已写入] ' + written, report: makeReport(written) };
 }
 
 function promptPassword(promptText) {
@@ -6639,7 +7010,8 @@ function cmdMaintain(opts) {
 }
 function cmdDistill(opts) {
   const r = distillCore(opts);
-  console.log(r.text);
+  if (opts.json && r.report) console.log(JSON.stringify(r.report, null, 2));
+  else console.log(r.text);
   if (r.error) process.exit(2);
 }
 function cmdForget(fileRef, opts) {
@@ -8790,7 +9162,7 @@ function mcpTools(profile) {
     { name: 'agent_info', description: '查看当前智能体身份与登记状态（HTTP 读经 token 校验的 X-Agent-Id；stdio 读 --agent-id 显式参数）。开工先确认「我是谁」，禁止从记忆里抄别人的 ID', inputSchema: { type: 'object', properties: {} } },
     { name: 'profile', description: '生成当前智能体的用户画像（只读聚合 private/<owner>/ 下 PREF/BOUND/COMMIT 原文，零推断，写入 private/<owner>/profile.md）。owner 默认当前智能体', inputSchema: { type: 'object', properties: { owner: { type: 'string' } } } },
     { name: 'feedback', description: '显式使用反馈（自我学习）：useful/useless 调整记忆 weight/confidence/feedback_net。file 为记忆文件路径或文件名', inputSchema: { type: 'object', properties: { file: { type: 'string' }, useful: { type: 'boolean' }, useless: { type: 'boolean' }, reason: { type: 'string' } }, required: ['file'] } },
-    { name: 'maintain', description: '记忆自组织（自我进化）：规则层归档/遗忘/去重预览。默认 dry-run；apply 才执行，purge 才真删；capacity=true 改为只读容量水位报告', inputSchema: { type: 'object', properties: { apply: { type: 'boolean' }, purge: { type: 'boolean' }, dedup: { type: 'boolean' }, capacity: { type: 'boolean' }, limit: { type: 'number' }, threshold: { type: 'number' }, age: { type: 'number' } } } },
+    { name: 'maintain', description: '记忆自组织（自我进化）：规则层归档/遗忘/去重预览。默认 dry-run；apply 才执行，purge 才真删；capacity=true 改为只读容量水位报告；rules=true 改为只读规则晋升建议', inputSchema: { type: 'object', properties: { apply: { type: 'boolean' }, purge: { type: 'boolean' }, dedup: { type: 'boolean' }, capacity: { type: 'boolean' }, rules: { type: 'boolean' }, limit: { type: 'number' }, threshold: { type: 'number' }, age: { type: 'number' } } } },
     { name: 'consolidate', description: '周期摘要压缩候选报告（只读 propose 模式）。MCP 不提供 --apply / --undo / --batches；执行与回滚请在本机 CLI 由用户确认后运行', inputSchema: { type: 'object', properties: { minAge: { type: 'number' }, minIdle: { type: 'number' }, maxUtility: { type: 'number' }, minGroup: { type: 'number' }, period: { type: 'number' }, type: { type: 'string' } } } },
     { name: 'distill', description: '心理日志蒸馏（自我提升）：统计摘要/主题画像/知识地图。owner 默认当前智能体（MCP 不支持 --model 外部命令）', inputSchema: { type: 'object', properties: { owner: { type: 'string' }, subject: { type: 'string' } } } },
     { name: 'explain', description: '解释单条记忆效用分项（为什么靠前/归档/遗忘）。file 为记忆文件路径或文件名', inputSchema: { type: 'object', properties: { file: { type: 'string' } }, required: ['file'] } },
@@ -8921,7 +9293,7 @@ function callToolInner(name, args, ctx) {
     if (name === 'maintain') {
       const r = args.capacity
         ? capacityCore({ selfAgent: agent, limit: args.limit })
-        : maintainCore({ selfAgent: agent, apply: !!args.apply, purge: !!args.purge, dedup: !!args.dedup, threshold: args.threshold, age: args.age });
+        : maintainCore({ selfAgent: agent, apply: !!args.apply, purge: !!args.purge, dedup: !!args.dedup, rules: !!args.rules, threshold: args.threshold, age: args.age });
       return { text: r.text, error: r.error };
     }
     if (name === 'consolidate') {
@@ -9761,6 +10133,14 @@ function consolidateUndoCore(batch, opts) {
     try {
       if (fs.existsSync(to)) fs.unlinkSync(to);
       if (fs.existsSync(from)) {
+        const archiveOwner = archiveOwnerFromPath(x.root, from);
+        try {
+          const marked = readMemoryText(x.root, from, archiveOwner);
+          const clean = stripConsolidateMarker(marked, x.rec.had_trailing_newline !== false);
+          if (clean !== marked) writeMemoryText(x.root, from, clean, archiveOwner);
+        } catch (eMarker) {
+          err = err || ('巩固标记剥离失败: ' + x.rec.file + ' ' + eMarker.message);
+        }
         fs.mkdirSync(path.dirname(to), { recursive: true });
         fs.renameSync(from, to);
         upsertIndexEntry(x.root, readEntry(to, x.root));
@@ -9824,7 +10204,102 @@ function clusterConsolidateCandidates(cands) {
   return groups;
 }
 
-function applyConsolidateGroup(root, group, batch, period) {
+// ---- v0.18.1 A9：相对日期绝对化 + 归档巩固标记 ----
+const CONSOLIDATE_MARKER_PREFIX = '<!-- yotta-memory: consolidated to ';
+const CONSOLIDATE_MARKER_RE = /<!-- yotta-memory: consolidated to [^\n]* -->\n?/;
+function ymdPad(n) { return String(n).padStart(2, '0'); }
+function ymdParse(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (d.getFullYear() !== Number(m[1]) || d.getMonth() !== Number(m[2]) - 1 || d.getDate() !== Number(m[3])) return null;
+  return d;
+}
+function ymdFormat(d) { return d.getFullYear() + '-' + ymdPad(d.getMonth() + 1) + '-' + ymdPad(d.getDate()); }
+function ymdAdd(s, days) { const d = ymdParse(s); if (!d) return ''; d.setDate(d.getDate() + days); return ymdFormat(d); }
+function ymdWeekRange(s) {
+  const d = ymdParse(s);
+  if (!d) return '';
+  const mondayOffset = (d.getDay() + 6) % 7;
+  const mon = new Date(d.getFullYear(), d.getMonth(), d.getDate() - mondayOffset);
+  const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
+  return ymdFormat(mon) + ' ~ ' + ymdFormat(sun);
+}
+function ymdMonthRange(s, offset) {
+  const d = ymdParse(s);
+  if (!d) return '';
+  const first = new Date(d.getFullYear(), d.getMonth() + (offset || 0), 1);
+  const last = new Date(first.getFullYear(), first.getMonth() + 1, 0);
+  return ymdFormat(first) + ' ~ ' + ymdFormat(last);
+}
+function ymdYearRange(s, offset) {
+  const d = ymdParse(s);
+  if (!d) return '';
+  const y = d.getFullYear() + (offset || 0);
+  return y + '-01-01 ~ ' + y + '-12-31';
+}
+const RELATIVE_DATE_MAP = {
+  '大前天': function (b) { return ymdAdd(b, -3); },
+  '上上周': function (b) { return ymdWeekRange(ymdAdd(b, -7)); },
+  '上个月': function (b) { return ymdMonthRange(b, -1); },
+  '这个月': function (b) { return ymdMonthRange(b, 0); },
+  '前天': function (b) { return ymdAdd(b, -2); },
+  '昨天': function (b) { return ymdAdd(b, -1); },
+  '昨日': function (b) { return ymdAdd(b, -1); },
+  '今天': function (b) { return ymdAdd(b, 0); },
+  '今日': function (b) { return ymdAdd(b, 0); },
+  '明天': function (b) { return ymdAdd(b, 1); },
+  '后天': function (b) { return ymdAdd(b, 2); },
+  '上周': function (b) { return ymdWeekRange(ymdAdd(b, -7)); },
+  '本周': function (b) { return ymdWeekRange(b); },
+  '这周': function (b) { return ymdWeekRange(b); },
+  '上月': function (b) { return ymdMonthRange(b, -1); },
+  '本月': function (b) { return ymdMonthRange(b, 0); },
+  '今年': function (b) { return ymdYearRange(b, 0); },
+  '去年': function (b) { return ymdYearRange(b, -1); },
+};
+const RELATIVE_DATE_RE = /(大前天|上上周|上个月|这个月|前天|昨天|昨日|今天|今日|明天|后天|上周|本周|这周|上月|本月|今年|去年)(?![（(]\d{4}-\d{2}-\d{2})/g;
+function absolutizeRelativeDates(text, baseYmd) {
+  const s = String(text || '');
+  if (!ymdParse(baseYmd)) return { text: s, count: 0 };
+  let count = 0;
+  const out = s.replace(RELATIVE_DATE_RE, function (word) {
+    const fn = RELATIVE_DATE_MAP[word];
+    if (!fn) return word;
+    const rep = fn(baseYmd);
+    if (!rep) return word;
+    count += 1;
+    return word + '（' + rep + '）';
+  });
+  return { text: out, count: count };
+}
+function consolidateMarkerText(summaryRel, batch) {
+  return CONSOLIDATE_MARKER_PREFIX + summaryRel + ' | batch ' + batch + ' | ' + today() + ' -->';
+}
+function archiveOwnerFromPath(root, fp) {
+  const seg = path.relative(root, fp).split(/[\\/]/);
+  if (seg[0] === ARCHIVE_DIR && seg[1] === PRIVATE_DIR && seg[2]) return seg[2];
+  return ownerFromPrivatePath(root, fp);
+}
+function appendConsolidateMarker(root, fp, summaryRel, batch, owner, opts) {
+  if (opts && opts.markerFailForTest) throw new Error('marker fail for test');
+  let text = readMemoryText(root, fp, owner);
+  if (text.indexOf(CONSOLIDATE_MARKER_PREFIX) !== -1) return { appended: false, hadTrailingNewline: text.endsWith('\n') };
+  const hadTrailingNewline = text.endsWith('\n');
+  if (!hadTrailingNewline) text += '\n';
+  text += consolidateMarkerText(summaryRel, batch) + '\n';
+  writeMemoryText(root, fp, text, owner);
+  return { appended: true, hadTrailingNewline: hadTrailingNewline };
+}
+function stripConsolidateMarker(text, hadTrailingNewline) {
+  let out = String(text || '');
+  if (out.indexOf(CONSOLIDATE_MARKER_PREFIX) === -1) return out;
+  out = out.replace(CONSOLIDATE_MARKER_RE, '');
+  if (hadTrailingNewline === false && out.endsWith('\n')) out = out.slice(0, -1);
+  return out;
+}
+
+function applyConsolidateGroup(root, group, batch, period, opts) {
   const e0 = group[0];
   const type = e0.type;
   const owner = e0.scope === 'private' ? e0.owner : '';
@@ -9848,7 +10323,12 @@ function applyConsolidateGroup(root, group, batch, period) {
   const avgU = round3(group.reduce(function (s, c) { return s + c.utility; }, 0) / group.length);
   const bodyLines = ['# 周期摘要：' + theme, '', '> 生成: yotta-memory consolidate | 类型 ' + type + ' | 范围 ' + createdDates[0] + ' ~ ' + createdDates[createdDates.length - 1] + ' | ' + group.length + ' 条 | 平均效用 ' + avgU, '', '## 主题要点', ''];
   const sorted = group.slice().sort(function (a, b) { return String(b.e.updated || '').localeCompare(String(a.e.updated || '')); });
-  for (const c of sorted) bodyLines.push('- [' + c.e.type + '] ' + (c.e.subject || '') + ': ' + (c.e.statement || ''));
+  let dateNormalized = 0;
+  for (const c of sorted) {
+    const norm = absolutizeRelativeDates(c.e.statement || '', c.e.created || c.e.updated || '');
+    dateNormalized += norm.count;
+    bodyLines.push('- [' + c.e.type + '] ' + (c.e.subject || '') + ': ' + norm.text);
+  }
   bodyLines.push('', '## 溯源（原文已入 .archive，可 consolidate --undo <batch> 恢复）', '');
   for (const c of group) bodyLines.push('- ' + c.e.file + '（created ' + c.e.created + ' / confidence ' + c.e.confidence + ' / utility ' + round3(c.utility) + '）');
   const body = bodyLines.join('\n');
@@ -9859,16 +10339,26 @@ function applyConsolidateGroup(root, group, batch, period) {
   upsertIndexEntry(root, readEntry(fp, root));
   appendAudit(root, 'audit', { action: 'summary_create', ts: new Date().toISOString(), batch: batch, file: summaryRel, sourceFiles: group.map(function (c) { return c.e.file; }) });
   let moved = 0;
+  let markersWritten = 0;
+  let markerErrors = 0;
   for (const c of group) {
     const destDir = archiveDirFor(root, type, owner);
     fs.mkdirSync(destDir, { recursive: true });
     const dest = path.join(destDir, path.basename(c.e.file));
     fs.renameSync(path.join(root, c.e.file), dest);
+    let marker = { appended: false, hadTrailingNewline: true };
+    try {
+      marker = appendConsolidateMarker(root, dest, summaryRel, batch, owner, opts);
+      if (marker.appended) markersWritten += 1;
+    } catch (e) {
+      markerErrors += 1;
+      appendAudit(root, 'audit', { action: 'marker_failed', ts: new Date().toISOString(), batch: batch, file: c.e.file, to: relOf(root, dest), error: String(e.message || e) });
+    }
     removeIndexEntry(root, c.e.file);
-    appendAudit(root, 'audit', { action: 'archive', ts: new Date().toISOString(), batch: batch, file: c.e.file, to: relOf(root, dest), type: type, owner: owner, utility: round3(c.utility) });
+    appendAudit(root, 'audit', { action: 'archive', ts: new Date().toISOString(), batch: batch, file: c.e.file, to: relOf(root, dest), type: type, owner: owner, utility: round3(c.utility), had_trailing_newline: marker.hadTrailingNewline === true });
     moved++;
   }
-  return { made: 1, moved: moved, summaryRel: summaryRel };
+  return { made: 1, moved: moved, summaryRel: summaryRel, dateNormalized: dateNormalized, markersWritten: markersWritten, markerErrors: markerErrors };
 }
 
 // v0.18.0 A5：首次启用说明按 .archive 审计判定（不新建标记文件）。
@@ -9969,9 +10459,12 @@ function consolidateCore(opts) {
       summary_subject: '周期摘要 ' + theme + '（' + period + ' 天窗）',
       files: g.map(function (c) { return c.e.file; }),
       archive_to: path.relative(root, archiveDirFor(root, type, owner)).replace(/\\/g, '/'),
+      date_normalized_preview: g.reduce(function (s, c) {
+        return s + absolutizeRelativeDates(c.e.statement || '', c.e.created || c.e.updated || '').count;
+      }, 0),
     };
   };
-  const makeConsolidateReport = function (builtGroups, batch) {
+  const makeConsolidateReport = function (builtGroups, batch, extras) {
     return {
       schemaVersion: 1,
       mode: apply ? 'apply' : 'propose',
@@ -9987,6 +10480,9 @@ function consolidateCore(opts) {
       stats: stats,
       candidates: cands.length,
       groups: builtGroups.map(makeConsolidateGroup),
+      date_normalized: (extras && extras.dateNormalized) || 0,
+      markers_written: (extras && extras.markersWritten) || 0,
+      marker_errors: (extras && extras.markerErrors) || 0,
       retention: '原文移入 .archive/ 后一直保留，直到显式 purge 或 undo。',
       rollback: batch
         ? ('yotta-memory consolidate --undo ' + batch)
@@ -10015,7 +10511,10 @@ function consolidateCore(opts) {
     const minA = Math.min.apply(null, ages), maxA = Math.max.apply(null, ages);
     const avgU = round3(g.reduce(function (s, c) { return s + c.utility; }, 0) / g.length);
     lines.push('- [' + type + '] 主题: ' + pickSummaryTheme(g) + '（' + scopeLabel + '，' + g.length + ' 条，' + minA + '~' + maxA + ' 天，平均效用 ' + avgU + '）' + (type === 'COMMIT' ? '  ⚠️ COMMIT 承诺/任务类，请确认' : ''));
-    lines.push('    → 将生成 周期摘要 ' + pickSummaryTheme(g) + '（' + period + ' 天窗），原文归档到 ' + path.relative(root, archiveDirFor(root, type, g[0].owner || '')).replace(/\\/g, '/'));
+    const datePreview = g.reduce(function (s, c) {
+      return s + absolutizeRelativeDates(c.e.statement || '', c.e.created || c.e.updated || '').count;
+    }, 0);
+    lines.push('    → 将生成 周期摘要 ' + pickSummaryTheme(g) + '（' + period + ' 天窗），日期归一预览 ' + datePreview + ' 处，原文归档到 ' + path.relative(root, archiveDirFor(root, type, g[0].owner || '')).replace(/\\/g, '/'));
     for (const c of g) lines.push('    · ' + c.e.file + ' — ' + String(c.e.subject || '').slice(0, 32) + ': ' + String(c.e.statement || '').slice(0, 60));
   }
   if (!apply) {
@@ -10041,16 +10540,18 @@ function consolidateCore(opts) {
   lines.push('');
   lines.push('- 事务快照: ' + guard.snapshot.id);
   lines.push('- 批次: ' + batch + '（审计 .archive/audit-<日期>.jsonl；回滚: yotta-memory consolidate --undo ' + batch + '）');
-  let made = 0, moved = 0;
+  let made = 0, moved = 0, dateNormalized = 0, markersWritten = 0, markerErrors = 0;
   for (const g of groups) {
-    const res = applyConsolidateGroup(root, g, batch, period);
+    const res = applyConsolidateGroup(root, g, batch, period, opts);
     made += res.made; moved += res.moved;
+    dateNormalized += res.dateNormalized; markersWritten += res.markersWritten; markerErrors += res.markerErrors;
     lines.push('- 已生成摘要 ' + res.summaryRel + '（归档原文 ' + res.moved + ' 条）');
   }
   appendAudit(root, 'audit', { action: 'batch_done', ts: new Date().toISOString(), batch: batch, command: 'consolidate', summaries: made, archived: moved, active_after: collectEntryFiles(root).length });
   lines.push('- 完成: 生成摘要 ' + made + ' 条 / 原文归档 ' + moved + ' 条');
+  lines.push('- 日期归一: ' + dateNormalized + ' 处；巩固标记: ' + markersWritten + ' 条（失败 ' + markerErrors + '）');
   if (firstRunNotice.length) { lines.push(''); lines.push.apply(lines, firstRunNotice); }
-  return { error: false, text: lines.join('\n'), report: makeConsolidateReport(groups, batch) };
+  return { error: false, text: lines.join('\n'), report: makeConsolidateReport(groups, batch, { dateNormalized: dateNormalized, markersWritten: markersWritten, markerErrors: markerErrors }) };
 }
 
 async function cmdConsolidate(opts) {
@@ -10372,6 +10873,7 @@ async function main() {
     else if (a === '--keep-identity') opts.keepIdentity = true;
     else if (a === '--no-usage') opts.noUsage = true;
     else if (a === '--capacity') opts.capacity = true;
+    else if (a === '--rules') opts.rules = true;
     else if (a === '--propose') opts.propose = true;
     else if (a === '--audit') opts.audit = true;
     else if (valueOpts.has(a)) {

@@ -1,3 +1,32 @@
+## v0.18.1 (2026-09-27)
+
+第二波 P2：蒸馏溯源链 + 分类型提取 / 相对日期绝对化 + 巩固标记 / 重复踩坑 → 规则晋升建议 / 权威顺序与写入纪律（文档）。
+
+**蒸馏溯源链与分类型提取（A8）**
+
+- `distill` 新增分类型提取清单：事件 / 教训 / 待办 / 成长 / 规则边界 / 其他；每条提取项带 `[溯源: 文件#L<a>-L<b>]`，要素缺失显式写「未记录」。
+- 新增质量指标（只报本次实测，不承诺压缩倍数 / 语义保真）：实测压缩比 / 条目覆盖率 / 溯源覆盖率 / 要素提取率。
+- 新增跳过与边界清单：空文件、BOM、非 UTF-8、无 frontmatter、单行超长截断。
+- 修复：`distill --json` 现在真正输出结构化报告（此前帮助已声明但只打印文本）；帮助补 `--owner` / `--out`。
+
+**日期绝对化与巩固标记（A9）**
+
+- `consolidate` 摘要正文按条目 `created`（缺则 `updated`）把「昨天 / 上周 / 本月 / 今年」等写成绝对日期（如 `昨天（2026-01-09）`）；「最近 / 前几天 / 刚才」等模糊词不归一；无基准日期则跳过。
+- 归档副本追加一行 `<!-- yotta-memory: consolidated to … -->` 巩固标记；`--undo` 剥离标记并还原原始内容；标记失败不阻断批次，报告与审计记录 `markers_written` / `marker_errors`。
+- `consolidate --json` 报告新增 `date_normalized` / `markers_written` / `marker_errors`，propose 报告带每组 `date_normalized_preview`。
+
+**规则晋升建议（A10）**
+
+- 新增 `maintain --rules`（默认维护报告附带非空结果）：同组 ≥ `maintain_rule_min_hits`（默认 3）时输出组键 / 时间跨度 / 代表条目 / `remember BOUND` 建议命令；只读，不自动写规则、不改权重。
+- 分组键优先级：`pattern-key:` 标签 → 元习 `yotta-learn: <area>` + `[<category>]` → 领域标签 → subject 指纹；跨 owner 私密条目 fail-closed。
+- MCP `maintain` 新增只读入参 `rules`。
+- 元习联动：元忆不读 `.learnings/`、不调元习命令；分工与 pattern-key 对齐口径写入 SKILL / USER_GUIDE。
+
+**权威顺序与写入纪律（A12 / A13，文档）**
+
+- SKILL「记忆守则」新增 §10：冲突权威顺序 6 层、内嵌指令不可信、写入纪律三条；USER_GUIDE / protocol / FAQ 同步。
+- 边界：不新增 scan 检测规则（YTM-PIJ 系列已覆盖注入检测）。
+
 ## v0.18.0 (2026-09-26)
 
 第二波 P1：命中打点与容量水位 / consolidate 提案闸门 / 规模分级 / 上下文压缩审计。

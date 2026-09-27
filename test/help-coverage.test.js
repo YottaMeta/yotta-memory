@@ -128,12 +128,30 @@ test('main() boolean literals cannot drift away from CLI_FLAG_OPTS', () => {
   }
 });
 
+test('command-specific options stay documented', () => {
+  const commands = flattenCommands(memory.HELP_MODEL);
+  const byName = {};
+  for (const command of commands) byName[command.name] = command;
+  const expected = {
+    distill: ['--model', '--subject', '--owner', '--out', '--json'],
+    maintain: ['--capacity', '--rules', '--dedup', '--apply', '--purge'],
+  };
+  for (const name of Object.keys(expected)) {
+    const command = byName[name];
+    assert.ok(command, 'HELP_MODEL missing command: ' + name);
+    const flags = new Set((command.options || []).map((option) => option.flag));
+    for (const flag of expected[name]) {
+      assert.ok(flags.has(flag), name + ' help is missing ' + flag);
+    }
+  }
+});
+
 test('top-level help remains render-stable', () => {
   const stdout = runHelp();
   const digest = crypto.createHash('sha256').update(stdout).digest('hex');
   assert.strictEqual(
     digest,
-    '5bde7ffac1d312cd3d0b6fb8f338c9db9af54ee22384cf2b64c17eaaf6942751',
+    'e8495a40f30302d5dc9a6dbe139807d231eccd592d7d5929ea53770c2f23d766',
     'top-level help changed; review every command/option line, then update the snapshot digest intentionally'
   );
 });

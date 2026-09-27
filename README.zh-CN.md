@@ -22,6 +22,7 @@
 </p>
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
+> 🆕 **v0.18.1（蒸馏溯源 + 日期绝对化 + 巩固标记 + 规则晋升建议 + 写入纪律）**：`distill` 新增分类型提取清单（事件 / 教训 / 待办 / 成长 / 规则边界 / 其他）+ 逐条 `[溯源: 文件#L<a>-L<b>]` + 实测质量指标 + 跳过与边界，`--json` 输出结构化报告；`consolidate` 摘要按条目 `created` 把「昨天 / 上周 / 本月 / 今年」写成绝对日期，归档副本写入巩固标记（`--undo` 剥离还原）；`maintain --rules` 只读给出「重复踩坑 → 建议升级为规则」（默认阈值 3，不自动写 BOUND）；记忆守则新增冲突权威顺序 6 层与写入纪律 3 条。
 
 > 🆕 **v0.18.0（命中打点 + 容量水位 + consolidate 提案闸门 + 上下文压缩审计）**：`recall` / `explain` / `feedback --useful` / `context` 记录本地命中元数据（`hit_days` 默认保留 90 天；`hit_queries` 只存查询 8 位指纹、最多 12 槽，不存原文；随文件加密 / 备份 / 导出），`config set usage_enabled false` 或命令级 `--no-usage` 可关；只读命令与跨 owner 私密条目不写。`maintain --capacity` 只读报告容量水位、30 / 90 天活跃度、LRU / LFU 淘汰候选（冷却期 30 天 + immutable / BOUND / evergreen / pinned 豁免）与晋升建议（≥3 次命中且 ≥3 个不同查询，只出建议命令）；`archive` 默认豁免冷却期与标签常青，`--force` 可显式覆盖。`consolidate` 默认等价 `--propose`（结构化报告 + `--json`），`--apply` 交互式需确认串、非交互必须 `--yes`；首次启用显示一次数据生命周期说明。`doctor` 规模体检新增 `scale_info_*` 与逐项 `ok / info / warning` 分级（`doctor.ok` 仍只看 critical）。新增 `context --audit [--from <文件|->] [--json] [--gate N]`：核对被压缩掉的内容是否已落盘，输出未落盘清单与 `remember` 建议命令，只读、不自动补写。`archive --dry-run` 只预览不改库（不动文件 / 不建事务快照 / 不写审计），无候选时不建整库快照，`archive --json` 输出结构化报告；MCP 侧只补只读 / 预演能力（`archive.dryRun`、`maintain.capacity`、`context.audit` + 内联 `auditText`、`consolidate` 只出 propose 报告），`archive --force` 与 `consolidate --apply / --undo` 仍只在命令行。上一版 v0.17.4：`rename` 消除平铺 / 分层同序号冲突（跨布局 fail-closed + 破坏性闸门 + 审计）。
 > 🆕 **v0.17.4（rename 改名）**：`yotta-memory rename <记忆 id> <YYYY-MM-DD-NNNN.md>` 给单条记忆改名，用于消除「平铺 / 分层同序号」冲突。身份键 = 类型 + owner + 文件名，跨两种布局检查；目标名被占用或文件已存在一律拒绝（fail-closed）。走破坏性闸门（doctor + 独立备份 + 事务快照），改名后重建索引并写 `rename` 审计；`--dry-run` 只预览零写入。仅 CLI 提供，MCP 工具面不变。
@@ -76,6 +77,7 @@
 
 | 优势 | 说明 |
 |---|---|
+| **可追溯蒸馏与规则晋升（v0.18.1）** | `distill` 分类型提取清单 + 行号溯源锚点 + 实测质量指标 + 结构化 `--json`；`consolidate` 相对日期绝对化 + 归档副本巩固标记（`--undo` 剥离还原）；`maintain --rules` 只读「重复踩坑 → 建议升级为规则」；记忆守则新增冲突权威顺序 6 层与写入纪律 3 条 |
 | **数据主权在用户** | 公共 FACT 明文、可读可改可审计；私密区 AES-256-GCM 加密（用户经 `yotta-memory view` 口令解密查看）；git 可版本化，回滚 / 团队同步都走标准工具 |
 | **真正的权限边界** | 公共 / 私密分区 + 按 owner 物理分目录（`private/<owner>/<type>/`）+ scope/owner 过滤 + 授权机制（grant / identity=user / `--unsafe`），越界内容由 CLI 过滤、永不返回（默认静默；显式跨读 `--all`/`--owner <其它>` 无授权时 exit 3）；`--agent <其它>` 仅作身份声明、不授予跨读。读写走 CLI / MCP，禁 shell 直读写，不靠 AI 自律 |
 | **私密区机制级加密** | 私密区（PREF/BOUND/COMMIT）文件 AES-256-GCM 信封加密（口令派生主密钥 + 恢复钥匙 + 每 owner 加密索引）；没有对应 owner 密钥的 AI 即使读到密文也解不开；`yotta-memory view` 用户查看平台：口令解锁后浏览 / 搜索 / 导出全部 AI 记忆（含各 AI 私密明文） |
