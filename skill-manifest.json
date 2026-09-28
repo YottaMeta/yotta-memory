@@ -3,7 +3,7 @@
   "slug": "yotta-memory",
   "name": "元忆",
   "package": "@yottameta/yotta-memory",
-  "version": "0.18.1",
+  "version": "0.19.0",
   "trust": "yottameta",
   "install": {
     "idempotent": true
@@ -12,7 +12,7 @@
     "filesystem": "user-skills-dir",
     "network": "none",
     "process": "child-process",
-    "note": "只调用本包内 Node 引擎读写本地记忆库；默认不联网。"
+    "note": "只调用本包内 Node 引擎读写本地记忆库；默认不联网；仅在用户显式配置扩展提供方（provider.json）时按其配置调用本地子进程。"
   },
   "auto_apply": {
     "mode": "hook",

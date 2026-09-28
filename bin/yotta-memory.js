@@ -25,7 +25,7 @@ const net = require('net');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.18.1';
+const VERSION = '0.19.0';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path', '--from']);
 const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--propose', '--audit', '--capacity', '--rules', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--no-usage', '--yes', '--keep-memories', '--keep-identity']);
 
@@ -210,6 +210,7 @@ const HELP_MODEL = [
       helpOption('--audit', '', '审计被压缩掉的内容是否已经落盘', '宿主压缩上下文后，想确认有没有决策只存在于对话里时', '只读：只打印 remember 建议，不会自动补写'),
       helpOption('--from', '<文件|->', '指定待审计内容（- 表示标准输入）', '把宿主压缩摘要或丢弃段落喂给审计时', '不传时审计当前上下文包的丢弃清单'),
       helpOption('--limit', '<条数>', '限制近期记忆条数', '上下文太长、想缩短时', ''),
+      helpOption('--json', '', '输出结构化 JSON（hook 块 + text）', '脚本读取上下文包或扩展装载状态时', '未配置扩展提供方时也返回 JSON'),
       helpOption('--owner', '<id>', '指定 owner 范围', '需要看某个 owner 的上下文时', '仍然受私密区权限约束'),
       helpOption('--budget', '<字符数>', '设置动态记忆字符预算', '需要控制上下文包大小时', '0 表示不限制'),
       helpOption('--focus', '<关键词>', '按当前任务聚焦', '这次任务很明确、想优先拉相关记忆时', ''),
@@ -7561,6 +7562,109 @@ function compareContextRecent(a, b) {
   if (byTime !== 0) return byTime;
   return (b.access_count || 0) - (a.access_count || 0);
 }
+
+const MEMORY_HOOK_MAX_CANDIDATES = 500;
+const MEMORY_HOOK_STATEMENT_LIMIT = 2000;
+
+function hookBlock(status, providerId, note) {
+  return {
+    status: status || 'not_installed',
+    provider_id: providerId || '',
+    applied: false,
+    evicted: [],
+    dropped: [],
+    note: note || '',
+  };
+}
+
+function hookStatusText(hook) {
+  if (!hook) return '';
+  if (hook.status === 'active') {
+    const who = hook.provider_id ? '提供方 ' + hook.provider_id : '提供方';
+    return '已应用（' + who + '；驱逐 ' + hook.evicted.length + ' / 丢弃 ' + hook.dropped.length + '）';
+  }
+  if (hook.status === 'license_required') return '需授权（该能力需要授权后使用；普通记忆不受影响）';
+  if (hook.status === 'timeout') return '未生效（提供方超时，已回落普通记忆）';
+  if (hook.status === 'invalid_output') return '未生效（提供方输出无效，已回落普通记忆）';
+  if (hook.status === 'error') return '未生效（提供方异常，已回落普通记忆）';
+  return hook.status;
+}
+
+/**
+ * memory.hook 装载点：只把「可驱逐」条目（非 BOUND / COMMIT）交给 provider。
+ * provider 只能返回本次候选集内的 evict（驱逐清单）；complete=true 时可选 selected（白名单）。
+ * 身份画像、BOUND / COMMIT、预算 / 去重 / 宽限始终由引擎掌控；任何失败都走普通记忆。
+ * 协议见 references/provider-protocol.md。
+ */
+function applyMemoryHook(readableEntries, opts) {
+  const block = hookBlock('not_installed', '', '');
+  const pageable = readableEntries
+    .filter(function (entry) { return entry.type !== 'BOUND' && entry.type !== 'COMMIT'; })
+    .sort(compareContextRecent);
+  const truncated = pageable.length > MEMORY_HOOK_MAX_CANDIDATES;
+  const payload = {
+    agent: opts.owner || '',
+    budget: opts.budget || 0,
+    focus: opts.focus || '',
+    truncated: truncated,
+    candidates: pageable.slice(0, MEMORY_HOOK_MAX_CANDIDATES).map(function (entry) {
+      return {
+        file: entry.file,
+        type: entry.type,
+        subject: entry.subject,
+        statement: String(entry.statement || '').slice(0, MEMORY_HOOK_STATEMENT_LIMIT),
+        created: entry.created || '',
+        updated: entry.updated || '',
+      };
+    }),
+  };
+  let run;
+  try {
+    run = require('./provider').runCapability('memory.hook', payload);
+  } catch (e) {
+    block.status = 'error';
+    block.note = '扩展装载失败：' + e.message;
+    return { block: block, evict: new Set(), selected: null };
+  }
+  block.status = run.status;
+  block.provider_id = run.provider_id || '';
+  block.note = run.note || run.message || '';
+  if (run.status !== 'active' || !run.data || typeof run.data !== 'object') {
+    return { block: block, evict: new Set(), selected: null };
+  }
+  const sent = new Set(payload.candidates.map(function (item) { return item.file; }));
+  const evicted = [];
+  for (const item of (Array.isArray(run.data.evict) ? run.data.evict : [])) {
+    const file = String(item || '');
+    if (!file) continue;
+    if (!sent.has(file)) {
+      block.dropped.push(file);
+      continue;
+    }
+    if (evicted.indexOf(file) === -1) evicted.push(file);
+  }
+  let selected = null;
+  if (Array.isArray(run.data.selected) && run.data.complete === true && !truncated) {
+    const picked = [];
+    for (const item of run.data.selected) {
+      const file = String(item || '');
+      if (!file) continue;
+      if (!sent.has(file)) {
+        block.dropped.push(file);
+        continue;
+      }
+      if (picked.indexOf(file) === -1) picked.push(file);
+    }
+    selected = new Set(picked);
+  }
+  block.evicted = evicted;
+  block.applied = evicted.length > 0 || selected !== null;
+  if (truncated && Array.isArray(run.data.selected)) {
+    block.note = block.note || '候选超过 ' + MEMORY_HOOK_MAX_CANDIDATES + '，白名单模式未应用（保护）';
+  }
+  return { block: block, evict: new Set(evicted), selected: selected };
+}
+
 function contextCore(opts) {
   opts = opts || {};
   const roots = memoryRoots();
@@ -7672,9 +7776,26 @@ function contextCore(opts) {
     }
   }
 
+  const memHook = applyMemoryHook(readableEntries, { owner: owner, budget: budget, focus: focus, limit: limit });
+  const hookState = memHook.block;
+  function hookAllows(entry) {
+    if (!entry) return false;
+    if (memHook.selected && !memHook.selected.has(entry.file)) return false;
+    if (memHook.evict.has(entry.file)) return false;
+    return true;
+  }
+  if (hookState.status !== 'not_installed') {
+    const anchor = lines.indexOf('## 1. 身份');
+    lines.splice(anchor === -1 ? 2 : anchor, 0, '- 扩展装载（memory.hook）: ' + hookStatusText(hookState), '');
+    trace.push('[hook] status: ' + hookState.status
+      + ' provider: ' + (hookState.provider_id || '-')
+      + ' evicted: ' + hookState.evicted.length
+      + ' dropped: ' + hookState.dropped.length);
+  }
+
   lines.push('## 2.5 长期理解摘要');
   lines.push('');
-  const summaries = readableEntries.filter(isConsolidatedSummary).sort(compareContextRecent);
+  const summaries = readableEntries.filter(isConsolidatedSummary).filter(hookAllows).sort(compareContextRecent);
   const summaryLimit = Math.min(3, Math.max(0, limit));
   if (!summaries.length) lines.push('（暂无周期摘要；可用 yotta-memory consolidate --apply 生成）');
   for (const e of summaries.slice(0, summaryLimit)) {
@@ -7697,7 +7818,7 @@ function contextCore(opts) {
     });
     const focusedEntries = focused.entries || [];
     if (!focusedEntries.length) lines.push('（无匹配记忆）');
-    for (const e of focusedEntries) {
+    for (const e of focusedEntries.filter(hookAllows)) {
       appendContextEntry(e, 'focus_match score: ' + round3(e.score));
     }
     lines.push('');
@@ -7708,6 +7829,7 @@ function contextCore(opts) {
   const corridor = readableEntries
     .filter(function (e) { return !isConsolidatedSummary(e) && e.type !== 'BOUND' && e.type !== 'COMMIT'; })
     .sort(compareContextRecent)
+    .filter(hookAllows)
     .filter(function (e) { return !shownFiles.has(e.file); })
     .slice(0, limit);
   if (!corridor.length) lines.push('（暂无近期记忆）');
@@ -7717,7 +7839,7 @@ function contextCore(opts) {
   lines.push('## 4. 近期高价值记忆（补位）');
   lines.push('');
   const highValue = readableEntries
-    .filter(function (e) { return !isConsolidatedSummary(e) && e.type !== 'BOUND' && e.type !== 'COMMIT' && !shownFiles.has(e.file); })
+    .filter(function (e) { return !isConsolidatedSummary(e) && e.type !== 'BOUND' && e.type !== 'COMMIT' && !shownFiles.has(e.file) && hookAllows(e); })
     .map(function (e) { return { e: e, s: 0.5 * importanceScore(e) + 0.5 * utilityScore(e) }; })
     .sort(function (a, b) { return b.s - a.s; })
     .slice(0, limit);
@@ -7777,12 +7899,16 @@ function contextCore(opts) {
     for (const message of reliability.warnings) lines.push('- [警告] ' + message);
     if (!reliability.ok) lines.push('- 破坏性写入已锁定：先运行 yotta-memory doctor 修复严重问题。');
   }
-  return { error: false, exitCode: 0, text: lines.join('\n'), trace: trace };
+  return { error: false, exitCode: 0, text: lines.join('\n'), trace: trace, hook: hookState };
 }
 function cmdContext(opts) {
   const r = contextCore(opts);
-  if (opts.json && r.report) console.log(JSON.stringify(r.report, null, 2));
-  else console.log(r.text);
+  if (opts.json) {
+    if (r.report) console.log(JSON.stringify(r.report, null, 2));
+    else console.log(JSON.stringify({ schema: 1, hook: r.hook || null, text: r.text }, null, 2));
+  } else {
+    console.log(r.text);
+  }
   if (r.error) {
     const reminder = migrationReminderText(userRoot());
     if (reminder) console.log('\n' + reminder);
@@ -11078,6 +11204,7 @@ module.exports = {
   profileCore: profileCore,
   contextCore: contextCore,
   contextAuditCore: contextAuditCore,
+  applyMemoryHook: applyMemoryHook,
   importanceScore: importanceScore,
   usageSettings: usageSettings,
   usageTotals: usageTotals,

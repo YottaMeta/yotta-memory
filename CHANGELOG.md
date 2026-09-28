@@ -1,3 +1,9 @@
+## v0.19.0 (2026-09-28)
+- 新增扩展提供方（provider）装载点：`context` 可选调用本地 provider（capability `memory.hook`），在权限过滤后的候选集内驱逐条目；BOUND / COMMIT 与身份画像不可驱逐，预算 / 去重 / 宽限仍由引擎掌控。
+- 未配置 / 未授权 / 超时 / 非法输出一律 fail-open 回普通记忆；`provider.json` 非法只记状态、不阻断。
+- `context --json` 输出结构化 JSON（`schema` / `hook` / `text`）；此前该参数回落为文本。
+- 扩展调用只写本地审计元数据（`provider-audit.jsonl`：capability / 状态 / 耗时 / 字节数），不含 payload 正文。
+
 ## v0.18.1 (2026-09-27)
 
 第二波 P2：蒸馏溯源链 + 分类型提取 / 相对日期绝对化 + 巩固标记 / 重复踩坑 → 规则晋升建议 / 权威顺序与写入纪律（文档）。
