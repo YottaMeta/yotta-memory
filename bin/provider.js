@@ -94,6 +94,7 @@ function minimalEnv() {
   const keep = [
     'PATH', 'Path', 'PATHEXT', 'SystemRoot', 'windir', 'COMSPEC', 'ComSpec',
     'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LANG', 'LC_ALL',
+    'YOTTA_LICENSE_HOME', 'YOTTA_LICENSE_KEYS_DIR', 'YOTTA_LICENSE_BASE_URL', 'YOTTA_LICENSE_SERVER_ID',
   ];
   const env = {};
   for (const key of keep) {

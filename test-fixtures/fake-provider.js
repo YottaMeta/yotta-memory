@@ -50,6 +50,32 @@ if (mode === 'hang') {
   }
   const candidates = ((request && request.payload && request.payload.candidates) || []);
   send({ ok: true, capability: request && request.capability, data: { evict: candidates.slice(0, 1).map((item) => item.file) } });
+} else if (mode === 'paging') {
+  let plan = {};
+  try {
+    plan = JSON.parse(argData || '{}');
+  } catch (e) {
+    plan = {};
+  }
+  const capability = request && request.capability;
+  if (plan.dumpFile && capability === 'context.paging') {
+    fs.writeFileSync(plan.dumpFile, JSON.stringify((request && request.payload) || {}), 'utf8');
+  }
+  send({ ok: true, capability, data: plan[capability] || {} });
+} else if (mode === 'env') {
+  send({
+    ok: true,
+    capability: request && request.capability,
+    data: {
+      env: {
+        YOTTA_LICENSE_HOME: process.env.YOTTA_LICENSE_HOME || '',
+        YOTTA_LICENSE_KEYS_DIR: process.env.YOTTA_LICENSE_KEYS_DIR || '',
+        YOTTA_LICENSE_BASE_URL: process.env.YOTTA_LICENSE_BASE_URL || '',
+        YOTTA_LICENSE_SERVER_ID: process.env.YOTTA_LICENSE_SERVER_ID || '',
+      },
+      leaked: Boolean(process.env.YOTTA_SECRET_MARKER),
+    },
+  });
 } else {
   const capability = request && request.capability;
   if (capability === 'memory.hook') {

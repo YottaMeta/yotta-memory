@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
 description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照、基线探针、恢复演练、记忆库安全扫描、scan、命中打点、容量水位、--capacity、--propose、上下文压缩审计、context --audit
-version: 0.19.0
+version: 0.20.0
 license: MIT
 ---
 
@@ -36,7 +36,7 @@ license: MIT
 - **可靠性基线（v0.12.0）**：`init` 对非空记忆库默认拒绝覆盖（`--attach` 接入现有库）；`forget` 先移入 `.trash/` 并写审计；新增 `backup volumes / setup / status / ensure-daily / schedule / drill`（用户确认真实独立卷后默认每日自动备份）与 `backup create / list / doctor / restore`。
 - **可靠性收口（v0.12.2）**：新增 `yotta-memory doctor` 开工检查（根目录 / 密钥库 / 索引 / 身份 / 最近备份）；`maintain --apply`、`consolidate --apply`、`merge`、`archive`、`--purge` 在写入前自动创建事务快照，快照失败或严重检查异常时拒绝写入。
 - **运行时 hook 声明（v0.13.0）**：manifest 声明 `after_milestone` / `remember_commit`；里程碑记忆必须有真实文件路径证据才标 verified，缺证据时输出 `explicit-unverified` + 一次纠偏。
-- **扩展提供方装载点（v0.19.0）**：`context` 支持可选的本地扩展提供方（capability `memory.hook`）参与「哪些记忆进上下文」：提供方只能驱逐本次候选集内的条目；身份画像、BOUND / COMMIT、预算 / 去重 / 宽限仍由引擎掌控。未配置 / 未授权 / 超时 / 非法输出一律走普通记忆，输出不带扩展行；`context --json` 输出 `schema` / `hook` / `text`。配置与协议见 `references/provider-protocol.md`。
+- **扩展提供方装载点（v0.20.0）**：`context` 支持可选的本地扩展提供方参与「哪些记忆进上下文」：`memory.hook` 先按候选集驱逐 / 白名单过滤，`context.paging` 在显式 `--budget` 时再排序与分页。身份段落、自我接入档案、BOUND / COMMIT、预算 / 去重 / 宽限仍由引擎掌控；未配置 / 未授权 / 超时 / 非法输出一律走普通记忆。`context --json` 输出 `schema` / `hook` / `paging` / `text`，`--explain` 增加 `[paging]` 轨迹。配置与协议见 `references/provider-protocol.md`。
 
 - **蒸馏溯源与分类型提取（v0.18.1）**：`distill` 输出新增「分类型提取清单（事件 / 教训 / 待办 / 成长 / 规则边界 / 其他）+ 质量指标 + 跳过与边界」；每条提取项带 `[溯源: 文件#L<a>-L<b>]`，报告只给实测压缩比 / 条目覆盖 / 溯源覆盖 / 要素提取率，不承诺压缩倍数或语义保真。`distill --json` 输出结构化报告；帮助补 `--owner` / `--out`。
 - **日期绝对化与巩固标记（v0.18.1）**：`consolidate` 生成摘要正文时，按条目 `created`（缺则 `updated`）把「昨天 / 上周 / 本月 / 今年」等写成绝对日期（如 `昨天（2026-01-09）`）；「最近 / 前几天 / 刚才」等模糊词不归一。归档副本末尾追加一行 `<!-- yotta-memory: consolidated to … -->` 巩固标记；`--undo` 剥离标记并还原原始内容；标记失败不影响批次，只在报告与审计里计数。

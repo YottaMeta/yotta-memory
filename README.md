@@ -107,7 +107,7 @@ Each agent has a globally unique agent ID: it is the ownership key for private m
 ### Profile & start-of-work context (v0.6.0 + v0.9.0 + v0.14.0)
 
 - **profile**: aggregates `private/<owner>/` PREF / BOUND / COMMIT verbatim, grouped by type + subject + tags, written to `profile.md`; the engine infers nothing — profile conclusions are formed internally by the AI per the "memory discipline", never pasted as labels.
-- **context**: one-shot start-of-work package — multi-agent integration rules + identity + long-term summaries first (`consolidate` output) + user profile digest + optional task-focused memory (`--focus`) + time-ordered recent corridor + deduplicated high-value backfill + boundary reminders + commitments/anchors + session loop contract; supports `--budget` for dynamic memory and `--explain` selection trace.
+- **context**: one-shot start-of-work package — multi-agent integration rules + identity + long-term summaries first (`consolidate` output) + user profile digest + optional task-focused memory (`--focus`) + time-ordered recent corridor + deduplicated high-value backfill + boundary reminders + commitments/anchors + session loop contract; supports `--budget` for dynamic memory and `--explain` selection trace. Optional local providers can add `memory.hook` filtering and, when `--budget` is explicit, `context.paging` ordering/paging; `context --json` returns `hook` and `paging` blocks.
 - **Memory discipline**: SKILL.md embeds a rule layer (type red lines / proactive trigger capture / know-the-user three stages / psychological grounding & alignment / bottom lines / host isolation / anti-patterns).
 
 ### Retrieval: semantic search (v0.8.0 + v0.9.0 embedding)

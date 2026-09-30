@@ -63,6 +63,43 @@ function entries() {
   ];
 }
 
+function writeProfileSnapshot(root, owner, body) {
+  const fp = path.join(root, 'private', owner, 'profile.md');
+  fs.mkdirSync(path.dirname(fp), { recursive: true });
+  fs.writeFileSync(fp, body, 'utf8');
+}
+
+function indexEntry(entry) {
+  const meta = entry.meta || {};
+  return {
+    file: entry.rel,
+    type: meta.type || 'FACT',
+    subject: meta.subject || '',
+    statement: meta.statement || '',
+    confidence: meta.confidence === undefined ? 1 : meta.confidence,
+    created: meta.created || '',
+    updated: meta.updated || meta.created || '',
+    tags: meta.tags || [],
+    immutable: !!meta.immutable,
+    scope: meta.scope || (entry.rel.indexOf('private/') === 0 ? 'private' : 'public'),
+    owner: meta.owner || '',
+    source: meta.source || '',
+    weight: meta.weight === undefined ? 1 : meta.weight,
+    access_count: meta.access_count || 0,
+    last_accessed: meta.last_accessed || '',
+    feedback_net: meta.feedback_net || 0,
+  };
+}
+
+function writeIndex(root, extraEntries) {
+  const all = entries().concat(extraEntries || []);
+  fs.writeFileSync(path.join(root, 'index.json'), JSON.stringify({
+    version: 4,
+    updated: '2026-09-30',
+    entries: all.map(indexEntry),
+  }, null, 2), 'utf8');
+}
+
 function withStore(run, providerCommand) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ytm-hook-store-'));
   const configDir = path.join(root, '.config');
@@ -126,6 +163,64 @@ test('provider active：驱逐清单生效，未驱逐条目保留', () => {
     assert.ok(r.text.includes('近期记忆B'), '未驱逐条目应保留');
     assert.ok(r.trace.some((line) => line.includes('[hook]')), 'trace 应记录 hook');
   }, [process.execPath, FIXTURE]);
+});
+
+test('hook 驱逐 PREF：被驱逐正文不再从画像快照出现', () => {
+  const evicted = 'private/codex/prefs/2026-09-25-0001.md';
+  const kept = 'private/codex/prefs/2026-09-24-0001.md';
+  withStore((ctx) => {
+    const evictedMeta = {
+      type: 'PREF', subject: '偏好条目', statement: '被驱逐的偏好正文必须消失',
+      owner: 'codex', created: '2026-09-25T10:00:00Z', updated: '2026-09-25T10:00:00Z',
+    };
+    const keptMeta = {
+      type: 'PREF', subject: '偏好条目', statement: '保留的偏好正文必须存在',
+      owner: 'codex', created: '2026-09-24T10:00:00Z', updated: '2026-09-24T10:00:00Z',
+    };
+    writeEntry(ctx.root, evicted, evictedMeta);
+    writeEntry(ctx.root, kept, keptMeta);
+    writeIndex(ctx.root, [
+      { rel: evicted, meta: evictedMeta },
+      { rel: kept, meta: keptMeta },
+    ]);
+    writeProfileSnapshot(ctx.root, 'codex', [
+      '# 用户画像（codex）',
+      '',
+      '## PREF · 偏好条目',
+      '',
+      '- 被驱逐的偏好正文必须消失（confidence 1 · 未访问）',
+      '  - ' + evicted,
+      '',
+      '- 保留的偏好正文必须存在（confidence 1 · 未访问）',
+      '  - ' + kept,
+      '',
+    ].join('\n'));
+
+    const r = memory.contextCore({ selfAgent: 'codex', limit: 10, explain: true });
+    assert.strictEqual(r.hook.status, 'active');
+    assert.strictEqual(r.hook.applied, true);
+    assert.ok(!r.text.includes('被驱逐的偏好正文必须消失'), '被驱逐 PREF 不应从画像快照再次出现');
+    assert.ok(r.text.includes('保留的偏好正文必须存在'), '未驱逐 PREF 应保留');
+  }, [process.execPath, FIXTURE, 'custom', JSON.stringify({ evict: [evicted] })]);
+});
+
+test('自我接入档案不进 hook 候选集，且无法被驱逐', () => {
+  const selfProfile = 'private/codex/prefs/2026-08-25-0001.md';
+  withStore((ctx) => {
+    const selfMeta = {
+      type: 'PREF', subject: '自我接入档案',
+      statement: 'agent_id: codex; agent_name: 知微; user_name: 老张',
+      owner: 'codex', created: '2026-08-25T10:00:00Z', updated: '2026-08-25T10:00:00Z',
+    };
+    writeEntry(ctx.root, selfProfile, selfMeta);
+    writeIndex(ctx.root, [{ rel: selfProfile, meta: selfMeta }]);
+
+    const r = memory.contextCore({ selfAgent: 'codex', limit: 10, explain: true });
+    assert.strictEqual(r.hook.status, 'active');
+    assert.strictEqual(r.hook.applied, false);
+    assert.deepStrictEqual(r.hook.dropped, [selfProfile]);
+    assert.ok(r.text.includes('agent_id: codex; agent_name: 知微; user_name: 老张'));
+  }, [process.execPath, FIXTURE, 'custom', JSON.stringify({ evict: [selfProfile] })]);
 });
 
 test('BOUND / COMMIT 不进入候选集，且不可被驱逐', () => {

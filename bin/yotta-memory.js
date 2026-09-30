@@ -25,7 +25,7 @@ const net = require('net');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.19.0';
+const VERSION = '0.20.0';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path', '--from']);
 const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--propose', '--audit', '--capacity', '--rules', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--no-usage', '--yes', '--keep-memories', '--keep-identity']);
 
@@ -7460,8 +7460,7 @@ function cmdWhoami(opts) {
 
 // ---- 用户画像聚合（v0.6.0，零推断：只归组呈现原文，结论由承载 AI 依据「记忆守则」内部形成）----
 function profileGroups(root, owner) {
-  const groups = [];
-  const map = {};
+  const entries = [];
   for (const t of PRIVATE_LEAF) {
     const dir = path.join(root, PRIVATE_DIR, owner, t);
     if (!fs.existsSync(dir)) continue;
@@ -7471,18 +7470,45 @@ function profileGroups(root, owner) {
       if (!fs.statSync(fp).isFile()) continue;
       let e;
       try { e = readEntry(fp, root); } catch (err) { continue; }
-      const key = e.type + '\u0000' + (e.subject || '') + '\u0000' + e.tags.join(',');
-      if (!map[key]) {
-        map[key] = { type: e.type, subject: e.subject || '', tags: e.tags || [], items: [] };
-        groups.push(map[key]);
-      }
-      map[key].items.push({
-        file: e.file, statement: e.statement, confidence: e.confidence,
-        last_accessed: e.last_accessed, updated: e.updated,
-      });
+      entries.push(e);
     }
   }
+  return profileGroupsFromEntries(entries);
+}
+function profileGroupsFromEntries(entries) {
+  const groups = [];
+  const map = {};
+  for (const e of (entries || [])) {
+    const key = e.type + '\u0000' + (e.subject || '') + '\u0000' + (e.tags || []).join(',');
+    if (!map[key]) {
+      map[key] = { type: e.type, subject: e.subject || '', tags: e.tags || [], items: [] };
+      groups.push(map[key]);
+    }
+    map[key].items.push({
+      file: e.file, statement: e.statement, confidence: e.confidence,
+      last_accessed: e.last_accessed, updated: e.updated,
+    });
+  }
   return groups;
+}
+function renderProfileText(owner, groups) {
+  const lines = [];
+  lines.push('# 用户画像（' + owner + '）');
+  lines.push('');
+  lines.push('> 生成: yotta-memory profile | 引擎零推断：以下为私密记忆原文的结构化归组，画像结论由承载 AI 依据「记忆守则」在内部形成，不当面贴标签。');
+  lines.push('> 刷新: ' + today());
+  lines.push('');
+  for (const g of (groups || [])) {
+    lines.push('## ' + g.type + ' · ' + (g.subject || '（无主题）') + (g.tags.length ? '  [tags: ' + g.tags.join(', ') + ']' : ''));
+    lines.push('');
+    for (const it of g.items) {
+      const acc = it.last_accessed ? '最近访问 ' + it.last_accessed : '未访问';
+      lines.push('- ' + it.statement + '（confidence ' + it.confidence + ' · ' + acc + '）');
+      lines.push('  - ' + it.file);
+    }
+    lines.push('');
+  }
+  return lines.join('\n');
 }
 function profileCore(opts) {
   opts = opts || {};
@@ -7511,23 +7537,7 @@ function profileCore(opts) {
   }
   const groups = profileGroups(root, owner);
   if (!groups.length) return { error: false, text: '该智能体（' + owner + '）暂无画像：private/' + owner + '/ 下无 PREF / BOUND / COMMIT 条目。' };
-  const lines = [];
-  lines.push('# 用户画像（' + owner + '）');
-  lines.push('');
-  lines.push('> 生成: yotta-memory profile | 引擎零推断：以下为私密记忆原文的结构化归组，画像结论由承载 AI 依据「记忆守则」在内部形成，不当面贴标签。');
-  lines.push('> 刷新: ' + today());
-  lines.push('');
-  for (const g of groups) {
-    lines.push('## ' + g.type + ' · ' + (g.subject || '（无主题）') + (g.tags.length ? '  [tags: ' + g.tags.join(', ') + ']' : ''));
-    lines.push('');
-    for (const it of g.items) {
-      const acc = it.last_accessed ? '最近访问 ' + it.last_accessed : '未访问';
-      lines.push('- ' + it.statement + '（confidence ' + it.confidence + ' · ' + acc + '）');
-      lines.push('  - ' + it.file);
-    }
-    lines.push('');
-  }
-  const text = lines.join('\n');
+  const text = renderProfileText(owner, groups);
   const outFile = writeProfileText(root, owner, text + '\n');
   return { error: false, text: text + '\n\n[已写入] ' + outFile };
 }
@@ -7566,6 +7576,25 @@ function compareContextRecent(a, b) {
 const MEMORY_HOOK_MAX_CANDIDATES = 500;
 const MEMORY_HOOK_STATEMENT_LIMIT = 2000;
 
+function contextEntryLine(entry) {
+  return '- [' + entry.type + '] ' + entry.subject + ': ' + entry.statement;
+}
+
+function isSelfProfileEntry(entry, owner) {
+  if (!entry || entry.type !== 'PREF' || entry.subject !== SELF_PROFILE_SUBJECT) return false;
+  if (owner && entry.owner && entry.owner !== owner) return false;
+  const file = String(entry.file || '').replace(/\\/g, '/');
+  return owner ? file.indexOf('private/' + owner + '/prefs/') === 0 : false;
+}
+
+function contextPageableEntries(readableEntries, owner) {
+  return (readableEntries || [])
+    .filter(function (entry) {
+      return entry.type !== 'BOUND' && entry.type !== 'COMMIT' && !isSelfProfileEntry(entry, owner);
+    })
+    .sort(compareContextRecent);
+}
+
 function hookBlock(status, providerId, note) {
   return {
     status: status || 'not_installed',
@@ -7590,6 +7619,130 @@ function hookStatusText(hook) {
   return hook.status;
 }
 
+function pagingBlock(status, providerId, note) {
+  return {
+    status: status || 'not_installed',
+    provider_id: providerId || '',
+    applied: false,
+    dropped: [],
+    ordered: [],
+    truncated: false,
+    budget: 0,
+    used: 0,
+    note: note || '',
+  };
+}
+
+function pagingStatusText(paging) {
+  if (!paging) return '';
+  if (paging.status === 'active') {
+    const who = paging.provider_id ? '提供方 ' + paging.provider_id : '提供方';
+    return '已应用（' + who + '；丢弃 ' + paging.dropped.length + ' / 排序 ' + paging.ordered.length + '）';
+  }
+  if (paging.status === 'license_required') return '需授权（该能力需要授权后使用；普通记忆不受影响）';
+  if (paging.status === 'timeout') return '未生效（提供方超时，已回落普通记忆）';
+  if (paging.status === 'invalid_output') return '未生效（提供方输出无效，已回落普通记忆）';
+  if (paging.status === 'error') return '未生效（提供方异常，已回落普通记忆）';
+  return '';
+}
+
+function pagingCandidatePayload(entry, baselineSection) {
+  return {
+    file: entry.file,
+    type: entry.type,
+    subject: entry.subject,
+    statement: String(entry.statement || '').slice(0, MEMORY_HOOK_STATEMENT_LIMIT),
+    created: entry.created || '',
+    updated: entry.updated || '',
+    chars: contextEntryLine(entry).length,
+    baseline_section: baselineSection || 'high_value',
+  };
+}
+
+function applyContextPaging(pageable, opts, meta) {
+  opts = opts || {};
+  meta = meta || {};
+  const budget = parseInt(opts.budget || 0, 10) || 0;
+  if (budget <= 0) {
+    return {
+      block: pagingBlock('not_requested', '', '未传 --budget，未调用 context.paging'),
+      drop: new Set(),
+      order: null,
+      applied: false,
+    };
+  }
+  const block = pagingBlock('not_installed', '', '');
+  block.budget = budget;
+  const truncated = pageable.length > MEMORY_HOOK_MAX_CANDIDATES;
+  block.truncated = truncated;
+  const candidates = pageable.slice(0, MEMORY_HOOK_MAX_CANDIDATES);
+  const payload = {
+    agent: opts.owner || '',
+    budget: budget,
+    focus: opts.focus || '',
+    truncated: truncated,
+    protected: Array.isArray(meta.protected) ? meta.protected.slice() : [],
+    sections: meta.sections || {},
+    candidates: candidates.map(function (entry) {
+      return pagingCandidatePayload(entry, (meta.baselineSections || {})[entry.file]);
+    }),
+  };
+  let run;
+  try {
+    run = require('./provider').runCapability('context.paging', payload);
+  } catch (e) {
+    block.status = 'error';
+    block.note = '预算分页失败：' + e.message;
+    return { block: block, drop: new Set(), order: null, applied: false };
+  }
+  block.status = run.status;
+  block.provider_id = run.provider_id || '';
+  block.note = run.note || run.message || '';
+  if (run.status !== 'active' || !run.data || typeof run.data !== 'object') {
+    return { block: block, drop: new Set(), order: null, applied: false };
+  }
+  const sent = new Set(payload.candidates.map(function (item) { return item.file; }));
+  const rejected = [];
+  const dropped = [];
+  for (const item of (Array.isArray(run.data.drop) ? run.data.drop : [])) {
+    const file = String(item || '');
+    if (!file) continue;
+    if (!sent.has(file)) {
+      if (rejected.indexOf(file) === -1) rejected.push(file);
+      continue;
+    }
+    if (dropped.indexOf(file) === -1) dropped.push(file);
+  }
+  let order = null;
+  if (Array.isArray(run.data.order)) {
+    if (run.data.complete === true && !truncated) {
+      const picked = [];
+      for (const item of run.data.order) {
+        const file = String(item || '');
+        if (!file) continue;
+        if (!sent.has(file)) {
+          if (rejected.indexOf(file) === -1) rejected.push(file);
+          continue;
+        }
+        if (picked.indexOf(file) === -1) picked.push(file);
+      }
+      order = picked;
+    } else if (truncated) {
+      block.note = block.note || '候选超过 ' + MEMORY_HOOK_MAX_CANDIDATES + '，order 未应用（保护）';
+    } else {
+      block.note = block.note || 'provider 未声明 complete=true，order 未应用（保护）';
+    }
+  }
+  if (rejected.length) {
+    const text = '候选集外文件已忽略：' + rejected.join(', ');
+    block.note = block.note ? block.note + '；' + text : text;
+  }
+  block.dropped = dropped;
+  block.ordered = order || [];
+  block.applied = dropped.length > 0 || (order !== null && order.length > 0);
+  return { block: block, drop: new Set(dropped), order: order, applied: block.applied };
+}
+
 /**
  * memory.hook 装载点：只把「可驱逐」条目（非 BOUND / COMMIT）交给 provider。
  * provider 只能返回本次候选集内的 evict（驱逐清单）；complete=true 时可选 selected（白名单）。
@@ -7598,9 +7751,7 @@ function hookStatusText(hook) {
  */
 function applyMemoryHook(readableEntries, opts) {
   const block = hookBlock('not_installed', '', '');
-  const pageable = readableEntries
-    .filter(function (entry) { return entry.type !== 'BOUND' && entry.type !== 'COMMIT'; })
-    .sort(compareContextRecent);
+  const pageable = contextPageableEntries(readableEntries, opts.owner || '');
   const truncated = pageable.length > MEMORY_HOOK_MAX_CANDIDATES;
   const payload = {
     agent: opts.owner || '',
@@ -7665,6 +7816,25 @@ function applyMemoryHook(readableEntries, opts) {
   return { block: block, evict: new Set(evicted), selected: selected };
 }
 
+function replaceContextProfileSection(lines, profileText, fence) {
+  const start = lines.indexOf('## 2. 用户画像摘要');
+  if (start === -1) return false;
+  const marker = lines.indexOf('## 2.5 长期理解摘要');
+  const end = marker === -1 ? lines.length : marker;
+  if (end < start) return false;
+  const block = ['## 2. 用户画像摘要', ''];
+  if (profileText) {
+    block.push(fence + 'markdown');
+    block.push(String(profileText).trim());
+    block.push(fence);
+  } else {
+    block.push('（该身份暂无画像；可运行 yotta-memory profile 生成）');
+  }
+  block.push('');
+  lines.splice.apply(lines, [start, end - start].concat(block));
+  return true;
+}
+
 function contextCore(opts) {
   opts = opts || {};
   const roots = memoryRoots();
@@ -7698,6 +7868,7 @@ function contextCore(opts) {
   const lines = [];
   const shownFiles = new Set();
   const usedFiles = new Set();
+  let usedDynamicChars = 0;
   const FENCE = String.fromCharCode(96, 96, 96);
   function usedChars() { return lines.reduce(function (s, x) { return s + String(x).length + 1; }, 0); }
   function appendContextEntry(entry, reason, options) {
@@ -7707,7 +7878,7 @@ function contextCore(opts) {
       trace.push('[dropped] ' + entry.file + ' reason: duplicate');
       return false;
     }
-    const line = '- [' + entry.type + '] ' + entry.subject + ': ' + entry.statement;
+    const line = contextEntryLine(entry);
     if (options.budget !== false && budget > 0 && usedChars() + line.length > budget) {
       trace.push('[dropped] ' + entry.file + ' reason: budget_exceeded');
       return false;
@@ -7715,6 +7886,7 @@ function contextCore(opts) {
     lines.push(line);
     shownFiles.add(entry.file);
     usedFiles.add(entry.file);
+    usedDynamicChars += line.length;
     trace.push('[included] ' + entry.file + ' reason: ' + reason);
     return true;
   }
@@ -7784,28 +7956,8 @@ function contextCore(opts) {
     if (memHook.evict.has(entry.file)) return false;
     return true;
   }
-  if (hookState.status !== 'not_installed') {
-    const anchor = lines.indexOf('## 1. 身份');
-    lines.splice(anchor === -1 ? 2 : anchor, 0, '- 扩展装载（memory.hook）: ' + hookStatusText(hookState), '');
-    trace.push('[hook] status: ' + hookState.status
-      + ' provider: ' + (hookState.provider_id || '-')
-      + ' evicted: ' + hookState.evicted.length
-      + ' dropped: ' + hookState.dropped.length);
-  }
-
-  lines.push('## 2.5 长期理解摘要');
-  lines.push('');
-  const summaries = readableEntries.filter(isConsolidatedSummary).filter(hookAllows).sort(compareContextRecent);
-  const summaryLimit = Math.min(3, Math.max(0, limit));
-  if (!summaries.length) lines.push('（暂无周期摘要；可用 yotta-memory consolidate --apply 生成）');
-  for (const e of summaries.slice(0, summaryLimit)) {
-    appendContextEntry(e, 'summary_priority', { budget: false });
-  }
-  lines.push('');
-
+  let focusedEntries = [];
   if (focus) {
-    lines.push('## 2.6 任务相关记忆（--focus）');
-    lines.push('');
     const focused = recallCore(focus, {
       limit: limit,
       owner: owner,
@@ -7816,9 +7968,126 @@ function contextCore(opts) {
       embeddingTimeout: embeddingTimeout,
       noUsage: true
     });
-    const focusedEntries = focused.entries || [];
+    focusedEntries = focused.entries || [];
+  }
+  const pageable = contextPageableEntries(readableEntries, owner).filter(hookAllows);
+  const summaryLimit = Math.min(3, Math.max(0, limit));
+  const summaryCandidates = pageable.filter(isConsolidatedSummary).slice(0, summaryLimit);
+  const summaryFiles = new Set(summaryCandidates.map(function (entry) { return entry.file; }));
+  const pageableFiles = new Set(pageable.map(function (entry) { return entry.file; }));
+  const focusCandidates = focusedEntries.filter(function (entry) {
+    return hookAllows(entry) && pageableFiles.has(entry.file);
+  });
+  const focusFiles = new Set(focusCandidates.map(function (entry) { return entry.file; }));
+  const corridorCandidates = pageable
+    .filter(function (entry) {
+      return !isConsolidatedSummary(entry) && !summaryFiles.has(entry.file) && !focusFiles.has(entry.file);
+    })
+    .slice(0, limit);
+  const corridorFiles = new Set(corridorCandidates.map(function (entry) { return entry.file; }));
+  const highValueCandidates = pageable
+    .filter(function (entry) {
+      return !isConsolidatedSummary(entry) && !summaryFiles.has(entry.file) && !focusFiles.has(entry.file) && !corridorFiles.has(entry.file);
+    })
+    .map(function (entry) { return { e: entry, s: 0.5 * importanceScore(entry) + 0.5 * utilityScore(entry) }; })
+    .sort(function (a, b) { return b.s - a.s; })
+    .slice(0, limit)
+    .map(function (item) { return item.e; });
+  const baselineSections = {};
+  function markBaseline(entries, section) {
+    for (const entry of entries) baselineSections[entry.file] = section;
+  }
+  markBaseline(summaryCandidates, 'summary');
+  markBaseline(focusCandidates, 'focus');
+  markBaseline(corridorCandidates, 'corridor');
+  markBaseline(highValueCandidates, 'high_value');
+  const paging = applyContextPaging(pageable, {
+    owner: owner,
+    budget: budget,
+    focus: focus,
+    limit: limit,
+  }, {
+    protected: readableEntries
+      .filter(function (entry) { return isSelfProfileEntry(entry, owner); })
+      .map(function (entry) { return entry.file; }),
+    sections: {
+      summary: summaryCandidates.map(function (entry) { return entry.file; }),
+      focus: focusCandidates.map(function (entry) { return entry.file; }),
+      corridor: corridorCandidates.map(function (entry) { return entry.file; }),
+      high_value: highValueCandidates.map(function (entry) { return entry.file; }),
+    },
+    baselineSections: baselineSections,
+  });
+  const pagingState = paging.block;
+  const pagingOrder = new Map();
+  for (let i = 0; i < pagingState.ordered.length; i++) pagingOrder.set(pagingState.ordered[i], i);
+  function pagingAllows(entry) {
+    return !entry || !paging.drop.has(entry.file);
+  }
+  function decisionAllows(entry) {
+    return hookAllows(entry) && pagingAllows(entry);
+  }
+  function pagingOrderIndex(entry) {
+    if (!entry || !pagingOrder.has(entry.file)) return Number.MAX_SAFE_INTEGER;
+    return pagingOrder.get(entry.file);
+  }
+  function compareWithPaging(a, b, fallback) {
+    const byOrder = pagingOrderIndex(a) - pagingOrderIndex(b);
+    if (byOrder !== 0) return byOrder;
+    return fallback(a, b);
+  }
+  if ((hookState.applied || pagingState.applied) && owner) {
+    const liveGroups = profileGroupsFromEntries(
+      readableEntries
+        .filter(function (entry) { return entry.type === 'PREF' || entry.type === 'BOUND' || entry.type === 'COMMIT'; })
+        .filter(decisionAllows)
+    );
+    replaceContextProfileSection(lines, renderProfileText(owner, liveGroups), FENCE);
+    trace.push('[profile] source: live reason: ' + (hookState.applied ? 'memory.hook' : 'context.paging'));
+  }
+  const statusLines = [];
+  if (hookState.status !== 'not_installed') {
+    statusLines.push('- 扩展装载（memory.hook）: ' + hookStatusText(hookState));
+    trace.push('[hook] status: ' + hookState.status
+      + ' provider: ' + (hookState.provider_id || '-')
+      + ' evicted: ' + hookState.evicted.length
+      + ' dropped: ' + hookState.dropped.length);
+  }
+  const pagingText = pagingStatusText(pagingState);
+  if (pagingText) {
+    statusLines.push('- 预算分页（context.paging）: ' + pagingText);
+    trace.push('[paging] status: ' + pagingState.status
+      + ' provider: ' + (pagingState.provider_id || '-')
+      + ' dropped: ' + pagingState.dropped.length
+      + ' ordered: ' + pagingState.ordered.length
+      + ' truncated: ' + (pagingState.truncated ? 'true' : 'false'));
+  }
+  if (statusLines.length) {
+    const anchor = lines.indexOf('## 1. 身份');
+    statusLines.push('');
+    lines.splice.apply(lines, [anchor === -1 ? 2 : anchor, 0].concat(statusLines));
+  }
+
+  lines.push('## 2.5 长期理解摘要');
+  lines.push('');
+  const summaries = readableEntries
+    .filter(isConsolidatedSummary)
+    .filter(decisionAllows)
+    .sort(function (a, b) { return compareWithPaging(a, b, compareContextRecent); });
+  if (!summaries.length) lines.push('（暂无周期摘要；可用 yotta-memory consolidate --apply 生成）');
+  for (const e of summaries.slice(0, summaryLimit)) {
+    appendContextEntry(e, 'summary_priority', { budget: false });
+  }
+  lines.push('');
+
+  if (focus) {
+    lines.push('## 2.6 任务相关记忆（--focus）');
+    lines.push('');
     if (!focusedEntries.length) lines.push('（无匹配记忆）');
-    for (const e of focusedEntries.filter(hookAllows)) {
+    const focusedVisible = focusedEntries
+      .filter(decisionAllows)
+      .sort(function (a, b) { return compareWithPaging(a, b, function () { return 0; }); });
+    for (const e of focusedVisible) {
       appendContextEntry(e, 'focus_match score: ' + round3(e.score));
     }
     lines.push('');
@@ -7828,8 +8097,8 @@ function contextCore(opts) {
   lines.push('');
   const corridor = readableEntries
     .filter(function (e) { return !isConsolidatedSummary(e) && e.type !== 'BOUND' && e.type !== 'COMMIT'; })
-    .sort(compareContextRecent)
-    .filter(hookAllows)
+    .filter(decisionAllows)
+    .sort(function (a, b) { return compareWithPaging(a, b, compareContextRecent); })
     .filter(function (e) { return !shownFiles.has(e.file); })
     .slice(0, limit);
   if (!corridor.length) lines.push('（暂无近期记忆）');
@@ -7839,9 +8108,9 @@ function contextCore(opts) {
   lines.push('## 4. 近期高价值记忆（补位）');
   lines.push('');
   const highValue = readableEntries
-    .filter(function (e) { return !isConsolidatedSummary(e) && e.type !== 'BOUND' && e.type !== 'COMMIT' && !shownFiles.has(e.file) && hookAllows(e); })
+    .filter(function (e) { return !isConsolidatedSummary(e) && e.type !== 'BOUND' && e.type !== 'COMMIT' && !shownFiles.has(e.file) && decisionAllows(e); })
     .map(function (e) { return { e: e, s: 0.5 * importanceScore(e) + 0.5 * utilityScore(e) }; })
-    .sort(function (a, b) { return b.s - a.s; })
+    .sort(function (a, b) { return compareWithPaging(a.e, b.e, function (x, y) { return y.s - x.s; }); })
     .slice(0, limit);
   if (!highValue.length) lines.push('（暂无补位条目）');
   for (const h of highValue) appendContextEntry(h.e, 'high_value_backfill');
@@ -7899,13 +8168,14 @@ function contextCore(opts) {
     for (const message of reliability.warnings) lines.push('- [警告] ' + message);
     if (!reliability.ok) lines.push('- 破坏性写入已锁定：先运行 yotta-memory doctor 修复严重问题。');
   }
-  return { error: false, exitCode: 0, text: lines.join('\n'), trace: trace, hook: hookState };
+  pagingState.used = usedDynamicChars;
+  return { error: false, exitCode: 0, text: lines.join('\n'), trace: trace, hook: hookState, paging: pagingState };
 }
 function cmdContext(opts) {
   const r = contextCore(opts);
   if (opts.json) {
     if (r.report) console.log(JSON.stringify(r.report, null, 2));
-    else console.log(JSON.stringify({ schema: 1, hook: r.hook || null, text: r.text }, null, 2));
+    else console.log(JSON.stringify({ schema: 1, hook: r.hook || null, paging: r.paging || null, text: r.text }, null, 2));
   } else {
     console.log(r.text);
   }

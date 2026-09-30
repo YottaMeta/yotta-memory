@@ -116,3 +116,43 @@ test('配置非法 / 命令不存在：error，不阻断调用方', () => {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('provider 子进程透传授权隔离环境变量，不泄漏其它环境变量', () => {
+  const home = tmpHome();
+  const saved = {
+    home: process.env.YOTTA_LICENSE_HOME,
+    keys: process.env.YOTTA_LICENSE_KEYS_DIR,
+    base: process.env.YOTTA_LICENSE_BASE_URL,
+    server: process.env.YOTTA_LICENSE_SERVER_ID,
+    secret: process.env.YOTTA_SECRET_MARKER,
+  };
+  try {
+    writeConfig(home, [baseProvider(Object.assign({ capabilities: ['context.paging'] }, withMode('env')))]);
+    process.env.YOTTA_LICENSE_HOME = path.join(home, 'license-home');
+    process.env.YOTTA_LICENSE_KEYS_DIR = path.join(home, 'keys');
+    process.env.YOTTA_LICENSE_BASE_URL = 'http://127.0.0.1:8790';
+    process.env.YOTTA_LICENSE_SERVER_ID = 'test-server';
+    process.env.YOTTA_SECRET_MARKER = 'must-not-cross-provider-boundary';
+    const result = withHome(home, () => provider.runCapability('context.paging', {}));
+    assert.strictEqual(result.status, 'active');
+    assert.deepStrictEqual(result.data.env, {
+      YOTTA_LICENSE_HOME: path.join(home, 'license-home'),
+      YOTTA_LICENSE_KEYS_DIR: path.join(home, 'keys'),
+      YOTTA_LICENSE_BASE_URL: 'http://127.0.0.1:8790',
+      YOTTA_LICENSE_SERVER_ID: 'test-server',
+    });
+    assert.strictEqual(result.data.leaked, false);
+  } finally {
+    for (const [key, value] of Object.entries({
+      YOTTA_LICENSE_HOME: saved.home,
+      YOTTA_LICENSE_KEYS_DIR: saved.keys,
+      YOTTA_LICENSE_BASE_URL: saved.base,
+      YOTTA_LICENSE_SERVER_ID: saved.server,
+      YOTTA_SECRET_MARKER: saved.secret,
+    })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
