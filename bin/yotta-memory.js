@@ -7464,10 +7464,9 @@ function profileGroups(root, owner) {
   for (const t of PRIVATE_LEAF) {
     const dir = path.join(root, PRIVATE_DIR, owner, t);
     if (!fs.existsSync(dir)) continue;
-    for (const f of fs.readdirSync(dir)) {
-      if (!/\.md(\.enc)?$/.test(f)) continue;
-      const fp = path.join(dir, f);
-      if (!fs.statSync(fp).isFile()) continue;
+    const files = [];
+    walkEntryFiles(dir, files);
+    for (const fp of files) {
       let e;
       try { e = readEntry(fp, root); } catch (err) { continue; }
       entries.push(e);

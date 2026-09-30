@@ -3,6 +3,7 @@
 上下文分页 P2.5：先修 `memory.hook` 的 PREF 驱逐空转，再新增 `context.paging` 预算调用点。
 
 - 修复 `memory.hook` 对画像段落驱逐空转：hook / paging 决策实际生效时，画像段落按实时可读条目渲染并套用同一套过滤；自我接入档案不进候选、不可驱逐；无 provider 时仍读 `profile.md`，基线输出逐字节不变。
+- 修复 `profile` 只读单层目录：`private/<owner>/{prefs,bounds,commits}/YYYY/MM/` 里的分层条目现在也会进入静态画像；`context` 的实时画像路径不受影响。
 - 新增 `context.paging`：仅在用户显式传 `--budget` 时调用；`memory.hook` 先过滤，`context.paging` 再排序 / 分页。`drop` 始终安全应用；`order` 仅在 `complete:true` 且候选未超过 500 时应用；候选集外文件只记 note、不进入输出。
 - `context --json` 新增 `paging` 块（`status` / `provider_id` / `applied` / `dropped` / `ordered` / `truncated` / `budget` / `used` / `note`）；文本仅在 `context.paging` 实际被声明或触发时增加状态行；审计沿用 `provider-audit.jsonl`，不含记忆正文。
 - provider 子进程透传 `YOTTA_LICENSE_HOME` / `YOTTA_LICENSE_KEYS_DIR` / `YOTTA_LICENSE_BASE_URL` / `YOTTA_LICENSE_SERVER_ID`，与路线 B 授权隔离环境一致。
