@@ -868,6 +868,8 @@ function today(override) {
 }
 let RUNTIME_AGENT = { id: '', agentKey: '' };
 const IDENTITY_CONTEXT = new AsyncLocalStorage();
+// v0.21.0：view 用户会话的 owner 密钥上下文——请求处理期间让读 / 写 / 索引路径复用已解锁的 ownerKeys。
+const VIEW_KEYS_CONTEXT = new AsyncLocalStorage();
 const RUNTIME_OWNER_KEYS = new Map();
 function setRuntimeAgent(id, agentKey) {
   RUNTIME_AGENT = { id: String(id || '').trim(), agentKey: String(agentKey || '').trim() };
@@ -1861,6 +1863,8 @@ function unwrapAgentBinding(root, owner, agentKey) {
 }
 function getOwnerKeyFor(root, owner, identity) {
   if (!owner) return null;
+  const viewKeys = VIEW_KEYS_CONTEXT.getStore();
+  if (viewKeys && viewKeys.keys && viewKeys.keys[owner]) return viewKeys.keys[owner];
   if (!isEncrypted(root)) return null;
   const current = identity || currentRuntimeIdentity();
   if (!current.id || current.id !== owner || !current.agentKey) return null;
@@ -4327,7 +4331,7 @@ function backupDrillCore(opts) {
 }
 function rememberCore(type, subject, statement, opts) {
   opts = opts || {};
-  const root = userRoot();
+  const root = opts.root ? path.resolve(String(opts.root)) : userRoot();
   ensureInit(root);
   const t = String(type).toUpperCase();
   if (!TYPE_DIRS[t]) return { error: true, text: '未知记忆类型: ' + type + '（可用: ' + TYPES.join(' / ') + '）' };
@@ -4335,21 +4339,21 @@ function rememberCore(type, subject, statement, opts) {
   const subj = String(subject || '').trim();
   if (!stmt) return { error: true, text: 'statement 不能为空' };
   if (!subj) return { error: true, text: 'subject 不能为空' };
-  const ident = resolveIdentity(opts);
+  const ident = opts.userUnlocked ? { id: '', error: '' } : resolveIdentity(opts);
   const selfAgent = ident.id;
   const owner = opts.owner || selfAgent;
   const scope = opts.scope || defaultScope(t);
-  if (scope === 'private' && ident.error) {
+  if (scope === 'private' && ident.error && !opts.userUnlocked) {
     return { error: true, text: ident.error };
   }
-  if (scope === 'private') {
+  if (scope === 'private' && !opts.userUnlocked) {
     const keyError = validatePrivateIdentity(root, ident, owner);
     if (keyError) return { error: true, text: keyError };
   }
   if (scope === 'private' && !owner) {
     return { error: true, text: '私密记忆必须显式声明归属智能体：CLI 传 --agent <id>；stdio MCP 传 --agent-id <id> + --agent-key-file <path>；HTTP MCP 发送 X-Agent-Id + X-Agent-Key。公共记忆(FACT)不受影响。' };
   }
-  if (scope === 'private' && owner && selfAgent && owner !== selfAgent && !opts.unsafe) {
+  if (scope === 'private' && owner && selfAgent && owner !== selfAgent && !opts.unsafe && !opts.userUnlocked) {
     return { error: true, text: '拒绝: 当前显式身份 ' + selfAgent + ' 不能写入其它智能体 ' + owner + ' 的私密区。请传正确的 --agent <id>，或加 --unsafe（用户显式授权）。' };
   }
   const encrypted = isEncrypted(root);
@@ -4395,7 +4399,8 @@ function rememberCore(type, subject, statement, opts) {
   const rec = {
     type: t, subject: subj, statement: stmt,
     confidence: 1.0, created: writeDate, updated: writeDate,
-    tags: [], immutable: false,
+    tags: Array.isArray(opts.tags) ? opts.tags.map(function (x) { return String(x).trim(); }).filter(Boolean) : [],
+    immutable: false,
     scope: scope, owner: owner,
     source: opts.source || '',
     weight: (parseFloat(opts.weight) > 0 ? parseFloat(opts.weight) : 1.0),
@@ -4759,8 +4764,8 @@ function renameCore(fileRef, newName, opts) {
 
 function forgetCore(fileRef, opts) {
   opts = opts || {};
-  const selfAgent = resolveIdentity(opts).id;
-  const roots = memoryRoots();
+  const selfAgent = opts.userUnlocked ? '' : resolveIdentity(opts).id;
+  const roots = opts.root ? [path.resolve(String(opts.root))] : memoryRoots();
   const ref = String(fileRef || '').replace(/\\/g, '/');
   let target = null, targetRoot = null, targetRel = null;
   for (const root of roots) {
@@ -4771,7 +4776,7 @@ function forgetCore(fileRef, opts) {
   const seg = targetRel.replace(/\\/g, '/').split('/');
   if (seg[0] === 'private') {
     const owner = seg[1] || '';
-    if (!opts.unsafe && (owner && (selfAgent ? owner !== selfAgent : true))) {
+    if (!opts.userUnlocked && !opts.unsafe && (owner && (selfAgent ? owner !== selfAgent : true))) {
       return { error: true, text: '拒绝: 不能删除其它智能体 ' + owner + ' 的私密记忆（当前身份 ' + (selfAgent || '未声明') + '）。请用 --agent / --agent-id 声明自己的身份，或加 --unsafe（用户显式授权）。' };
     }
   }
@@ -4798,7 +4803,7 @@ function forgetCore(fileRef, opts) {
       selfAgent,
     });
   }
-  return { error: false, text: '已移入回收区: ' + trashFile };
+  return { error: false, text: '已移入回收区: ' + trashFile, trash: relOf(targetRoot, trashFile) };
 }
 // ---- v0.18.0 A3：容量水位 / 淘汰候选 / 晋升建议（只读报告，不自动动数据）----
 const CAPACITY_CONFIG_DEFAULTS = {
@@ -6632,6 +6637,197 @@ function viewEntriesCore(root, session, query, offset, limit) {
   const page = all.slice(offset, offset + limit);
   return { count: count, offset: offset, limit: limit, hasMore: offset + limit < count, entries: page };
 }
+
+// ---- v0.21.0 M1：记忆管理台（view）真读写 ----
+function viewOverviewCore(root, session) {
+  const entries = [];
+  for (const e of (loadIndex(root) || [])) entries.push(e);
+  for (const o of collectOwners(root)) {
+    const key = session && session.ownerKeys ? session.ownerKeys[o] : null;
+    if (!key) continue;
+    try { for (const e of loadOwnerIndex(root, o, key)) entries.push(e); } catch (err) {}
+  }
+  const byType = { FACT: 0, PREF: 0, BOUND: 0, COMMIT: 0 };
+  for (const e of entries) {
+    const t = String(e.type || 'FACT').toUpperCase();
+    if (byType[t] !== undefined) byType[t] += 1;
+  }
+  const owners = keyOwners(root).map(function (o) {
+    return { owner: o, authorized: fs.existsSync(encAgentBindingPath(root, o)) };
+  });
+  let bytes = 0;
+  let files = 0;
+  for (const fp of collectEntryFiles(root)) {
+    files += 1;
+    try { bytes += fs.statSync(fp).size; } catch (e) {}
+  }
+  const archivedFiles = [];
+  const archiveBase = path.join(root, ARCHIVE_DIR);
+  if (fs.existsSync(archiveBase)) walkEntryFiles(archiveBase, archivedFiles);
+  const cfg = loadConfig();
+  return {
+    total: entries.length,
+    files: files,
+    byType: byType,
+    owners: owners,
+    authorized: owners.filter(function (o) { return o.authorized; }).length,
+    bytes: bytes,
+    archived: archivedFiles.length,
+    backupDir: cfg.backup_dir || '',
+  };
+}
+
+function viewRememberCore(root, payload) {
+  payload = payload || {};
+  const type = String(payload.type || '').toUpperCase();
+  if (!TYPE_DIRS[type]) return { error: true, text: '未知记忆类型: ' + payload.type };
+  const scope = payload.scope || defaultScope(type);
+  const owner = String(payload.owner || '');
+  if (scope === 'private' && !isSafeAgentId(owner)) return { error: true, text: '私密记忆必须选择归属智能体（owner）。' };
+  return rememberCore(type, payload.subject, payload.statement, {
+    root: root,
+    owner: owner,
+    scope: scope,
+    tags: Array.isArray(payload.tags) ? payload.tags : [],
+    weight: payload.weight,
+    source: 'view',
+    hint: false,
+    userUnlocked: true,
+  });
+}
+
+function viewUpdateCore(root, payload) {
+  payload = payload || {};
+  const found = resolveMemoryFile(root, String(payload.file || ''));
+  if (!found) return { error: true, text: '未找到记忆文件: ' + payload.file };
+  const rel = found.rel;
+  const owner = ownerFromPrivatePath(root, found.fp);
+  const patch = {};
+  if (payload.subject !== undefined) {
+    const s = String(payload.subject).trim();
+    if (!s) return { error: true, text: 'subject 不能为空' };
+    patch.subject = s;
+  }
+  if (payload.statement !== undefined) {
+    const s = String(payload.statement).trim();
+    if (!s) return { error: true, text: 'statement 不能为空' };
+    patch.statement = s;
+  }
+  if (payload.tags !== undefined) {
+    patch.tags = Array.isArray(payload.tags) ? payload.tags.map(String).filter(Boolean) : parseTags(String(payload.tags));
+  }
+  if (!Object.keys(patch).length) return { error: true, text: '没有可更新的字段（subject / statement / tags）。' };
+  let original;
+  try { original = parseFrontmatter(readMemoryText(root, found.fp, owner)).meta; } catch (e) { return { error: true, text: '读取失败: ' + e.message }; }
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const undoRel = path.posix.join('.trash', 'view-history', ts, rel);
+  const undoPath = path.join(root, undoRel);
+  try {
+    fs.mkdirSync(path.dirname(undoPath), { recursive: true });
+    fs.copyFileSync(found.fp, undoPath);
+  } catch (e) { return { error: true, text: '编辑前备份失败: ' + e.message }; }
+  patch.updated = today();
+  try { rewriteFrontmatter(found.fp, patch, root, owner); } catch (e) { return { error: true, text: '更新失败: ' + e.message }; }
+  upsertIndexEntry(root, readEntry(found.fp, root));
+  appendAudit(root, 'audit', { action: 'view_update', ts: new Date().toISOString(), file: rel, undo: undoRel, before_updated: original.updated || '' });
+  return { error: false, file: rel, undo: undoRel, text: '已更新: ' + rel };
+}
+
+function viewDeleteCore(root, payload) {
+  payload = payload || {};
+  const result = forgetCore(String(payload.file || ''), { root: root, userUnlocked: true });
+  if (result.error) return result;
+  appendAudit(root, 'audit', { action: 'view_delete', ts: new Date().toISOString(), file: payload.file, trash: result.trash || '' });
+  return { error: false, file: payload.file, trash: result.trash || '', text: result.text };
+}
+
+function viewRestoreCore(root, payload) {
+  payload = payload || {};
+  const ref = String(payload.ref || '').replace(/\\/g, '/');
+  if (ref.indexOf('.trash/') !== 0) return { error: true, text: '只能从回收区 / 编辑历史恢复。' };
+  const abs = resolveWithinRoot(root, ref);
+  if (!abs || !fs.existsSync(abs) || fs.statSync(abs).isDirectory()) return { error: true, text: '回收区文件不存在: ' + ref };
+  const seg = ref.split('/');
+  const originalRel = seg[1] === 'view-history' ? seg.slice(3).join('/') : seg.slice(2).join('/');
+  if (!originalRel) return { error: true, text: '无法解析原路径。' };
+  const dest = resolveWithinRoot(root, originalRel);
+  if (!dest) return { error: true, text: '原路径非法。' };
+  if (fs.existsSync(dest)) return { error: true, text: '原位置已有文件，拒绝覆盖: ' + originalRel };
+  try {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(abs, dest);
+  } catch (e) { return { error: true, text: '恢复失败: ' + e.message }; }
+  upsertIndexEntry(root, readEntry(dest, root));
+  appendAudit(root, 'audit', { action: 'view_restore', ts: new Date().toISOString(), file: originalRel, from: ref });
+  return { error: false, file: originalRel, text: '已恢复: ' + originalRel };
+}
+
+function viewArchiveCore(root, payload) {
+  payload = payload || {};
+  const found = resolveMemoryFile(root, String(payload.file || ''));
+  if (!found) return { error: true, text: '未找到记忆文件: ' + payload.file };
+  const rel = found.rel;
+  const owner = ownerFromPrivatePath(root, found.fp);
+  let meta;
+  try { meta = parseFrontmatter(readMemoryText(root, found.fp, owner)).meta; } catch (e) { return { error: true, text: '读取失败: ' + e.message }; }
+  const type = String(meta.type || 'FACT').toUpperCase();
+  const destRel = archiveRelFor(root, rel, type, owner);
+  const dest = resolveWithinRoot(root, destRel);
+  if (!dest) return { error: true, text: '归档路径非法。' };
+  if (fs.existsSync(dest)) return { error: true, text: '归档区已存在同名文件，拒绝覆盖: ' + destRel };
+  try {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(found.fp, dest);
+  } catch (e) { return { error: true, text: '归档失败: ' + e.message }; }
+  removeIndexEntry(root, rel);
+  appendAudit(root, 'audit', { action: 'view_archive', ts: new Date().toISOString(), file: rel, archive: destRel });
+  return { error: false, file: rel, archive: destRel, text: '已藏起来（归档）: ' + rel };
+}
+
+function viewUnarchiveCore(root, payload) {
+  payload = payload || {};
+  const ref = String(payload.archive || payload.file || '').replace(/\\/g, '/');
+  if (ref.indexOf(ARCHIVE_DIR + '/') !== 0) return { error: true, text: '只能从归档区放回。' };
+  const abs = resolveWithinRoot(root, ref);
+  if (!abs || !fs.existsSync(abs) || fs.statSync(abs).isDirectory()) return { error: true, text: '归档文件不存在: ' + ref };
+  const originalRel = ref.slice(ARCHIVE_DIR.length + 1);
+  const dest = resolveWithinRoot(root, originalRel);
+  if (!dest) return { error: true, text: '原路径非法。' };
+  if (fs.existsSync(dest)) return { error: true, text: '原位置已有文件，拒绝覆盖: ' + originalRel };
+  try {
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.renameSync(abs, dest);
+  } catch (e) { return { error: true, text: '放回失败: ' + e.message }; }
+  upsertIndexEntry(root, readEntry(dest, root));
+  appendAudit(root, 'audit', { action: 'view_unarchive', ts: new Date().toISOString(), file: originalRel, archive: ref });
+  return { error: false, file: originalRel, text: '已放回: ' + originalRel };
+}
+
+function viewArchiveListCore(root) {
+  const files = [];
+  const base = path.join(root, ARCHIVE_DIR);
+  if (fs.existsSync(base)) walkEntryFiles(base, files);
+  return {
+    entries: files.map(function (fp) {
+      return { ref: relOf(root, fp), original: path.relative(base, fp).replace(/\\/g, '/') };
+    }),
+  };
+}
+
+function viewTrashListCore(root) {
+  const files = [];
+  const base = path.join(root, '.trash');
+  if (fs.existsSync(base)) walkEntryFiles(base, files);
+  return {
+    entries: files.map(function (fp) {
+      const ref = relOf(root, fp);
+      const seg = ref.split('/');
+      const history = seg[1] === 'view-history';
+      return { ref: ref, kind: history ? 'history' : 'trash', original: history ? seg.slice(3).join('/') : seg.slice(2).join('/') };
+    }),
+  };
+}
+
 function viewHostName(req) {
   const raw = String(req.headers.host || '').trim();
   if (!raw) return '';
@@ -6740,6 +6936,60 @@ function viewServerCore(root, port, host, opts) {
     if (req.method === 'POST' && pathname === '/api/entries') {
       if (!session.umk) return json(401, { error: '请先解锁。' });
       return readBody(function (d) { json(200, viewEntriesCore(root, session, d.query, d.offset, d.limit)); });
+    }
+    if (req.method === 'POST' && pathname === '/api/overview') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return json(200, VIEW_KEYS_CONTEXT.run({ keys: session.ownerKeys }, function () { return viewOverviewCore(root, session); }));
+    }
+    if (req.method === 'POST' && pathname === '/api/memory/create') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return readBody(function (d) {
+        const r = VIEW_KEYS_CONTEXT.run({ keys: session.ownerKeys }, function () { return viewRememberCore(root, d); });
+        json(r.error ? 400 : 200, r);
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/memory/update') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return readBody(function (d) {
+        const r = VIEW_KEYS_CONTEXT.run({ keys: session.ownerKeys }, function () { return viewUpdateCore(root, d); });
+        json(r.error ? 400 : 200, r);
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/memory/delete') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return readBody(function (d) {
+        const r = VIEW_KEYS_CONTEXT.run({ keys: session.ownerKeys }, function () { return viewDeleteCore(root, d); });
+        json(r.error ? 400 : 200, r);
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/memory/restore') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return readBody(function (d) {
+        const r = VIEW_KEYS_CONTEXT.run({ keys: session.ownerKeys }, function () { return viewRestoreCore(root, d); });
+        json(r.error ? 400 : 200, r);
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/memory/archive') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return readBody(function (d) {
+        const r = VIEW_KEYS_CONTEXT.run({ keys: session.ownerKeys }, function () { return viewArchiveCore(root, d); });
+        json(r.error ? 400 : 200, r);
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/memory/unarchive') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return readBody(function (d) {
+        const r = VIEW_KEYS_CONTEXT.run({ keys: session.ownerKeys }, function () { return viewUnarchiveCore(root, d); });
+        json(r.error ? 400 : 200, r);
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/trash') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return json(200, viewTrashListCore(root));
+    }
+    if (req.method === 'POST' && pathname === '/api/archived') {
+      if (!session.umk) return json(401, { error: '请先解锁。' });
+      return json(200, viewArchiveListCore(root));
     }
     if (req.method === 'POST' && pathname === '/api/export') {
       if (!session.umk) return json(401, { error: '请先解锁。' });
