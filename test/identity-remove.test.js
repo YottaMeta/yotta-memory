@@ -309,6 +309,8 @@ test('view 的删除 AI 在未配置独立备份时拒绝', async (t) => {
 
 test('view 的删除 AI 在确认 ID 不一致时给出可见提示', () => {
   const html = memory.viewHtml();
-  assert.match(html, /if\(typed===null\)return;/);
-  assert.match(html, /if\(typed!==owner\)\{alert\('ID 不匹配，请输入完整 agent ID：'\+owner\);return;\}/);
+  assert.match(html, /data-remove=/);
+  assert.match(html, /confirmOwner/);
+  assert.match(html, /ID 不匹配/);
+  assert.match(html, /\/api\/identity-remove/);
 });

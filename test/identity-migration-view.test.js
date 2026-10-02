@@ -314,7 +314,7 @@ test('view revoke then re-authorize rotates the binding and clears the migration
 
 test('view page binds the authorize callback to the returned agent_key', () => {
   const html = MOD.viewHtml();
-  assert.match(html, /d\.agentKey/);
+  assert.match(html, /r\.agentKey/);
   assert.match(html, /由你（用户）操作/);
   assert.match(html, /AI 不应代为执行该授权操作/);
   assert.match(html, /key claim/);

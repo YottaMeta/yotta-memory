@@ -111,6 +111,8 @@ test('view M1 creates FACT + private PREF, lists them, encrypts private file', a
   const list = await viewApi(ctx.port, '/api/entries', { query: 'view-', limit: 50 });
   assert.strictEqual(list.status, 200);
   assert.strictEqual(list.data.count, 2);
+  const listPref = await viewApi(ctx.port, '/api/entries', { query: 'view-', limit: 50, type: 'PREF' });
+  assert.strictEqual(listPref.data.count, 1);
 
   const privateFiles = walkFiles(path.join(ctx.home, 'private'));
   assert.ok(privateFiles.some((fp) => fp.endsWith('.enc')), 'private entry should be encrypted on disk');

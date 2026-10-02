@@ -1,72 +1,663 @@
-<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>元忆 · 用户查看平台</title><style>
-body{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;max-width:1000px;margin:24px auto;padding:0 16px;color:#1f2328;background:#fafafa}
-h1{font-size:22px} .card{background:#fff;border:1px solid #e2e2e2;border-radius:10px;padding:16px 18px;margin:14px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-button{background:#2563eb;color:#fff;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;margin:2px;font-size:14px}
-button.danger{background:#dc2626} button.ghost{background:#e5e7eb;color:#1f2328}
-input,select{padding:8px;border:1px solid #c9c9c9;border-radius:6px;margin:2px;font-size:14px;box-sizing:border-box}
-table{border-collapse:collapse;width:100%;font-size:13px} td,th{border:1px solid #ececec;padding:6px 8px;text-align:left;vertical-align:top}
-.owner{display:inline-flex;align-items:center;gap:6px;border:1px solid #ddd;border-radius:8px;padding:5px 10px;margin:4px 6px 4px 0;background:#f6f8fa}
-.entry{border-bottom:1px solid #eee;padding:8px 0} .meta{color:#8a8a8a;font-size:12px}
-.err{color:#dc2626;margin-top:8px} .ok{color:#16a34a;margin-top:8px}
-#app{display:none} code{background:#f0f0f0;padding:1px 5px;border-radius:4px;font-size:12px}
-</style></head><body>
-<h1>元忆 · 用户查看平台 <span id="ver" style="font-size:14px;color:#888"></span></h1>
-<div id="lock" class="card">
-  <p><b>输入主口令解锁</b>（口令只在本地内存派生，不落盘、不发送远端）。忘口令可在 CLI 用恢复钥匙重设：<code>yotta-memory reset-password --recovery-key &lt;钥匙&gt;</code></p>
-  <input type="password" id="pw" placeholder="主口令" style="width:260px">
-  <button onclick="unlock()">解锁</button>
-  <div class="err" id="lockerr"></div>
-</div>
-<div id="app">
-  <div class="card">
-    <b>AI 列表</b>（✅=已授权可读自己私密，🔒=未授权）
-    <div class="meta" style="margin-top:6px">「授权」由你（用户）操作：确认后生成只显示一次的 agent_key，请立即单独保存；服务端同时写临时待领取文件 <code>keys/pending/&lt;agent_id&gt;.key</code>，供该 AI 新会话领取，领取成功后自动删除。</div>
-    <div id="owners" style="margin-top:8px"></div>
-  </div>
-  <div class="card">
-    <b>记忆</b>
-    <input id="q" placeholder="搜索关键词" style="width:220px" onkeydown="if(event.key==='Enter'){off=0;load()}">
-    <button onclick="off=0;load()">搜索</button>
-    <button class="ghost" onclick="doExport()">导出 JSON</button>
-    <button class="ghost" onclick="showRk()">显示恢复钥匙</button>
-    <span id="rkout" style="font-size:12px;color:#888;margin-left:8px"></span>
-    <div id="meta" style="margin-top:10px;font-size:12px;color:#666"></div>
-    <div id="entries" style="margin-top:6px"></div>
-    <div id="pager" style="margin-top:10px">
-      <button class="ghost" id="prevb" onclick="prevPage()">上一页</button>
-      <span id="pageinfo" style="font-size:12px;color:#888;margin:0 8px"></span>
-      <button class="ghost" id="nextb" onclick="nextPage()">下一页</button>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>元忆 · 记忆管理台</title>
+<style>
+  :root{--bg:#0f0c12;--bg2:#141019;--panel:#191420;--panel2:#1f1828;--line:rgba(255,217,138,.12);--line2:rgba(255,217,138,.24);
+    --text:#f4eee4;--muted:#a79c8e;--faint:#776c60;--amber:#f0a13a;--gold:#ffd98a;--ok:#7fc49a;--danger:#e07070;--shadow:0 10px 30px rgba(0,0,0,.35)}
+  body.light{--bg:#f6f1e8;--bg2:#f1eade;--panel:#fffdf8;--panel2:#faf5ec;--line:rgba(56,42,28,.12);--line2:rgba(56,42,28,.24);
+    --text:#241c14;--muted:#6f6458;--faint:#96897b;--amber:#c1781c;--gold:#9c6a16;--ok:#3e7d57;--danger:#b23c3c;--shadow:0 8px 24px rgba(56,42,28,.10)}
+  *{box-sizing:border-box}[hidden]{display:none!important}
+  html,body{margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:14px/1.6 "Microsoft YaHei","PingFang SC","Noto Sans CJK SC",system-ui,sans-serif;letter-spacing:0}
+  button{font:inherit;color:inherit;cursor:pointer}
+  input,select,textarea{font:inherit;color:var(--text);background:var(--panel2);border:1px solid var(--line2);border-radius:8px;padding:9px 12px;outline:0;width:100%}
+  input:focus,select:focus,textarea:focus{border-color:var(--amber)}
+  textarea{min-height:96px;resize:vertical}
+  .muted{color:var(--muted)}.faint{color:var(--faint);font-size:12px}
+  .sv{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+  /* lock */
+  .lock-wrap{min-height:100vh;display:grid;place-items:center;padding:24px}
+  .lock-card{width:min(420px,100%);background:var(--panel);border:1px solid var(--line2);border-radius:12px;padding:26px;box-shadow:var(--shadow)}
+  .lock-card h1{margin:14px 0 6px;font-size:22px}
+  .lock-card .field{margin-top:16px}
+  .err{color:var(--danger);margin-top:10px;font-size:13px;min-height:20px}
+
+  /* shell */
+  .shell{display:grid;grid-template-columns:236px minmax(0,1fr);min-height:100vh}
+  .sidebar{background:var(--bg2);border-right:1px solid var(--line);padding:22px 16px;display:flex;flex-direction:column;gap:22px;position:sticky;top:0;height:100vh;min-width:0}
+  .brand{display:flex;align-items:center;gap:10px;padding:0 6px}
+  .brand-mark{width:34px;height:34px;border-radius:8px;background:rgba(240,161,58,.14);border:1px solid var(--line2);display:grid;place-items:center;color:var(--gold)}
+  .brand-name{font-size:16px;font-weight:600}.brand-sub{font-size:11px;color:var(--faint)}
+  .nav{display:flex;flex-direction:column;gap:4px;min-width:0}
+  .nav button{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--muted);text-align:left}
+  .nav button:hover{background:var(--panel);color:var(--text)}
+  .nav button.active{background:var(--panel);color:var(--gold);border-color:var(--line)}
+  .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:10px;min-width:0}
+  .privacy{display:flex;gap:8px;align-items:flex-start;padding:10px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:12px;background:var(--panel)}
+  .privacy .sv{color:var(--ok);margin-top:2px}
+  .ghost-btn{display:flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:6px;padding:8px}
+  .ghost-btn:hover{color:var(--text);border-color:var(--line2)}
+
+  .main{min-width:0;padding:26px 30px 60px}
+  .topbar{display:flex;align-items:center;gap:14px;margin-bottom:22px;flex-wrap:wrap}
+  .page-title{font-size:20px;font-weight:600;margin:0}.page-sub{color:var(--faint);font-size:12px;margin-top:2px}
+  .spacer{flex:1}
+  .search{display:flex;align-items:center;gap:8px;min-width:240px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 12px;color:var(--muted)}
+  .search input{background:transparent;border:0;padding:0;width:100%}
+  .chip-user{display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:12px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--amber)}
+
+  .view{display:none}.view.active{display:block}
+  .grid{display:grid;gap:14px}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px;min-width:0}
+  .card h3{margin:0 0 4px;font-size:14px}
+  .label{color:var(--muted);font-size:12px}.value{font-size:26px;font-weight:600;margin:8px 0 2px}.delta{font-size:12px;color:var(--ok)}
+  .section{margin-top:20px}
+  .shead{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}.shead h2{font-size:15px;margin:0}
+  .bars{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+  .bar{border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--panel2)}
+  .bar b{font-size:18px;display:block;margin-top:6px}
+  .bar .dot{display:inline-block;margin-right:6px}
+
+  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:999px;padding:5px 12px;font-size:12px}
+  .chip.active{color:var(--gold);border-color:var(--line2);background:rgba(240,161,58,.10)}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:6px;border:1px solid var(--line2);background:transparent;color:var(--text)}
+  .btn:hover{border-color:var(--gold)}
+  .btn.primary{background:var(--amber);border-color:var(--amber);color:#1b1206;font-weight:600}
+  .btn.danger{border-color:rgba(224,112,112,.5);color:var(--danger)}
+  .btn.small{padding:5px 10px;font-size:12px}
+  .btn[disabled]{opacity:.5;cursor:not-allowed}
+
+  .list{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+  .row{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)}
+  .row:hover{border-color:var(--line2)}
+  .row-main{flex:1;min-width:0;cursor:pointer}
+  .row-title{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row-snippet{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row-meta{color:var(--faint);font-size:11px;margin-top:2px}
+  .row-actions{display:flex;gap:6px}
+  .ibtn{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--line);background:transparent;border-radius:6px;color:var(--muted)}
+  .ibtn:hover{color:var(--text);border-color:var(--line2)}
+  .badge{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line2);color:var(--gold);background:rgba(240,161,58,.10);white-space:nowrap}
+  .badge.pref{color:#b79cdd;border-color:rgba(183,156,221,.4);background:rgba(183,156,221,.10)}
+  .badge.bound{color:#8fb4de;border-color:rgba(143,180,222,.4);background:rgba(143,180,222,.10)}
+  .badge.commit{color:var(--ok);border-color:rgba(127,196,154,.4);background:rgba(127,196,154,.10)}
+  .badge.off{color:var(--faint);border-color:var(--line);background:transparent}
+  .empty{color:var(--faint);text-align:center;padding:26px;border:1px dashed var(--line);border-radius:8px;margin-top:14px}
+  .pager{display:flex;align-items:center;gap:10px;margin-top:12px;color:var(--faint);font-size:12px}
+
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:12px 10px;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--faint);font-weight:500;font-size:12px}
+  .owner-name{font-weight:600}
+
+  .field{margin-bottom:12px}
+  .field label{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+  .mask{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;place-items:center;z-index:50;padding:20px}
+  .mask.open{display:grid}
+  .modal{width:min(560px,100%);max-height:86vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:18px;box-shadow:var(--shadow)}
+  .modal h3{margin:0 0 10px;font-size:16px}
+  .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+  .drawer{position:fixed;top:0;right:0;bottom:0;width:min(440px,92vw);background:var(--panel);border-left:1px solid var(--line2);padding:20px;overflow:auto;transform:translateX(100%);transition:transform .2s;z-index:45}
+  .drawer.open{transform:none}
+  .kv{display:grid;grid-template-columns:86px 1fr;gap:6px 10px;font-size:13px;margin:14px 0}
+  .kv dt{color:var(--faint)}.kv dd{margin:0;word-break:break-all}
+  .quote{border-left:2px solid var(--line2);padding-left:12px;color:var(--muted);white-space:pre-wrap;word-break:break-word}
+  .keybox{width:100%;min-height:64px;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+
+  .toasts{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;z-index:60}
+  .toast{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line2);border-radius:999px;padding:9px 16px;box-shadow:var(--shadow);font-size:13px}
+  .toast button{border:0;background:transparent;color:var(--gold);font-weight:600}
+  .list-plain{display:flex;flex-direction:column;gap:8px;max-height:46vh;overflow:auto}
+  .list-plain .item{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-size:12px;color:var(--muted)}
+  .list-plain .item .spacer{flex:1}
+
+  @media (max-width:960px){.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.bars{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media (max-width:760px){
+    .shell{grid-template-columns:minmax(0,1fr)}
+    .sidebar{position:static;height:auto;padding:14px;gap:12px}
+    .nav{flex-direction:row;overflow-x:auto;width:100%}
+    .nav button{white-space:nowrap}
+    .side-foot{margin-top:0;flex-direction:row}
+    .privacy{flex:1}
+    .main{padding:18px 16px 48px}
+    .search{min-width:100%;order:3}
+    .g4{grid-template-columns:repeat(2,minmax(0,1fr))}
+    table{display:block;overflow-x:auto;white-space:nowrap}
+    .row{flex-wrap:wrap}.row-actions{width:100%;justify-content:flex-end}
+  }
+</style>
+</head>
+<body>
+<div id="lock" class="lock-wrap">
+  <div class="lock-card">
+    <div class="brand">
+      <div class="brand-mark"><svg class="sv" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></div>
+      <div><div class="brand-name">元忆 yotta-memory</div><div class="brand-sub">你的 AI 记忆，由你掌控</div></div>
     </div>
-  </div>
-  <div class="card">
-    <b>重设口令</b><br>
-    <input type="password" id="cur" placeholder="当前口令">
-    <input type="password" id="np1" placeholder="新口令">
-    <input type="password" id="np2" placeholder="确认新口令">
-    <button onclick="resetPw()">重设</button>
-    <span id="pwout"></span>
+    <h1>解锁记忆管理台 <span id="ver" class="faint"></span></h1>
+    <div class="field"><label>主口令（只在本地内存派生，不落盘、不发远端）</label><input type="password" id="pw" placeholder="主口令"></div>
+    <button class="btn primary" id="unlockBtn" style="width:100%">解锁</button>
+    <div class="err" id="lockErr"></div>
+    <div class="faint" style="margin-top:8px">忘记口令可用恢复钥匙在 CLI 重设：<code>yotta-memory reset-password --recovery-key &lt;钥匙&gt;</code></div>
   </div>
 </div>
+
+<div id="app" class="shell" hidden>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark"><svg class="sv" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></div>
+      <div><div class="brand-name">元忆</div><div class="brand-sub">你的 AI 记忆，由你掌控</div></div>
+    </div>
+    <nav class="nav" id="nav">
+      <button data-view="overview" class="active"><svg class="sv" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>概览</button>
+      <button data-view="memories"><svg class="sv" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>记忆</button>
+      <button data-view="access"><svg class="sv" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>AI 与权限</button>
+      <button data-view="settings"><svg class="sv" viewBox="0 0 24 24"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/></svg>设置</button>
+    </nav>
+    <div class="side-foot">
+      <div class="privacy"><svg class="sv" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg><span>数据不出本机<br>私密区按 AI 隔离加密</span></div>
+      <button class="ghost-btn" id="themeBtn"><svg class="sv" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>切换主题</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div><h1 class="page-title" id="pageTitle">概览</h1><div class="page-sub" id="pageSub">你的 AI 记住了什么，一眼看清</div></div>
+      <div class="spacer"></div>
+      <label class="search"><svg class="sv" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="globalSearch" placeholder="搜索记忆 / 关键词"></label>
+      <div class="chip-user"><span class="dot"></span>本机 · 用户</div>
+    </div>
+
+    <section class="view active" id="view-overview">
+      <div class="grid g4">
+        <div class="card"><div class="label">记忆总数</div><div class="value" id="ovTotal">-</div><div class="delta" id="ovFiles">-</div></div>
+        <div class="card"><div class="label">私密记忆</div><div class="value" id="ovPrivate">-</div><div class="delta">仅对应 AI 与本人可见</div></div>
+        <div class="card"><div class="label">AI 智能体</div><div class="value" id="ovOwners">-</div><div class="delta" id="ovAuth">-</div></div>
+        <div class="card"><div class="label">已藏起来（归档）</div><div class="value" id="ovArchived">-</div><div class="delta">可随时放回</div></div>
+      </div>
+      <div class="section">
+        <div class="shead"><h2>四类记忆分布</h2><span class="faint">FACT 共享 · PREF / BOUND / COMMIT 私密</span></div>
+        <div class="bars" id="typeBars"></div>
+      </div>
+      <div class="section grid g2">
+        <div class="card">
+          <h3>最近更新</h3>
+          <div class="list" id="recentList"></div>
+        </div>
+        <div class="card">
+          <h3>备份与安全</h3>
+          <div class="kv" style="margin-top:10px">
+            <dt>备份目录</dt><dd id="ovBackup">-</dd>
+            <dt>存储占用</dt><dd id="ovBytes">-</dd>
+            <dt>私密加密</dt><dd>已启用（AES-256-GCM 信封加密）</dd>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn small" id="quickArchived">查看已藏</button>
+            <button class="btn small" id="quickTrash">最近删除</button>
+            <button class="btn small primary" data-goto="memories">管理记忆</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-memories">
+      <div class="card toolbar">
+        <label class="search" style="min-width:280px;flex:1"><svg class="sv" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="memSearch" placeholder="搜索记忆（标题 / 内容 / 标签）"></label>
+        <div class="chips" id="typeChips">
+          <button class="chip active" data-type="all">全部</button>
+          <button class="chip" data-type="FACT">FACT</button>
+          <button class="chip" data-type="PREF">PREF</button>
+          <button class="chip" data-type="BOUND">BOUND</button>
+          <button class="chip" data-type="COMMIT">COMMIT</button>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn" id="btnArchived">已藏</button>
+        <button class="btn" id="btnTrash">最近删除</button>
+        <button class="btn primary" id="btnNew">新建记忆</button>
+      </div>
+      <div class="list" id="memList"></div>
+      <div class="empty" id="memEmpty" hidden>没有匹配的记忆。</div>
+      <div class="pager"><button class="btn small" id="prevPage">上一页</button><span id="pageInfo">-</span><button class="btn small" id="nextPage">下一页</button></div>
+    </section>
+
+    <section class="view" id="view-access">
+      <div class="card">
+        <h3>谁看得见什么</h3>
+        <div class="faint" style="margin-bottom:10px">默认拒绝：每个 AI 只能读自己的私密区；公共 FACT 所有已授权 AI 可见。授权会生成只显示一次的 agent_key，请立即单独保存。</div>
+        <table><thead><tr><th>AI 智能体</th><th>FACT 公共</th><th>私密记忆</th><th>状态</th><th></th></tr></thead><tbody id="ownerRows"></tbody></table>
+      </div>
+      <div class="section card">
+        <h3>恢复与备份</h3>
+        <div class="kv"><dt>备份目录</dt><dd id="accBackup">-</dd><dt>恢复钥匙</dt><dd>离线保存；泄露等同口令泄露</dd></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn small" id="btnRk">显示恢复钥匙</button><button class="btn small" id="btnExport">导出全部 JSON</button></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-settings">
+      <div class="card">
+        <h3>重设主口令</h3>
+        <div class="row2" style="margin-top:10px">
+          <div class="field"><label>当前口令</label><input type="password" id="pwCur"></div>
+          <div class="field"><label>新口令</label><input type="password" id="pwNew"></div>
+          <div class="field"><label>确认新口令</label><input type="password" id="pwNew2"></div>
+        </div>
+        <button class="btn primary" id="btnResetPw">重设口令</button>
+        <div class="err" id="pwOut"></div>
+      </div>
+      <div class="section card">
+        <h3>危险操作</h3>
+        <div class="faint">删除某个 AI 的身份与其私密记忆（公共 FACT 保留，其它 AI 不受影响）。此操作不可恢复，请谨慎使用。</div>
+        <div style="margin-top:10px"><button class="btn danger small" id="btnDangerHint">在哪里执行？</button></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="mask" id="modalMask"><div class="modal"><h3 id="modalTitle"></h3><div id="modalBody"></div><div class="modal-actions"><button class="btn" id="modalCancel">取消</button><button class="btn primary" id="modalOk">确认</button></div></div></div>
+<div class="mask" id="drawerMask"></div>
+<aside class="drawer" id="drawer">
+  <div style="display:flex;gap:10px;align-items:flex-start"><div style="flex:1"><h3 id="drTitle"></h3><div class="faint" id="drMeta"></div></div><button class="ibtn" id="drClose"><svg class="sv" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+  <div class="quote" id="drBody" style="margin-top:12px"></div>
+  <dl class="kv" id="drKv"></dl>
+  <div style="display:flex;gap:8px"><button class="btn" id="drEdit"><svg class="sv" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>编辑</button><button class="btn danger" id="drDelete"><svg class="sv" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>删除</button></div>
+</aside>
+<div class="toasts" id="toasts"></div>
+
 <script>
-function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-async function api(p,b){try{const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});return await r.json();}catch(e){return{error:String(e)};}}
-async function boot(){const s=await api('/api/status');document.getElementById('ver').textContent='v'+(s.version||'');if(s.unlocked){showApp();}}
-function showApp(){document.getElementById('lock').style.display='none';document.getElementById('app').style.display='block';loadOwners();load();}
-async function unlock(){const d=await api('/api/unlock',{password:document.getElementById('pw').value});if(d.error){document.getElementById('lockerr').textContent=d.error;return;}showApp();}
-async function loadOwners(){const d=await api('/api/owners');const box=document.getElementById('owners');box.innerHTML='';if(!d.owners||!d.owners.length){box.innerHTML=esc(d.hint||'（无 owner）');return;}
-  for(const o of d.owners){const c=document.createElement('span');c.className='owner';c.innerHTML=esc(o.owner)+(o.authorized?' ✅':' 🔒')+' <button class="ghost" data-a="'+esc(o.owner)+'">授权</button><button class="danger" data-r="'+esc(o.owner)+'">吊销</button><button class="danger" data-d="'+esc(o.owner)+'">删除</button>';box.appendChild(c);}
-  box.querySelectorAll('[data-a]').forEach(function(b){b.onclick=function(){var owner=b.getAttribute('data-a');if(!confirm('确认由你为用户授权 '+owner+' 读取其私密记忆？授权后将生成只显示一次的 agent_key，请立即保存；同时写入待领取文件供该 AI 新会话领取。AI 不应代为执行该授权操作。'))return;b.disabled=true;api('/api/authorize',{owner:owner}).then(function(d){b.disabled=false;if(!d||d.error){alert((d&&d.error)||'授权失败');loadOwners();return;}if(d.agentKey){showKey(d.agentKey);}loadOwners();});};});
-  box.querySelectorAll('[data-r]').forEach(function(b){b.onclick=function(){if(!confirm('确认吊销 '+b.getAttribute('data-r')+' 的 agent_key？吊销后该智能体立即失去私密读写能力。'))return;api('/api/revoke',{owner:b.getAttribute('data-r')}).then(function(){loadOwners();});};});
-  box.querySelectorAll('[data-d]').forEach(function(b){b.onclick=function(){var owner=b.getAttribute('data-d');var typed=prompt('彻底删除 '+owner+' 的身份与私密记忆（不可恢复；公共明文保留，其它 AI 不受影响）。请输入完整 ID 确认：');if(typed===null)return;if(typed!==owner){alert('ID 不匹配，请输入完整 agent ID：'+owner);return;}b.disabled=true;api('/api/identity-remove',{owner:owner,confirm:typed}).then(function(d){b.disabled=false;if(!d||d.error){alert((d&&d.error)||'删除失败');loadOwners();return;}alert(d.text||'已删除');loadOwners();});};});
-function showKey(k){var ov=document.createElement('div');ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:99';var box=document.createElement('div');box.className='card';box.style.cssText='max-width:640px;word-break:break-all';var t=document.createElement('div');t.innerHTML='<b>agent_key（只显示一次）</b>';var hint=document.createElement('div');hint.className='meta';hint.textContent='请用户立即单独保存。AI 新会话先执行 yotta-memory key status <agent_id>，有 pending 再执行 key claim <agent_id>；默认写入 AI_HOME/.yotta-memory-agent-key，需要时用 --to 或 --agent-key-file 指定。若 key 丢失，可吊销后重新授权；旧 key 会立即校验失败。';var ta=document.createElement('textarea');ta.readOnly=true;ta.value=k;ta.style.cssText='width:100%;height:72px;margin-top:8px;font-family:monospace;font-size:12px';var close=document.createElement('button');close.textContent='我已保存，关闭';close.onclick=function(){ov.remove();};box.appendChild(t);box.appendChild(hint);box.appendChild(ta);box.appendChild(close);ov.appendChild(box);document.body.appendChild(ov);ta.focus();ta.select();}
-}
-let off=0,PS=50;
-async function load(){const d=await api('/api/entries',{query:document.getElementById('q').value,offset:off,limit:PS});const meta=document.getElementById('meta');const pg=document.getElementById('pageinfo');if(meta)meta.textContent='共 '+d.count+' 条';const lim=d.limit||PS;const totalPg=Math.max(1,Math.ceil(d.count/lim));const curPg=Math.floor((d.offset||0)/lim)+1;if(pg)pg.textContent='第 '+curPg+' / '+totalPg+' 页';const box=document.getElementById('entries');box.innerHTML='';if(d.entries)for(const e of d.entries){const div=document.createElement('div');div.className='entry';div.innerHTML='<b>['+esc(e.type)+'] '+esc(e.subject)+'</b><div>'+esc(e.statement)+'</div><div class="meta">'+esc(e.file)+' · owner='+esc(e.owner||'-')+' · '+esc(e.updated||e.created||'')+'</div>';box.appendChild(div);}const pb=document.getElementById('prevb'),nb=document.getElementById('nextb');if(pb)pb.disabled=(d.offset||0)<=0;if(nb)nb.disabled=!d.hasMore;}
-function prevPage(){if(off>=PS){off-=PS;load();}}
-function nextPage(){off+=PS;load();}
-async function doExport(){const d=await api('/api/export');if(d.error){alert(d.error);return;}const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='yottamemory-view-export.json';a.click();}
-async function showRk(){const d=await api('/api/recovery-key');document.getElementById('rkout').textContent=d.recoveryKey?('恢复钥匙: '+d.recoveryKey):(d.error||'');}
-async function resetPw(){const np1=document.getElementById('np1').value,np2=document.getElementById('np2').value;if(np1!==np2){document.getElementById('pwout').innerHTML='<span class="err">两次新口令不一致</span>';return;}
-  const d=await api('/api/reset-password',{currentPassword:document.getElementById('cur').value,newPassword:np1});document.getElementById('pwout').innerHTML=d.error?('<span class="err">'+esc(d.error)+'</span>'):('<span class="ok">'+esc(d.text||'ok')+'</span>');}
-boot();
-</script></body></html>
+(function () {
+  'use strict';
+  var $ = function (s) { return document.querySelector(s); };
+  var state = { view: 'overview', entries: [], count: 0, offset: 0, limit: 20, query: '', type: 'all', owners: [], overview: null, current: null };
+  var typeNames = { FACT: 'FACT 事实', PREF: 'PREF 偏好', BOUND: 'BOUND 边界', COMMIT: 'COMMIT 承诺' };
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  async function api(pathname, body) {
+    try {
+      var res = await fetch(pathname, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+      var text = await res.text();
+      var data;
+      try { data = JSON.parse(text); } catch (e) { data = { error: text }; }
+      if (res.status === 401) showLock();
+      return data;
+    } catch (e) { return { error: String(e) }; }
+  }
+  function fmtBytes(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(2) + ' MB';
+  }
+  function toast(msg, actionLabel, fn) {
+    var el = document.createElement('div');
+    el.className = 'toast';
+    el.appendChild(document.createTextNode(msg));
+    if (actionLabel && fn) {
+      var b = document.createElement('button');
+      b.textContent = actionLabel;
+      b.addEventListener('click', function () { el.remove(); fn(); });
+      el.appendChild(b);
+    }
+    $('#toasts').appendChild(el);
+    setTimeout(function () { el.remove(); }, actionLabel ? 9000 : 3600);
+  }
+  function showLock() { $('#lock').hidden = false; $('#app').hidden = true; }
+  function showApp() { $('#lock').hidden = true; $('#app').hidden = false; refreshAll(); }
+
+  /* modal / drawer */
+  var modalOkFn = null;
+  function openModal(title, bodyHtml, opts) {
+    opts = opts || {};
+    $('#modalTitle').textContent = title;
+    $('#modalBody').innerHTML = bodyHtml;
+    $('#modalOk').textContent = opts.okText || '确认';
+    $('#modalOk').className = 'btn ' + (opts.danger ? 'danger' : 'primary');
+    $('#modalOk').hidden = !opts.onOk;
+    modalOkFn = opts.onOk || null;
+    $('#modalMask').classList.add('open');
+  }
+  function closeModal() { $('#modalMask').classList.remove('open'); modalOkFn = null; }
+  function confirmModal(title, text, okText, danger, onOk) {
+    openModal(title, '<p class="muted">' + esc(text) + '</p>', { okText: okText, danger: danger, onOk: onOk });
+  }
+  $('#modalCancel').addEventListener('click', closeModal);
+  $('#modalMask').addEventListener('click', function (e) { if (e.target === $('#modalMask')) closeModal(); });
+  $('#modalOk').addEventListener('click', function () { if (modalOkFn) modalOkFn(); });
+  function openDrawer() { $('#drawer').classList.add('open'); $('#drawerMask').classList.add('open'); }
+  function closeDrawer() { $('#drawer').classList.remove('open'); $('#drawerMask').classList.remove('open'); }
+  $('#drClose').addEventListener('click', closeDrawer);
+  $('#drawerMask').addEventListener('click', closeDrawer);
+
+  /* nav */
+  var titles = { overview: ['概览', '你的 AI 记住了什么，一眼看清'], memories: ['记忆', '看 / 改 / 删 / 藏，全在这里'], access: ['AI 与权限', '默认拒绝，按 AI 隔离'], settings: ['设置', '口令 / 备份 / 导出'] };
+  function switchView(name) {
+    state.view = name;
+    Array.prototype.forEach.call(document.querySelectorAll('#nav button'), function (b) { b.classList.toggle('active', b.dataset.view === name); });
+    Array.prototype.forEach.call(document.querySelectorAll('.view'), function (v) { v.classList.toggle('active', v.id === 'view-' + name); });
+    $('#pageTitle').textContent = titles[name][0];
+    $('#pageSub').textContent = titles[name][1];
+    window.scrollTo(0, 0);
+  }
+  $('#nav').addEventListener('click', function (e) { var b = e.target.closest('button'); if (b) switchView(b.dataset.view); });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-goto]'), function (b) { b.addEventListener('click', function () { switchView(b.dataset.goto); }); });
+  $('#themeBtn').addEventListener('click', function () { document.body.classList.toggle('light'); });
+
+  /* data loaders */
+  async function loadOverview() {
+    var d = await api('/api/overview');
+    if (d.error) return;
+    state.overview = d;
+    var priv = d.total - (d.byType.FACT || 0);
+    $('#ovTotal').textContent = d.total;
+    $('#ovFiles').textContent = d.files + ' 个文件';
+    $('#ovPrivate').textContent = priv;
+    $('#ovOwners').textContent = d.owners.length;
+    $('#ovAuth').textContent = d.authorized + ' 已授权';
+    $('#ovArchived').textContent = d.archived;
+    $('#ovBackup').textContent = d.backupDir || '未配置（CLI: yotta-memory backup setup）';
+    $('#ovBytes').textContent = fmtBytes(d.bytes);
+    $('#accBackup').textContent = d.backupDir || '未配置';
+    var colors = { FACT: 'var(--gold)', PREF: '#b79cdd', BOUND: '#8fb4de', COMMIT: 'var(--ok)' };
+    $('#typeBars').innerHTML = ['FACT', 'PREF', 'BOUND', 'COMMIT'].map(function (t) {
+      var n = d.byType[t] || 0;
+      return '<div class="bar"><span class="dot" style="background:' + colors[t] + '"></span><span class="faint">' + typeNames[t] + '</span><b>' + n + '</b></div>';
+    }).join('');
+  }
+  async function loadOwners() {
+    var d = await api('/api/owners');
+    state.owners = (d && d.owners) || [];
+    var box = $('#ownerRows');
+    if (!state.owners.length) { box.innerHTML = '<tr><td colspan="5" class="faint">' + esc((d && d.hint) || '当前没有 owner，请先在 CLI 执行 yotta-memory iam <id>。') + '</td></tr>'; return; }
+    box.innerHTML = state.owners.map(function (o) {
+      return '<tr><td><span class="owner-name">' + esc(o.owner) + '</span><div class="faint">' + (o.registered ? '已登记' : '未登记') + '</div></td>' +
+        '<td><span class="badge commit">可见</span></td>' +
+        '<td>' + (o.authorized ? '<span class="badge commit">已授权</span>' : '<span class="badge off">仅自己</span>') + '</td>' +
+        '<td>' + (o.authorized ? '可读自己的私密区' : '未绑定 agent_key') + '</td>' +
+        '<td><button class="btn small" data-auth="' + esc(o.owner) + '">' + (o.authorized ? '吊销' : '授权') + '</button> <button class="btn small danger" data-remove="' + esc(o.owner) + '">删除</button></td></tr>';
+    }).join('');
+  }
+  async function loadEntries() {
+    var d = await api('/api/entries', { query: state.query, offset: state.offset, limit: state.limit, type: state.type === 'all' ? '' : state.type });
+    if (d.error) { toast(d.error); return; }
+    state.entries = d.entries || [];
+    state.count = d.count || 0;
+    var totalPg = Math.max(1, Math.ceil(state.count / state.limit));
+    var curPg = Math.floor(state.offset / state.limit) + 1;
+    $('#pageInfo').textContent = '共 ' + state.count + ' 条 · 第 ' + curPg + ' / ' + totalPg + ' 页';
+    $('#prevPage').disabled = state.offset <= 0;
+    $('#nextPage').disabled = !d.hasMore;
+    renderEntries();
+  }
+  function renderEntries() {
+    var box = $('#memList');
+    $('#memEmpty').hidden = state.entries.length > 0;
+    box.innerHTML = state.entries.map(function (e) {
+      var t = String(e.type || 'FACT').toUpperCase();
+      return '<div class="row" data-file="' + esc(e.file) + '"><div class="row-main"><span class="badge ' + t.toLowerCase() + '">' + typeNames[t] + '</span>' +
+        '<div class="row-title">' + esc(e.subject) + '</div><div class="row-snippet">' + esc(e.statement) + '</div>' +
+        '<div class="row-meta">' + esc(e.owner || '公共') + ' · ' + esc(e.updated || e.created || '') + ' · ' + esc(e.file) + '</div></div>' +
+        '<div class="row-actions"><button class="ibtn" data-act="edit" title="编辑"><svg class="sv" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></button>' +
+        '<button class="ibtn" data-act="archive" title="藏起来（归档）"><svg class="sv" viewBox="0 0 24 24"><path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c7 0 10 8 10 8a17.5 17.5 0 0 1-2.16 3.19"/><path d="M6.6 6.6A16.8 16.8 0 0 0 2 12s3 8 10 8a9.6 9.6 0 0 0 5.4-1.6"/><path d="m2 2 20 20"/></svg></button>' +
+        '<button class="ibtn" data-act="delete" title="删除"><svg class="sv" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg></button></div></div>';
+    }).join('');
+  }
+  async function refreshAll() {
+    await loadOverview();
+    await loadOwners();
+    await loadEntries();
+    var recent = state.entries.slice(0, 4).map(function (e) {
+      var t = String(e.type || 'FACT').toUpperCase();
+      return '<div class="row"><div class="row-main"><div class="row-title">' + esc(e.subject) + '</div><div class="row-meta">' + esc(e.owner || '公共') + ' · ' + esc(e.updated || e.created || '') + '</div></div><span class="badge ' + t.toLowerCase() + '">' + typeNames[t] + '</span></div>';
+    }).join('');
+    $('#recentList').innerHTML = recent || '<div class="faint">还没有记忆。</div>';
+  }
+
+  /* entries actions */
+  $('#memList').addEventListener('click', async function (e) {
+    var row = e.target.closest('.row');
+    if (!row) return;
+    var file = row.dataset.file;
+    var entry = state.entries.filter(function (x) { return x.file === file; })[0];
+    var act = e.target.closest('button[data-act]');
+    if (!act) { openDetail(entry); return; }
+    if (act.dataset.act === 'edit') openEditor(entry);
+    else if (act.dataset.act === 'delete') doDelete(entry);
+    else if (act.dataset.act === 'archive') doArchive(entry);
+  });
+  function openDetail(entry) {
+    if (!entry) return;
+    state.current = entry;
+    var t = String(entry.type || 'FACT').toUpperCase();
+    $('#drTitle').textContent = entry.subject || '(无标题)';
+    $('#drMeta').textContent = typeNames[t] + ' · ' + (entry.owner || '公共') + ' · ' + (entry.updated || entry.created || '');
+    $('#drBody').textContent = entry.statement || '';
+    $('#drKv').innerHTML = '<dt>文件</dt><dd>' + esc(entry.file) + '</dd><dt>可见性</dt><dd>' + (t === 'FACT' ? '所有已授权 AI' : '仅 ' + esc(entry.owner) + '（私密）') + '</dd><dt>标签</dt><dd>' + esc((entry.tags || []).join(', ') || '-') + '</dd>';
+    openDrawer();
+  }
+  $('#drEdit').addEventListener('click', function () { if (state.current) { closeDrawer(); openEditor(state.current); } });
+  $('#drDelete').addEventListener('click', function () { if (state.current) { closeDrawer(); doDelete(state.current); } });
+
+  function editorHtml(entry, isNew) {
+    var t = entry ? String(entry.type || 'FACT').toUpperCase() : 'FACT';
+    return '<div class="field"><label>类型</label><select id="fType"' + (isNew ? '' : ' disabled') + '>' +
+      ['FACT', 'PREF', 'BOUND', 'COMMIT'].map(function (x) { return '<option value="' + x + '"' + (x === t ? ' selected' : '') + '>' + typeNames[x] + '</option>'; }).join('') + '</select></div>' +
+      '<div class="field" id="fOwnerWrap"><label>归属 AI（私密记忆必填）</label><input id="fOwner" list="ownerList" placeholder="如 codex" value="' + esc(entry && entry.owner || '') + '"><datalist id="ownerList">' + state.owners.map(function (o) { return '<option value="' + esc(o.owner) + '">'; }).join('') + '</datalist></div>' +
+      '<div class="field"><label>标题 subject</label><input id="fSubject" value="' + esc(entry && entry.subject || '') + '"></div>' +
+      '<div class="field"><label>内容 statement</label><textarea id="fStatement">' + esc(entry && entry.statement || '') + '</textarea></div>' +
+      '<div class="field"><label>标签（逗号分隔）</label><input id="fTags" value="' + esc(entry && (entry.tags || []).join(', ') || '') + '"></div>' +
+      (isNew ? '' : '<div class="faint">类型与归属不可修改；如需变更请删除后重写。</div>');
+  }
+  function syncOwnerField() {
+    var t = $('#fType') ? $('#fType').value : 'FACT';
+    var wrap = $('#fOwnerWrap');
+    if (wrap) wrap.hidden = (t === 'FACT');
+  }
+  function openEditor(entry) {
+    openModal('编辑记忆', editorHtml(entry, false), {
+      okText: '保存', onOk: async function () {
+        var subject = $('#fSubject').value.trim();
+        var statement = $('#fStatement').value.trim();
+        var tags = $('#fTags').value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+        if (!subject || !statement) { toast('标题与内容不能为空'); return; }
+        var r = await api('/api/memory/update', { file: entry.file, subject: subject, statement: statement, tags: tags });
+        if (r.error) { toast(r.error); return; }
+        closeModal();
+        toast('已更新 1 条记忆', '撤销', async function () {
+          var u = await api('/api/memory/restore', { ref: r.undo });
+          toast(u.error || '已撤销这次编辑');
+          refreshAll();
+        });
+        refreshAll();
+      },
+    });
+  }
+  $('#btnNew').addEventListener('click', function () {
+    openModal('新建记忆', editorHtml(null, true), {
+      okText: '创建', onOk: async function () {
+        var type = $('#fType').value;
+        var owner = $('#fOwner') ? $('#fOwner').value.trim() : '';
+        var subject = $('#fSubject').value.trim();
+        var statement = $('#fStatement').value.trim();
+        var tags = $('#fTags').value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+        if (!subject || !statement) { toast('标题与内容不能为空'); return; }
+        var r = await api('/api/memory/create', { type: type, owner: owner, subject: subject, statement: statement, tags: tags });
+        if (r.error) { toast(r.error); return; }
+        closeModal();
+        toast('已创建 1 条记忆');
+        refreshAll();
+      },
+    });
+    syncOwnerField();
+    $('#fType').addEventListener('change', syncOwnerField);
+  });
+  function doDelete(entry) {
+    confirmModal('删除这条记忆？', '将移入回收区（不物理删除），可从「最近删除」恢复。', '删除', true, async function () {
+      var r = await api('/api/memory/delete', { file: entry.file });
+      if (r.error) { toast(r.error); return; }
+      closeModal();
+      toast('已删除 1 条记忆', '撤销', async function () {
+        var u = await api('/api/memory/restore', { ref: r.trash });
+        toast(u.error || '已恢复');
+        refreshAll();
+      });
+      refreshAll();
+    });
+  }
+  function doArchive(entry) {
+    confirmModal('藏起来（归档）？', '归档后不参与召回，但数据保留，可随时放回。', '藏起来', false, async function () {
+      var r = await api('/api/memory/archive', { file: entry.file });
+      if (r.error) { toast(r.error); return; }
+      closeModal();
+      toast('已藏起来 1 条', '放回', async function () {
+        var u = await api('/api/memory/unarchive', { archive: r.archive });
+        toast(u.error || '已放回');
+        refreshAll();
+      });
+      refreshAll();
+    });
+  }
+
+  async function openArchived() {
+    var d = await api('/api/archived');
+    var items = (d.entries || []).map(function (e) {
+      return '<div class="item"><span>' + esc(e.original) + '</span><span class="spacer"></span><button class="btn small" data-unarch="' + esc(e.ref) + '">放回</button></div>';
+    }).join('');
+    openModal('已藏起来（归档）', items ? '<div class="list-plain">' + items + '</div>' : '<p class="faint">没有归档的记忆。</p>', {});
+    $('#modalBody').addEventListener('click', async function (e) {
+      var b = e.target.closest('button[data-unarch]');
+      if (!b) return;
+      var r = await api('/api/memory/unarchive', { archive: b.dataset.unarch });
+      toast(r.error || '已放回');
+      closeModal();
+      refreshAll();
+    }, { once: true });
+  }
+  async function openTrash() {
+    var d = await api('/api/trash');
+    var items = (d.entries || []).filter(function (e) { return e.kind === 'trash'; }).map(function (e) {
+      return '<div class="item"><span>' + esc(e.original) + '</span><span class="spacer"></span><button class="btn small" data-restore="' + esc(e.ref) + '">恢复</button></div>';
+    }).join('');
+    openModal('最近删除', items ? '<div class="list-plain">' + items + '</div>' : '<p class="faint">回收区是空的。</p>', {});
+    $('#modalBody').addEventListener('click', async function (e) {
+      var b = e.target.closest('button[data-restore]');
+      if (!b) return;
+      var r = await api('/api/memory/restore', { ref: b.dataset.restore });
+      toast(r.error || '已恢复');
+      closeModal();
+      refreshAll();
+    }, { once: true });
+  }
+  $('#btnArchived').addEventListener('click', openArchived);
+  $('#quickArchived').addEventListener('click', openArchived);
+  $('#btnTrash').addEventListener('click', openTrash);
+  $('#quickTrash').addEventListener('click', openTrash);
+
+  /* search / filter / paging */
+  $('#memSearch').addEventListener('keydown', function (e) { if (e.key === 'Enter') { state.query = e.target.value; state.offset = 0; loadEntries(); } });
+  $('#globalSearch').addEventListener('keydown', function (e) { if (e.key === 'Enter') { state.query = e.target.value; state.offset = 0; switchView('memories'); loadEntries(); } });
+  $('#typeChips').addEventListener('click', function (e) {
+    var b = e.target.closest('.chip');
+    if (!b) return;
+    state.type = b.dataset.type; state.offset = 0;
+    Array.prototype.forEach.call(document.querySelectorAll('#typeChips .chip'), function (c) { c.classList.toggle('active', c === b); });
+    loadEntries();
+  });
+  $('#prevPage').addEventListener('click', function () { if (state.offset > 0) { state.offset -= state.limit; loadEntries(); } });
+  $('#nextPage').addEventListener('click', function () { state.offset += state.limit; loadEntries(); });
+
+  /* owners */
+  $('#ownerRows').addEventListener('click', async function (e) {
+    var authBtn = e.target.closest('button[data-auth]');
+    var rmBtn = e.target.closest('button[data-remove]');
+    if (authBtn) {
+      var owner = authBtn.dataset.auth;
+      var authorized = state.owners.filter(function (o) { return o.owner === owner; })[0].authorized;
+      if (authorized) {
+        confirmModal('吊销 ' + owner + ' 的授权？', '吊销后该智能体立即失去私密读写能力，旧 key 会立即校验失败。', '吊销', true, async function () {
+          var r = await api('/api/revoke', { owner: owner });
+          closeModal(); toast(r.error || '已吊销'); loadOwners();
+        });
+      } else {
+        confirmModal('授权 ' + owner + '？', '「授权」由你（用户）操作：确认后生成只显示一次的 agent_key，请立即单独保存；服务端同时写临时待领取文件 keys/pending/<agent_id>.key，供该 AI 新会话执行 key claim 领取，领取成功后自动删除。AI 不应代为执行该授权操作。', '授权', false, async function () {
+          var r = await api('/api/authorize', { owner: owner });
+          closeModal();
+          if (r.error) { toast(r.error); return; }
+          openModal('agent_key（只显示一次）', '<p class="muted">请立即单独保存；AI 新会话执行 key status → key claim 领取。</p><textarea class="keybox" readonly>' + esc(r.agentKey) + '</textarea>', { okText: '我已保存', onOk: closeModal });
+          var box = $('#modalBody').querySelector('textarea');
+          if (box) { box.focus(); box.select(); }
+          loadOwners();
+        });
+      }
+      return;
+    }
+    if (rmBtn) {
+      var target = rmBtn.dataset.remove;
+      openModal('删除 ' + target + ' 的身份与私密记忆', '<p class="muted">不可恢复；公共 FACT 保留，其它 AI 不受影响。请输入完整 ID 确认：</p><input id="confirmOwner" placeholder="' + esc(target) + '">', {
+        okText: '删除', danger: true, onOk: async function () {
+          var typed = $('#confirmOwner').value.trim();
+          if (typed !== target) { toast('ID 不匹配'); return; }
+          var r = await api('/api/identity-remove', { owner: target, confirm: typed });
+          closeModal(); toast(r.error || '已删除'); loadOwners(); loadOverview(); loadEntries();
+        },
+      });
+    }
+  });
+
+  /* settings */
+  $('#btnResetPw').addEventListener('click', async function () {
+    var a = $('#pwCur').value, b = $('#pwNew').value, c = $('#pwNew2').value;
+    if (!b || b !== c) { $('#pwOut').textContent = '两次新口令不一致'; return; }
+    var r = await api('/api/reset-password', { currentPassword: a, newPassword: b });
+    $('#pwOut').textContent = r.error || (r.text || '已重设');
+    if (!r.error) { $('#pwCur').value = $('#pwNew').value = $('#pwNew2').value = ''; }
+  });
+  $('#btnRk').addEventListener('click', async function () {
+    var r = await api('/api/recovery-key');
+    if (r.error) { toast(r.error); return; }
+    openModal('恢复钥匙（离线保存）', '<p class="muted">泄露等同口令泄露。忘记主口令时可用它重设。</p><textarea class="keybox" readonly>' + esc(r.recoveryKey) + '</textarea>', { okText: '我已保存', onOk: closeModal });
+  });
+  $('#btnExport').addEventListener('click', async function () {
+    var r = await api('/api/export');
+    if (r.error) { toast(r.error); return; }
+    var blob = new Blob([JSON.stringify(r, null, 2)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'yottamemory-export.json';
+    a.click();
+    toast('已导出 JSON');
+  });
+  $('#btnDangerHint').addEventListener('click', function () {
+    toast('在「AI 与权限」列表里，每个 AI 右侧有「删除」按钮');
+  });
+
+  /* unlock / boot */
+  $('#unlockBtn').addEventListener('click', async function () {
+    var r = await api('/api/unlock', { password: $('#pw').value });
+    if (r.error) { $('#lockErr').textContent = r.error; return; }
+    $('#lockErr').textContent = '';
+    showApp();
+  });
+  $('#pw').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('#unlockBtn').click(); });
+  (async function boot() {
+    var s = await api('/api/status');
+    if (s && s.version) $('#ver').textContent = 'v' + s.version;
+    if (s && s.unlocked) showApp(); else showLock();
+    if (s && s.encrypted === false) $('#lockErr').textContent = '当前记忆库未启用加密；请先在 CLI 执行 init --encrypt / migrate。';
+  })();
+})();
+</script>
+</body>
+</html>
