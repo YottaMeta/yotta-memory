@@ -1173,9 +1173,30 @@ function parseFrontmatter(text) {
     if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
       v = v.slice(1, -1);
     }
-    meta[k] = v;
+    const arr = parseInlineArray(v);
+    meta[k] = arr === null ? v : arr;
   }
   return { meta: meta, body: text.slice(m[0][0].length + m[0].length) };
+}
+// 内联数组解析：标准 JSON 数组（v0.21.0+ 写出格式）正常解析；
+// 历史缺陷留下的逐层 \" 转义污染在这里逐层剥离后解析，使下一次重写自动修复为规范格式。
+function parseInlineArray(v) {
+  const s = String(v === undefined || v === null ? '' : v).trim();
+  if (!(s.startsWith('[') && s.endsWith(']'))) return null;
+  let candidate = s;
+  for (let i = 0; i < 6; i += 1) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (Array.isArray(parsed)) return parsed.map(String);
+    } catch (e) { /* 兼容历史转义：继续剥离一层 */ }
+    if (candidate.indexOf('\\"') === -1) break;
+    candidate = candidate.split('\\"').join('"');
+  }
+  const inner = s.slice(1, -1).trim();
+  if (!inner) return [];
+  return inner.split(',').map(function (x) {
+    return x.trim().replace(/^["']+|["']+$/g, '');
+  }).filter(Boolean);
 }
 function escapeYaml(v) {
   return String(v).replace(/\n/g, ' ').replace(/"/g, '\\"');
@@ -1183,9 +1204,11 @@ function escapeYaml(v) {
 function parseTags(v) {
   if (Array.isArray(v)) return v.map(String);
   if (typeof v === 'string') {
-    let s = v.trim();
-    if (s.startsWith('[') && s.endsWith(']')) s = s.slice(1, -1);
-    return s.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+    const arr = parseInlineArray(v);
+    if (arr !== null) return arr;
+    return v.split(',').map(function (x) {
+      return x.trim().replace(/^["']+|["']+$/g, '');
+    }).filter(Boolean);
   }
   return [];
 }

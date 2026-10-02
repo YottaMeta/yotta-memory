@@ -75,6 +75,7 @@ async function unlockAndAuthorize(port) {
   assert.strictEqual(unlock.status, 200, JSON.stringify(unlock.data));
   const auth = await viewApi(port, '/api/authorize', { owner: 'codex' });
   assert.strictEqual(auth.status, 200, JSON.stringify(auth.data));
+  return auth.data;
 }
 
 function walkFiles(dir, out) {
@@ -195,4 +196,34 @@ test('view M1 blocks cross-origin requests', async (t) => {
   const ctx = await setup(t);
   const r = await viewApi(ctx.port, '/api/status', {}, { Origin: 'http://evil.example' });
   assert.strictEqual(r.status, 403);
+});
+
+test('view M1 preserves tags on rewrite and repairs legacy escaping', async (t) => {
+  const ctx = await setup(t);
+  const auth = await unlockAndAuthorize(ctx.port);
+
+  const create = await viewApi(ctx.port, '/api/memory/create', { type: 'FACT', subject: 'tag-stable', statement: 'v1', tags: ['验收', 'M1'] });
+  assert.strictEqual(create.status, 200, JSON.stringify(create.data));
+  const list = await viewApi(ctx.port, '/api/entries', { query: 'tag-stable' });
+  const file = list.data.entries[0].file;
+  const abs = path.join(ctx.home, file);
+  const readTags = () => (fs.readFileSync(abs, 'utf8').match(/^tags: (.*)$/m) || [])[1];
+  assert.strictEqual(readTags(), '["验收","M1"]');
+
+  const upd = await viewApi(ctx.port, '/api/memory/update', { file: file, statement: 'v2' });
+  assert.strictEqual(upd.status, 200, JSON.stringify(upd.data));
+  assert.strictEqual(readTags(), '["验收","M1"]', 'update without tags must keep the tags line unchanged');
+  const list2 = await viewApi(ctx.port, '/api/entries', { query: 'tag-stable' });
+  assert.deepStrictEqual(list2.data.entries[0].tags, ['验收', 'M1']);
+
+  const recall = run(['recall', 'tag-stable', '--agent', 'codex', '--agent-key', auth.agentKey], ctx.home);
+  assert.strictEqual(recall.status, 0, recall.stderr || recall.stdout);
+  assert.strictEqual(readTags(), '["验收","M1"]', 'read-tracking rewrite must not touch tags');
+
+  let text = fs.readFileSync(abs, 'utf8');
+  text = text.replace(/^tags: .*$/m, 'tags: [\\"验收\\",\\"M1\\"]');
+  fs.writeFileSync(abs, text, 'utf8');
+  const upd2 = await viewApi(ctx.port, '/api/memory/update', { file: file, statement: 'v3' });
+  assert.strictEqual(upd2.status, 200, JSON.stringify(upd2.data));
+  assert.strictEqual(readTags(), '["验收","M1"]', 'legacy escaped tags must be repaired on next rewrite');
 });
