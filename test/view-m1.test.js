@@ -198,6 +198,13 @@ test('view M1 blocks cross-origin requests', async (t) => {
   assert.strictEqual(r.status, 403);
 });
 
+test('view M1 keeps the drawer above its mask and uses the owner chip picker', () => {
+  const html = MOD.viewHtml();
+  assert.match(html, /#drawerMask\{z-index:40\}/);
+  assert.match(html, /id="fOwnerPick"/);
+  assert.match(html, /owner-chip/);
+});
+
 test('view M1 preserves tags on rewrite and repairs legacy escaping', async (t) => {
   const ctx = await setup(t);
   const auth = await unlockAndAuthorize(ctx.port);
