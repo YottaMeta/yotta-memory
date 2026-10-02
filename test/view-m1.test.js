@@ -213,6 +213,7 @@ test('view M1 preserves tags on rewrite and repairs legacy escaping', async (t) 
   assert.strictEqual(create.status, 200, JSON.stringify(create.data));
   const list = await viewApi(ctx.port, '/api/entries', { query: 'tag-stable' });
   const file = list.data.entries[0].file;
+  assert.match(String(list.data.entries[0].mtime || ''), /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/, 'entries must carry a precise mtime');
   const abs = path.join(ctx.home, file);
   const readTags = () => (fs.readFileSync(abs, 'utf8').match(/^tags: (.*)$/m) || [])[1];
   assert.strictEqual(readTags(), '["验收","M1"]');
