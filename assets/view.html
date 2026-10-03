@@ -347,6 +347,9 @@
       return data;
     } catch (e) { return { error: String(e) }; }
   }
+  function errText(r, fallback) {
+    return r && r.error ? ((r.text || r.message || fallback) || '操作失败') : '';
+  }
   function fmtBytes(n) {
     n = Number(n) || 0;
     if (n < 1024) return n + ' B';
@@ -566,7 +569,7 @@
         closeModal();
         toast('已更新 1 条记忆' + (r.ownerChange ? '（归属已改为 ' + (r.ownerChange.to || '公共') + '）' : ''), '撤销', async function () {
           var u = await api('/api/memory/restore', { ref: r.undo });
-          toast(u.error || '已撤销这次编辑');
+          toast(errText(u, '撤销失败') || '已撤销这次编辑');
           refreshAll();
         });
         refreshAll();
@@ -601,7 +604,7 @@
       closeModal();
       toast('已删除 1 条记忆', '撤销', async function () {
         var u = await api('/api/memory/restore', { ref: r.trash });
-        toast(u.error || '已恢复');
+        toast(errText(u, '恢复失败') || '已恢复');
         refreshAll();
       });
       refreshAll();
@@ -614,7 +617,7 @@
       closeModal();
       toast('已藏起来 1 条', '放回', async function () {
         var u = await api('/api/memory/unarchive', { archive: r.archive });
-        toast(u.error || '已放回');
+        toast(errText(u, '放回失败') || '已放回');
         refreshAll();
       });
       refreshAll();
@@ -631,7 +634,7 @@
       var b = e.target.closest('button[data-unarch]');
       if (!b) return;
       var r = await api('/api/memory/unarchive', { archive: b.dataset.unarch });
-      toast(r.error || '已放回');
+      toast(errText(r, '放回失败') || '已放回');
       closeModal();
       refreshAll();
     }, { once: true });
@@ -646,7 +649,7 @@
       var b = e.target.closest('button[data-restore]');
       if (!b) return;
       var r = await api('/api/memory/restore', { ref: b.dataset.restore });
-      toast(r.error || '已恢复');
+      toast(errText(r, '恢复失败') || '已恢复');
       closeModal();
       refreshAll();
     }, { once: true });
@@ -679,7 +682,7 @@
       if (authorized) {
         confirmModal('吊销 ' + owner + ' 的授权？', '吊销后该智能体立即失去私密读写能力，旧 key 会立即校验失败。', '吊销', true, async function () {
           var r = await api('/api/revoke', { owner: owner });
-          closeModal(); toast(r.error || '已吊销'); loadOwners();
+          closeModal(); toast(errText(r, '吊销失败') || '已吊销'); loadOwners();
         });
       } else {
         confirmModal('授权 ' + owner + '？', '「授权」由你（用户）操作：确认后生成只显示一次的 agent_key，请立即单独保存；服务端同时写临时待领取文件 keys/pending/<agent_id>.key，供该 AI 新会话执行 key claim 领取，领取成功后自动删除。AI 不应代为执行该授权操作。', '授权', false, async function () {
@@ -701,7 +704,7 @@
           var typed = $('#confirmOwner').value.trim();
           if (typed !== target) { toast('ID 不匹配'); return; }
           var r = await api('/api/identity-remove', { owner: target, confirm: typed });
-          closeModal(); toast(r.error || '已删除'); loadOwners(); loadOverview(); loadEntries();
+          closeModal(); toast(errText(r, '删除失败') || '已删除'); loadOwners(); loadOverview(); loadEntries();
         },
       });
     }
@@ -712,7 +715,7 @@
     var a = $('#pwCur').value, b = $('#pwNew').value, c = $('#pwNew2').value;
     if (!b || b !== c) { $('#pwOut').textContent = '两次新口令不一致'; return; }
     var r = await api('/api/reset-password', { currentPassword: a, newPassword: b });
-    $('#pwOut').textContent = r.error || (r.text || '已重设');
+    $('#pwOut').textContent = r.error ? (r.text || '重设失败') : (r.text || '已重设');
     if (!r.error) { $('#pwCur').value = $('#pwNew').value = $('#pwNew2').value = ''; }
   });
   $('#btnRk').addEventListener('click', async function () {

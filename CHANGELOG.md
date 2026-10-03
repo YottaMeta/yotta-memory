@@ -5,6 +5,9 @@
 - 完整帮助（175 选项行）与只读 `POST /api/help` 不变；页面仍只展示与复制，不执行命令。
 - **管理台归属修正**：编辑 FACT（公共记忆）时可直接改归属（仅元数据 + 审计 + 可撤销，ID 校验）；PREF / BOUND / COMMIT（私密）归属置灰，提示删除重写或等待后续「归属迁移」功能。
 - **写操作身份回显（防串号）**：`remember` / `forget` 输出 `[身份] agent_id: …；来源: …`；检测到宿主身份环境 `YOTTA_MEMORY_AGENT_HOME` 时追加 `[注意]` 警告；`SKILL.md` 增加「身份自检」流程（显式身份 + 回显核对 + 异常停写）。
+- **修复（WorkBuddy 验收 D1）**：编辑记忆的「撤销」此前必然失败（`viewUpdateCore` 就地改写 + `viewRestoreCore` 拒绝覆盖已存在目标）；现在 `.trash/view-history/` 的编辑历史撤销允许安全覆盖，并先把当前版本留作重做快照；回收区直恢复仍 fail-closed。
+- **修复（D2）**：失败提示不再把布尔 `error` 当文案（统一 `errText`，覆盖 7 处 toast + 重设口令 1 处）；失败时显示服务端 `text`。
+- **修复（D3）**：编辑常规条目时同步 markdown 正文（仅当旧正文与旧 statement 完全一致；`distill` 类长文保留原 body）。
 
 ## v0.22.0 (2026-10-03)
 

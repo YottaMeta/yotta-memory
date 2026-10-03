@@ -184,6 +184,54 @@ test('view M1 reassigns FACT owner but keeps private ownership immutable', async
   assert.strictEqual(prefAfter.data.entries[0].owner, 'codex');
 });
 
+test('view M1 edit undo restores the previous version and keeps a redo snapshot', async (t) => {
+  const ctx = await setup(t);
+  await unlockAndAuthorize(ctx.port);
+
+  await viewApi(ctx.port, '/api/memory/create', { type: 'FACT', subject: 'undo-fact', statement: '原文 A' });
+  const list = await viewApi(ctx.port, '/api/entries', { query: 'undo-fact' });
+  const file = list.data.entries[0].file;
+
+  const upd = await viewApi(ctx.port, '/api/memory/update', { file: file, subject: 'undo-fact（改）', statement: '新文 B' });
+  assert.strictEqual(upd.status, 200, JSON.stringify(upd.data));
+  assert.ok(upd.data.undo && upd.data.undo.indexOf('.trash/view-history/') === 0);
+
+  const undo = await viewApi(ctx.port, '/api/memory/restore', { ref: upd.data.undo });
+  assert.strictEqual(undo.status, 200, JSON.stringify(undo.data));
+  assert.ok(undo.data.redo && undo.data.redo.indexOf('.trash/view-history/') === 0, 'undo must keep a redo snapshot');
+  assert.ok(fs.existsSync(path.join(ctx.home, undo.data.redo)), 'redo snapshot must exist');
+
+  const after = await viewApi(ctx.port, '/api/entries', { query: 'undo-fact' });
+  assert.strictEqual(after.data.entries[0].subject, 'undo-fact');
+  assert.strictEqual(after.data.entries[0].statement, '原文 A');
+});
+
+test('view M1 syncs a mirrored markdown body on edit but preserves long-form bodies', async (t) => {
+  const ctx = await setup(t);
+  await unlockAndAuthorize(ctx.port);
+  const bodyOf = (file) => {
+    const text = fs.readFileSync(path.join(ctx.home, file), 'utf8');
+    const m = text.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
+    return m ? m[1].trim() : null;
+  };
+
+  await viewApi(ctx.port, '/api/memory/create', { type: 'FACT', subject: 'body-fact', statement: 'body v1' });
+  const list = await viewApi(ctx.port, '/api/entries', { query: 'body-fact' });
+  const file = list.data.entries[0].file;
+  assert.strictEqual(bodyOf(file), 'body v1', 'remember writes a mirrored body');
+
+  const upd = await viewApi(ctx.port, '/api/memory/update', { file: file, statement: 'body v2' });
+  assert.strictEqual(upd.status, 200, JSON.stringify(upd.data));
+  assert.strictEqual(bodyOf(file), 'body v2', 'mirrored body must follow the statement');
+
+  const raw = fs.readFileSync(path.join(ctx.home, file), 'utf8');
+  const longBody = '长文正文 A\n\n第二段。';
+  fs.writeFileSync(path.join(ctx.home, file), raw.replace(/^(---\n[\s\S]*?\n---\n)[\s\S]*$/, '$1\n' + longBody + '\n'), 'utf8');
+  const upd2 = await viewApi(ctx.port, '/api/memory/update', { file: file, statement: 'summary v2' });
+  assert.strictEqual(upd2.status, 200, JSON.stringify(upd2.data));
+  assert.strictEqual(bodyOf(file), longBody, 'long-form body must be preserved');
+});
+
 test('view M1 deletes to trash and restores', async (t) => {
   const ctx = await setup(t);
   await unlockAndAuthorize(ctx.port);
@@ -235,6 +283,8 @@ test('view M1 keeps the drawer above its mask and uses the owner chip picker', (
   assert.match(html, /#drawerMask\{z-index:40\}/);
   assert.match(html, /id="fOwnerPick"/);
   assert.match(html, /owner-chip/);
+  assert.match(html, /function errText/, 'panel must map server error.text instead of rendering a boolean');
+  assert.doesNotMatch(html, /toast\([a-z]\.error \|\|/, 'toast must not treat the boolean error flag as text');
 });
 
 test('view M1 preserves tags on rewrite and repairs legacy escaping', async (t) => {
