@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
+<link rel="icon" href="data:,">
 <title>元忆 · 记忆管理台</title>
 <style>
   :root{--bg:#0f0c12;--bg2:#141019;--panel:#191420;--panel2:#1f1828;--line:rgba(255,217,138,.12);--line2:rgba(255,217,138,.24);
@@ -128,7 +129,36 @@
   .list-plain .item{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-size:12px;color:var(--muted)}
   .list-plain .item .spacer{flex:1}
 
-  @media (max-width:960px){.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.bars{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  /* advanced cli */
+  .quick-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .cmd-item{border:1px solid var(--line);border-radius:8px;padding:12px 14px;background:var(--panel2);display:flex;flex-direction:column;gap:8px;min-width:0}
+  .cmd-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .cmd-name{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--gold)}
+  .cmd-what{font-weight:600}
+  .cmd-when{color:var(--muted);font-size:12px}
+  .code-line{display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:6px;padding:6px 10px;min-width:0}
+  body.light .code-line{background:rgba(56,42,28,.06)}
+  .code-line code{flex:1;min-width:0;font-family:ui-monospace,Consolas,monospace;font-size:12px;overflow-x:auto;white-space:nowrap}
+  .danger-badge{color:var(--danger);border-color:rgba(224,112,112,.5);background:rgba(224,112,112,.10)}
+  .cmd-note{color:var(--danger);font-size:12px}
+  .quick-group{margin-top:14px}
+  .quick-group h4{margin:0 0 8px;font-size:13px;color:var(--muted)}
+  .help-cmd{border:1px solid var(--line);border-radius:8px;background:var(--panel2);margin-top:10px;min-width:0}
+  .help-cmd summary{cursor:pointer;padding:10px 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;list-style:none}
+  .help-cmd summary::-webkit-details-marker{display:none}
+  .help-cmd summary::before{content:'';width:6px;height:6px;border-right:1.6px solid var(--muted);border-bottom:1.6px solid var(--muted);transform:rotate(-45deg);transition:transform .15s;flex:none}
+  .help-cmd[open] summary::before{transform:rotate(45deg)}
+  .help-body{padding:12px 14px;display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line)}
+  .help-sub{border-top:1px solid var(--line);padding-top:8px;margin-top:2px;display:flex;flex-direction:column;gap:6px}
+  .help-sub .cmd-name{color:var(--text)}
+  .opt-row{display:grid;grid-template-columns:minmax(150px,auto) minmax(0,1fr);gap:2px 12px;padding:7px 0;border-top:1px solid var(--line);font-size:12px}
+  .opt-row:first-child{border-top:0}
+  .opt-flag{font-family:ui-monospace,Consolas,monospace;word-break:break-all}
+  .opt-what{color:var(--muted)}
+  .opt-when{color:var(--faint)}
+  .opt-risk{color:var(--danger)}
+
+  @media (max-width:960px){.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.bars{grid-template-columns:repeat(2,minmax(0,1fr))}.quick-list{grid-template-columns:minmax(0,1fr)}}
   @media (max-width:760px){
     .shell{grid-template-columns:minmax(0,1fr)}
     .sidebar{position:static;height:auto;padding:14px;gap:12px}
@@ -170,6 +200,7 @@
       <button data-view="memories"><svg class="sv" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>记忆</button>
       <button data-view="access"><svg class="sv" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/></svg>AI 与权限</button>
       <button data-view="settings"><svg class="sv" viewBox="0 0 24 24"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/></svg>设置</button>
+      <button data-view="cli"><svg class="sv" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>高级 / CLI</button>
     </nav>
     <div class="side-foot">
       <div class="privacy"><svg class="sv" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg><span>数据不出本机<br>私密区按 AI 隔离加密</span></div>
@@ -267,6 +298,20 @@
         <div style="margin-top:10px"><button class="btn danger small" id="btnDangerHint">在哪里执行？</button></div>
       </div>
     </section>
+
+    <section class="view" id="view-cli">
+      <div class="card">
+        <h3>常用命令速查</h3>
+        <div class="faint" style="margin-bottom:12px">只展示与复制；命令都在终端执行，危险操作已标注。</div>
+        <div id="cliQuick"><div class="faint">加载中…</div></div>
+      </div>
+      <div class="section card">
+        <h3>完整命令与参数</h3>
+        <div class="faint" style="margin-bottom:12px">与当前安装版本一致（随版本自动更新）；按需加载，只读展示，不执行任何命令。</div>
+        <button class="btn" id="btnFullHelp">加载完整命令与参数</button>
+        <div id="cliFull" hidden></div>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -284,7 +329,7 @@
 (function () {
   'use strict';
   var $ = function (s) { return document.querySelector(s); };
-  var state = { view: 'overview', entries: [], count: 0, offset: 0, limit: 20, query: '', type: 'all', owners: [], overview: null, current: null };
+  var state = { view: 'overview', entries: [], count: 0, offset: 0, limit: 20, query: '', type: 'all', owners: [], overview: null, current: null, help: null };
   var typeNames = { FACT: 'FACT 事实', PREF: 'PREF 偏好', BOUND: 'BOUND 边界', COMMIT: 'COMMIT 承诺' };
 
   function esc(s) {
@@ -359,7 +404,7 @@
   $('#drawerMask').addEventListener('click', closeDrawer);
 
   /* nav */
-  var titles = { overview: ['概览', '你的 AI 记住了什么，一眼看清'], memories: ['记忆', '看 / 改 / 删 / 藏，全在这里'], access: ['AI 与权限', '默认拒绝，按 AI 隔离'], settings: ['设置', '口令 / 备份 / 导出'] };
+  var titles = { overview: ['概览', '你的 AI 记住了什么，一眼看清'], memories: ['记忆', '看 / 改 / 删 / 藏，全在这里'], access: ['AI 与权限', '默认拒绝，按 AI 隔离'], settings: ['设置', '口令 / 备份 / 导出'], cli: ['高级 / CLI', '常用命令速查与完整帮助（只展示与复制）'] };
   function switchView(name) {
     state.view = name;
     Array.prototype.forEach.call(document.querySelectorAll('#nav button'), function (b) { b.classList.toggle('active', b.dataset.view === name); });
@@ -367,6 +412,7 @@
     $('#pageTitle').textContent = titles[name][0];
     $('#pageSub').textContent = titles[name][1];
     window.scrollTo(0, 0);
+    if (name === 'cli') ensureHelp();
   }
   $('#nav').addEventListener('click', function (e) { var b = e.target.closest('button'); if (b) switchView(b.dataset.view); });
   Array.prototype.forEach.call(document.querySelectorAll('[data-goto]'), function (b) { b.addEventListener('click', function () { switchView(b.dataset.goto); }); });
@@ -680,6 +726,107 @@
   });
   $('#btnDangerHint').addEventListener('click', function () {
     toast('在「AI 与权限」列表里，每个 AI 右侧有「删除」按钮');
+  });
+
+  /* advanced cli */
+  function findHelpEntry(groups, ref) {
+    var seg = String(ref).split(' ');
+    for (var i = 0; i < groups.length; i++) {
+      var cmds = groups[i].commands || [];
+      for (var j = 0; j < cmds.length; j++) {
+        var c = cmds[j];
+        if (c.name !== seg[0]) continue;
+        if (seg.length === 1) return c;
+        var subs = c.subcommands || [];
+        for (var k = 0; k < subs.length; k++) if (subs[k].name === seg[1]) return subs[k];
+      }
+    }
+    return null;
+  }
+  function copyText(text) {
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) {}
+      ta.remove();
+      return ok;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(function () { return true; }, function () { return fallback(); });
+    }
+    return Promise.resolve(fallback());
+  }
+  function copyBtn(text) {
+    return '<button class="ibtn copy-btn" data-copy="' + esc(text) + '" title="复制命令"><svg class="sv" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>';
+  }
+  function codeLine(text) {
+    return '<div class="code-line"><code>' + esc(text) + '</code>' + copyBtn(text) + '</div>';
+  }
+  function optRows(options) {
+    return (options || []).map(function (o) {
+      return '<div class="opt-row"><div class="opt-flag">' + esc(o.flag + (o.arg ? ' ' + o.arg : '')) + '</div><div>' +
+        '<div class="opt-what">' + esc(o.what) + '</div>' +
+        (o.when ? '<div class="opt-when">' + esc(o.when) + '</div>' : '') +
+        (o.caution ? '<div class="opt-risk">' + esc(o.caution) + '</div>' : '') +
+        '</div></div>';
+    }).join('');
+  }
+  function renderQuick() {
+    if (!state.help) return;
+    var d = state.help;
+    $('#cliQuick').innerHTML = (d.quick || []).map(function (g) {
+      var items = (g.items || []).map(function (it) {
+        var meta = findHelpEntry(d.groups, it.cmd) || {};
+        return '<div class="cmd-item"><div class="cmd-head"><code class="cmd-name">' + esc(it.cmd) + '</code>' +
+          (it.danger ? '<span class="badge danger-badge">危险</span>' : '') + '</div>' +
+          '<div class="cmd-what">' + esc(meta.what || '') + '</div>' +
+          '<div class="cmd-when">' + esc(meta.when || '') + '</div>' +
+          codeLine(it.example) +
+          (it.note ? '<div class="cmd-note">' + esc(it.note) + '</div>' : '') + '</div>';
+      }).join('');
+      return '<div class="quick-group"><h4>' + esc(g.group) + '</h4><div class="quick-list">' + items + '</div></div>';
+    }).join('');
+  }
+  function renderFull() {
+    if (!state.help) return;
+    $('#cliFull').innerHTML = (state.help.groups || []).map(function (g) {
+      var cmds = (g.commands || []).map(function (c) {
+        var subs = (c.subcommands || []).map(function (s) {
+          return '<div class="help-sub"><div class="cmd-head"><code class="cmd-name">' + esc(c.name + ' ' + s.name) + '</code></div>' +
+            (s.what ? '<div class="cmd-what">' + esc(s.what) + '</div>' : '') +
+            (s.when ? '<div class="cmd-when">' + esc(s.when) + '</div>' : '') +
+            codeLine('yotta-memory ' + c.name + ' ' + s.usage) + optRows(s.options) + '</div>';
+        }).join('');
+        return '<details class="help-cmd"><summary><code class="cmd-name">' + esc(c.name) + '</code><span class="cmd-what">' + esc(c.what) + '</span></summary>' +
+          '<div class="help-body">' + (c.when ? '<div class="cmd-when">' + esc(c.when) + '</div>' : '') +
+          codeLine('yotta-memory ' + c.usage) + optRows(c.options) + subs + '</div></details>';
+      }).join('');
+      return '<div class="quick-group"><h4>' + esc(g.group) + '</h4>' + cmds + '</div>';
+    }).join('');
+  }
+  async function ensureHelp() {
+    if (state.help) { renderQuick(); return; }
+    var d = await api('/api/help');
+    if (!d || d.error) { toast((d && d.error) || '帮助加载失败'); return; }
+    state.help = d;
+    renderQuick();
+  }
+  $('#btnFullHelp').addEventListener('click', async function () {
+    if (!state.help) await ensureHelp();
+    if (!state.help) return;
+    renderFull();
+    $('#cliFull').hidden = false;
+    $('#btnFullHelp').hidden = true;
+  });
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('.copy-btn[data-copy]');
+    if (!b) return;
+    copyText(b.dataset.copy).then(function (ok) { toast(ok ? '已复制' : '复制失败，请手动选择'); });
   });
 
   /* unlock / boot */
