@@ -75,7 +75,7 @@ async function unlock(port) {
   assert.strictEqual(r.status, 200, JSON.stringify(r.data));
 }
 
-const QUICK_GROUPS = ['备份恢复', '维护瘦身', '检索上下文', '扫描安全', '导入导出', '身份权限', '运行时与局域网'];
+const QUICK_GROUPS = ['核心记忆', '身份与画像', '加密与安全', '平台与服务'];
 
 function findHelpEntry(groups, ref) {
   const seg = String(ref).split(' ');
@@ -117,6 +117,16 @@ test('view CLI help serves HELP_MODEL and a drift-free quick reference', async (
       assert.ok(!seen.has(item.example), 'duplicate example: ' + item.example);
       seen.add(item.example);
       if (item.danger) assert.ok(item.note && item.note.length > 0, 'danger item needs a note: ' + item.cmd);
+    }
+  }
+  const covered = new Set();
+  for (const g of groups) for (const item of g.items) covered.add(item.cmd);
+  for (const g of r.data.groups) {
+    for (const c of g.commands) {
+      assert.ok(covered.has(c.name), 'quick list must cover command: ' + c.name);
+      for (const s of (c.subcommands || [])) {
+        assert.ok(covered.has(c.name + ' ' + s.name), 'quick list must cover subcommand: ' + c.name + ' ' + s.name);
+      }
     }
   }
 });

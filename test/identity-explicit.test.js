@@ -127,3 +127,24 @@ test('profile requires explicit identity', (t) => {
   assert.strictEqual(denied.status, 3);
   assert.match(denied.stdout, /必须先声明身份/);
 });
+
+test('remember echoes the write identity and its source', (t) => {
+  const home = tmpHome(t);
+  initPlain(home);
+  const r = run(['remember', 'FACT', '身份回显', '写操作回显测试', '--agent', 'codex'], home);
+  assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+  assert.match(r.stderr, /\[身份\] agent_id: codex；来源: explicit/);
+  assert.doesNotMatch(r.stderr, /\[注意\] 检测到宿主身份环境/);
+});
+
+test('remember warns when a launcher-provided host identity environment is present', (t) => {
+  const home = tmpHome(t);
+  initPlain(home);
+  const r = run(['remember', 'FACT', '宿主身份警告', '警告回显测试', '--agent', 'yottacode-desktop'], home, {
+    YOTTA_MEMORY_AGENT_HOME: 'C:\\Users\\root\\.yottacode\\config\\yottacode',
+  });
+  assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+  assert.match(r.stderr, /\[身份\] agent_id: yottacode-desktop；来源: explicit/);
+  assert.match(r.stderr, /\[注意\] 检测到宿主身份环境 YOTTA_MEMORY_AGENT_HOME=/);
+  assert.match(r.stderr, /请显式传 --agent <id> --agent-key-file <path> 覆盖/);
+});

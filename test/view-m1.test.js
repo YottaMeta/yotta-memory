@@ -152,6 +152,38 @@ test('view M1 updates FACT and private entries with undo history', async (t) => 
   assert.ok(trash.data.entries.some((e) => e.kind === 'history'));
 });
 
+test('view M1 reassigns FACT owner but keeps private ownership immutable', async (t) => {
+  const ctx = await setup(t);
+  await unlockAndAuthorize(ctx.port);
+
+  await viewApi(ctx.port, '/api/memory/create', { type: 'FACT', owner: 'yottacode-desktop', subject: 'owner-fact', statement: 'before' });
+  const list = await viewApi(ctx.port, '/api/entries', { query: 'owner-fact' });
+  assert.strictEqual(list.data.count, 1);
+  const file = list.data.entries[0].file;
+  assert.strictEqual(list.data.entries[0].owner, 'yottacode-desktop');
+
+  const upd = await viewApi(ctx.port, '/api/memory/update', { file: file, owner: 'codex', statement: 'after-owner' });
+  assert.strictEqual(upd.status, 200, JSON.stringify(upd.data));
+  assert.deepStrictEqual(upd.data.ownerChange, { from: 'yottacode-desktop', to: 'codex' });
+  const after = await viewApi(ctx.port, '/api/entries', { query: 'owner-fact' });
+  assert.strictEqual(after.data.entries[0].owner, 'codex');
+  const text = fs.readFileSync(path.join(ctx.home, file), 'utf8');
+  assert.match(text, /^owner: codex$/m);
+
+  const bad = await viewApi(ctx.port, '/api/memory/update', { file: file, owner: '../evil' });
+  assert.strictEqual(bad.status, 400);
+  assert.match(bad.data.text, /归属 AI ID 非法/);
+
+  await viewApi(ctx.port, '/api/memory/create', { type: 'PREF', owner: 'codex', subject: 'owner-pref', statement: 'private' });
+  const prefList = await viewApi(ctx.port, '/api/entries', { query: 'owner-pref' });
+  const prefFile = prefList.data.entries[0].file;
+  const denied = await viewApi(ctx.port, '/api/memory/update', { file: prefFile, owner: 'yottacode-desktop' });
+  assert.strictEqual(denied.status, 400);
+  assert.match(denied.data.text, /私密记忆（PREF）的归属不可直接修改/);
+  const prefAfter = await viewApi(ctx.port, '/api/entries', { query: 'owner-pref' });
+  assert.strictEqual(prefAfter.data.entries[0].owner, 'codex');
+});
+
 test('view M1 deletes to trash and restores', async (t) => {
   const ctx = await setup(t);
   await unlockAndAuthorize(ctx.port);

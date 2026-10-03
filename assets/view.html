@@ -517,17 +517,20 @@
 
   function editorHtml(entry, isNew) {
     var t = entry ? String(entry.type || 'FACT').toUpperCase() : 'FACT';
+    var ownerLocked = !isNew && t !== 'FACT';
     return '<div class="field"><label>类型</label><select id="fType"' + (isNew ? '' : ' disabled') + '>' +
       ['FACT', 'PREF', 'BOUND', 'COMMIT'].map(function (x) { return '<option value="' + x + '"' + (x === t ? ' selected' : '') + '>' + typeNames[x] + '</option>'; }).join('') + '</select></div>' +
-      '<div class="field" id="fOwnerWrap"><label>归属 AI（私密记忆必填；点选或输入自定义 ID）</label>' +
+      '<div class="field" id="fOwnerWrap"><label>' + (t === 'FACT' && !isNew ? '归属 AI（FACT 为公共记忆，归属仅作来源标记，可修改）' : '归属 AI（私密记忆必填；点选或输入自定义 ID）') + '</label>' +
       '<div class="owner-pick" id="fOwnerPick">' + (state.owners.length ? state.owners.map(function (o) {
-        return '<button type="button" class="owner-chip' + ((entry && entry.owner === o.owner) ? ' active' : '') + '" data-owner="' + esc(o.owner) + '">' + esc(o.owner) + '<span class="tag">' + (o.authorized ? '已授权' : '未授权') + '</span></button>';
+        return '<button type="button" class="owner-chip' + ((entry && entry.owner === o.owner) ? ' active' : '') + '"' + (ownerLocked ? ' disabled' : '') + ' data-owner="' + esc(o.owner) + '">' + esc(o.owner) + '<span class="tag">' + (o.authorized ? '已授权' : '未授权') + '</span></button>';
       }).join('') : '<span class="faint">还没有已登记的 AI；可直接输入自定义 ID。</span>') + '</div>' +
-      '<input id="fOwner" placeholder="自定义 AI ID（如 codex）" value="' + esc(entry && entry.owner || '') + '"></div>' +
+      '<input id="fOwner" placeholder="自定义 AI ID（如 codex）" value="' + esc(entry && entry.owner || '') + '"' + (ownerLocked ? ' disabled' : '') + '></div>' +
       '<div class="field"><label>标题 subject</label><input id="fSubject" value="' + esc(entry && entry.subject || '') + '"></div>' +
       '<div class="field"><label>内容 statement</label><textarea id="fStatement">' + esc(entry && entry.statement || '') + '</textarea></div>' +
       '<div class="field"><label>标签（逗号分隔）</label><input id="fTags" value="' + esc(entry && (entry.tags || []).join(', ') || '') + '"></div>' +
-      (isNew ? '' : '<div class="faint">类型与归属不可修改；如需变更请删除后重写。</div>');
+      (isNew ? '' : (t === 'FACT'
+        ? '<div class="faint">类型不可修改；FACT 为公共记忆，归属仅作来源标记，可修改。</div>'
+        : '<div class="faint">类型与归属不可修改；私密记忆如需变更归属请删除后重写。</div>'));
   }
   function syncOwnerField() {
     var t = $('#fType') ? $('#fType').value : 'FACT';
@@ -536,7 +539,7 @@
   }
   function bindOwnerPicker() {
     var pick = $('#fOwnerPick');
-    if (!pick) return;
+    if (!pick || ($('#fOwner') && $('#fOwner').disabled)) return;
     pick.addEventListener('click', function (e) {
       var chip = e.target.closest('.owner-chip');
       if (!chip) return;
@@ -555,10 +558,13 @@
         var statement = $('#fStatement').value.trim();
         var tags = $('#fTags').value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
         if (!subject || !statement) { toast('标题与内容不能为空'); return; }
-        var r = await api('/api/memory/update', { file: entry.file, subject: subject, statement: statement, tags: tags });
+        var body = { file: entry.file, subject: subject, statement: statement, tags: tags };
+        var type = String(entry.type || 'FACT').toUpperCase();
+        if (type === 'FACT' && $('#fOwner') && !$('#fOwner').disabled) body.owner = $('#fOwner').value.trim();
+        var r = await api('/api/memory/update', body);
         if (r.error) { toast(r.error); return; }
         closeModal();
-        toast('已更新 1 条记忆', '撤销', async function () {
+        toast('已更新 1 条记忆' + (r.ownerChange ? '（归属已改为 ' + (r.ownerChange.to || '公共') + '）' : ''), '撤销', async function () {
           var u = await api('/api/memory/restore', { ref: r.undo });
           toast(u.error || '已撤销这次编辑');
           refreshAll();
