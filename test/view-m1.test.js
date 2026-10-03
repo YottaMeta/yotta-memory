@@ -285,6 +285,8 @@ test('view M1 keeps the drawer above its mask and uses the owner chip picker', (
   assert.match(html, /owner-chip/);
   assert.match(html, /function errText/, 'panel must map server error.text instead of rendering a boolean');
   assert.doesNotMatch(html, /toast\([a-z]\.error \|\|/, 'toast must not treat the boolean error flag as text');
+  assert.doesNotMatch(html, /toast\([a-z]\.error\)/, 'toast must not pass the boolean error flag directly');
+  assert.doesNotMatch(html, /toast\(\(d && d\.error\)/, 'toast must not pass a boolean error expression directly');
 });
 
 test('view M1 preserves tags on rewrite and repairs legacy escaping', async (t) => {
