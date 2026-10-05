@@ -1,3 +1,7 @@
+## v0.22.3 (2026-10-05)
+
+- **安装器 junction 守卫**：`bin/install.js` 对目标基目录 / 技能目录为符号链接（含 Windows junction）时 fail-closed 拒绝（退出码 4，与 `install.sh` 同口径）——不再写穿 Hub 链接指向的真源，也不再误删 Hub 侧 `bin/` runtimePayload。统一安装器以分技能灰度补丁落地（模板与其余技能输出不变）。
+
 ## v0.22.2 (2026-10-05)
 
 - **修复（分发载荷缺口）**：`@yottameta/yotta-memory-plugin@0.22.1` 包内载荷落后技能源（`errText` 0/17、`bodyMirrorsStatement` 0/2）——0.22.1 的 D2/D3 修复未随插件分发。本版为维护性同步升版：引擎行为与 0.22.1 一致，插件载荷重新从技能源构建并对齐（逐字节校验）。

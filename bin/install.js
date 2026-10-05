@@ -244,6 +244,13 @@ function installTo(dest, opts) {
   if (!dest || typeof dest !== 'string') throw new UsageError('目标目录不能为空');
   const target = path.resolve(dest, SKILL_NAME);
   assertSafeTarget(target);
+  // fail-closed：目标基目录 / 技能目录是符号链接（含 Windows junction）时拒绝跟随；
+  // 与 install.sh 同口径，避免安装器改写 Hub 链接指向的真源（含 runtimePayload）。
+  for (const p of [path.resolve(dest), target]) {
+    let st = null;
+    try { st = fs.lstatSync(p); } catch (_) { continue; }
+    if (st.isSymbolicLink()) throw new TargetError('目标路径是符号链接，拒绝跟随：' + p);
+  }
   if (opts.dryRun) {
     console.log('[dry-run] 将安装到 -> ' + target);
     return target;
