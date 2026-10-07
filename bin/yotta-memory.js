@@ -25,7 +25,7 @@ const net = require('net');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.22.3';
+const VERSION = '0.22.4';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path', '--from']);
 const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--propose', '--audit', '--capacity', '--rules', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--no-usage', '--yes', '--keep-memories', '--keep-identity']);
 
@@ -298,7 +298,7 @@ const HELP_MODEL = [
       helpOption('--agent-key-file', '<文件>', 'stdio 模式下从文件读取 agent_key', '宿主使用标准 key 文件时', ''),
     ] },
     { name: 'lan', usage: 'lan <子命令> [选项]', what: '管理开机自启', when: '需要元忆服务随系统或登录启动时', subcommands: [
-      helpSub('enable', 'enable [--onstart]', '启用开机自启', '希望元忆服务长期可用时', [helpOption('--onstart', '', '同时启用未登录也启动', 'Linux 上希望开机即启动、不依赖登录时', 'Windows 上此选项不改变计划任务语义')]),
+      helpSub('enable', 'enable [--onstart]', '启用开机自启', '希望元忆服务长期可用时', [helpOption('--onstart', '', '同时启用未登录也启动', 'Windows / Linux 上希望开机即启动、不依赖登录时', '')]),
       helpSub('disable', 'disable', '关闭开机自启', '不再需要常驻服务时', []),
       helpSub('status', 'status', '查看自启状态', '确认服务是否会随系统启动时', []),
     ] },
@@ -10381,7 +10381,9 @@ function cmdServeStdio(opts) {
 }
 
 // ---- lan command (autostart management for serve) ----
-// Windows dual mechanism: (1) schtasks scheduled task (default, needs permission); (2) non-admin
+// Windows dual mechanism: (1) schtasks scheduled task registered from task XML (default, needs
+// permission; v0.22.4: S4U principal -> silent in background for both logon/boot triggers, no
+// console window; battery limits and the 72h execution time limit removed); (2) non-admin
 // (Access denied) auto-fallback to user-level Startup silent autostart (VBS sh.Run <autostart.cmd>,
 // 0, False + autostart.cmd; node path process.execPath auto-detected, 0.5.4)
 // Linux (v0.6.4): (1) systemd user unit (systemctl --user enable/start, login autostart; --onstart
@@ -10425,20 +10427,23 @@ function systemdEscapeArg(s) {
   if (!/[\s"\\$;]/.test(p)) return p;
   return '"' + p.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 }
-function lanStartupDir() {
+function lanStartupDir(opts) {
+  if (opts && opts.startupDir) return String(opts.startupDir);
   // 测试/高级用途可用 YOTTA_LAN_STARTUP_DIR 覆盖（默认用户级 Startup 目录，免管理员）
   if (process.env.YOTTA_LAN_STARTUP_DIR) return process.env.YOTTA_LAN_STARTUP_DIR;
   const base = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
   return path.join(base, 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
 }
-function lanAutostartDir() {
+function lanAutostartDir(opts) {
+  if (opts && opts.autostartDir) return String(opts.autostartDir);
   // 产品自有目录 ~/.yottamemory/autostart/（引擎数据目录内，非系统配置）；测试可用 YOTTA_LAN_AUTOSTART_DIR 覆盖
   if (process.env.YOTTA_LAN_AUTOSTART_DIR) return process.env.YOTTA_LAN_AUTOSTART_DIR;
   return path.join(os.homedir(), '.yottamemory', 'autostart');
 }
-function lanVbsPath() { return path.join(lanStartupDir(), 'yotta-memory-serve.vbs'); }
-function lanAutostartCmdPath() { return path.join(lanAutostartDir(), 'yotta-memory-autostart.cmd'); }
+function lanVbsPath(opts) { return path.join(lanStartupDir(opts), 'yotta-memory-serve.vbs'); }
+function lanAutostartCmdPath(opts) { return path.join(lanAutostartDir(opts), 'yotta-memory-autostart.cmd'); }
 function lanLogPath(opts) {
+  if (opts && opts.logPath) return String(opts.logPath);
   if (process.env.YOTTA_LAN_LOG_FILE) return process.env.YOTTA_LAN_LOG_FILE;
   return path.join(os.homedir(), '.yottamemory', 'serve-' + (opts.port || 8787) + '.log');
 }
@@ -10467,7 +10472,7 @@ function lanVbsContent(opts) {
       return '"' + seg.replace(/"/g, '""') + '"';
     })
     .join(' & Chr(13) & Chr(10) & ');
-  const vbsCmdPath = String(lanAutostartCmdPath()).replace(/"/g, '""');
+  const vbsCmdPath = String(lanAutostartCmdPath(opts)).replace(/"/g, '""');
   const lines = [
     "' " + LAN_GEN_MARKER + '; remove with: yotta-memory lan disable',
     "' v0.6.3 self-heal: always rebuild autostart.cmd from embedded content, then run it (fix 80070002)",
@@ -10486,16 +10491,16 @@ function lanVbsContent(opts) {
   return lines.join('\r\n') + '\r\n';
 }
 function lanInstallStartup(opts) {
-  fs.mkdirSync(lanAutostartDir(), { recursive: true });
-  fs.writeFileSync(lanAutostartCmdPath(), lanAutostartCmdContent(opts), 'utf8');
-  fs.mkdirSync(lanStartupDir(), { recursive: true });
+  fs.mkdirSync(lanAutostartDir(opts), { recursive: true });
+  fs.writeFileSync(lanAutostartCmdPath(opts), lanAutostartCmdContent(opts), 'utf8');
+  fs.mkdirSync(lanStartupDir(opts), { recursive: true });
   // VBS 用 UTF-16LE+BOM：wscript 按 Unicode 读取，中文路径不乱码（纯 ANSI 读取会按系统代码页误读）
-  fs.writeFileSync(lanVbsPath(), '\ufeff' + lanVbsContent(opts), 'utf16le');
+  fs.writeFileSync(lanVbsPath(opts), '\ufeff' + lanVbsContent(opts), 'utf16le');
 }
-function lanRemoveStartupFiles() {
+function lanRemoveStartupFiles(opts) {
   // 只删除带产品标记的生成文件，绝不误删用户自己的 Startup 文件
   const removed = [];
-  for (const f of [lanVbsPath(), lanAutostartCmdPath()]) {
+  for (const f of [lanVbsPath(opts), lanAutostartCmdPath(opts)]) {
     try {
       if (lanFileHasMarker(f)) { fs.unlinkSync(f); removed.push(f); }
     } catch (e) { /* 单个文件失败不阻断其它清理 */ }
@@ -10512,8 +10517,140 @@ function lanFileHasMarker(f) {
   } catch (e) { return false; }
 }
 function isSchtasksAccessDenied(e) {
-  const msg = String((e && e.stderr) || (e && e.message) || e);
+  const msg = typeof e === 'string' ? e : String((e && e.stderr) || (e && e.message) || e || '');
   return /access\s+is\s+denied|access\s+denied|拒绝访问/i.test(msg);
+}
+
+// ---- lan Windows task XML (v0.22.4: S4U silent principal) ----
+// 背景（0.22.3 及更早缺陷）：schtasks /create 未指定主体 -> 默认交互式（仅登录时运行）：
+// ① 在登录会话里运行控制台程序会弹窗口；② --onstart 开机触发时无登录会话，任务起不来且不补跑。
+// 修复：改为注册任务 XML —— S4U 主体（“不管用户是否登录都运行”，不存密码、非交互、无窗口），
+// 默认去掉电池限制与 72 小时执行时限（PT0S = 不限时），开机/登录触发均可后台静默启动。
+function lanSchTasksBin() { return process.env.YOTTA_LAN_SCHTASKS_BIN || 'schtasks'; }
+function lanWindowsRunSchtasks(opts, args) {
+  if (opts && typeof opts.execFileFn === 'function') {
+    try {
+      const out = opts.execFileFn(lanSchTasksBin(), args);
+      return { status: 0, stdout: String(out || ''), stderr: '' };
+    } catch (e) {
+      return {
+        status: typeof e.status === 'number' ? e.status : 1,
+        stdout: String((e && e.stdout) || ''),
+        stderr: String((e && e.stderr) || (e && e.message) || e),
+      };
+    }
+  }
+  const r = lanSpawn(lanSchTasksBin(), args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return {
+    status: r.error ? 1 : r.status,
+    stdout: String(r.stdout || ''),
+    stderr: String(r.stderr || (r.error && r.error.message) || ''),
+  };
+}
+function lanWindowsTaskUser(opts) {
+  opts = opts || {};
+  if (opts.userId) return String(opts.userId);
+  // 测试/高级用途可用 YOTTA_LAN_TASK_USER 覆盖（S4U 主体必须是当前用户名）
+  if (process.env.YOTTA_LAN_TASK_USER) return String(process.env.YOTTA_LAN_TASK_USER);
+  if (process.env.USERDOMAIN && process.env.USERNAME) return process.env.USERDOMAIN + '\\' + process.env.USERNAME;
+  if (process.env.COMPUTERNAME && process.env.USERNAME) return process.env.COMPUTERNAME + '\\' + process.env.USERNAME;
+  try {
+    const r = lanSpawn('whoami', [], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (r.status === 0 && String(r.stdout || '').trim()) return String(r.stdout).trim();
+  } catch (e) { /* 用户名探测失败 -> 主体省略 UserId，由 schtasks 按当前用户注册 */ }
+  return '';
+}
+function lanWindowsTaskXml(opts) {
+  opts = opts || {};
+  const onstart = opts.trigger ? String(opts.trigger) === 'onstart' : !!opts.onstart;
+  const host = opts.host || '0.0.0.0';
+  const port = opts.port || 8787;
+  const nodePath = opts.nodePath || process.execPath;
+  const scriptPath = opts.scriptPath || runtimeManagedScript();
+  const logPath = opts.logPath || lanLogPath(opts);
+  const userId = opts.userId || '';
+  const cmdPath = opts.cmdPath || process.env.ComSpec || 'cmd.exe';
+  // cmd /c 外层引号：命令首段带引号时必须用 ""..." 包裹（cmd 的 /c 引号规则），
+  // 让 node/脚本/日志路径里的空格与中文都能安全传递；S4U 非交互会话下不弹窗口。
+  // 注意：重定向 `2>&1` 的 & 在 XML 文本里必须写成 &amp;（DOM 解码后仍是 2>&1），
+  // 否则 schtasks 报 "The task XML is malformed"。
+  const inner = '"' + xmlEscape(nodePath) + '" "' + xmlEscape(scriptPath) + '" serve --host ' + host + ' --port ' + port
+    + ' >> "' + xmlEscape(logPath) + '" 2>&amp;1';
+  const triggerXml = onstart
+    ? '<BootTrigger><Enabled>true</Enabled></BootTrigger>'
+    : '<LogonTrigger><Enabled>true</Enabled></LogonTrigger>';
+  const principal = userId
+    ? '<Principal id="Author"><UserId>' + xmlEscape(userId) + '</UserId><LogonType>S4U</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>'
+    : '<Principal id="Author"><LogonType>S4U</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>';
+  return [
+    '<?xml version="1.0" encoding="UTF-16"?>',
+    '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
+    '<RegistrationInfo><Description>Yotta Memory serve autostart (generated by yotta-memory lan enable; S4U silent, no window)</Description></RegistrationInfo>',
+    '<Triggers>' + triggerXml + '</Triggers>',
+    '<Principals>' + principal + '</Principals>',
+    '<Settings>',
+    '<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>',
+    '<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>',
+    '<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>',
+    '<AllowHardTerminate>true</AllowHardTerminate>',
+    '<StartWhenAvailable>true</StartWhenAvailable>',
+    '<RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>',
+    '<IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>',
+    '<Enabled>true</Enabled>',
+    '<Hidden>false</Hidden>',
+    '<RunOnlyIfIdle>false</RunOnlyIfIdle>',
+    '<WakeToRun>false</WakeToRun>',
+    '<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>',
+    '<Priority>7</Priority>',
+    '</Settings>',
+    '<Actions Context="Author"><Exec><Command>' + xmlEscape(cmdPath) + '</Command><Arguments>/c "' + inner + '"</Arguments></Exec></Actions>',
+    '</Task>',
+  ].join('\r\n');
+}
+function lanWindowsEnableCore(opts) {
+  opts = opts || {};
+  const trigger = opts.onstart ? 'onstart' : 'onlogon';
+  const host = opts.host || '0.0.0.0';
+  const port = opts.port || 8787;
+  const nodePath = opts.nodePath || process.execPath;
+  const scriptPath = opts.scriptPath || runtimeManagedScript();
+  const logPath = lanLogPath(opts);
+  const userId = lanWindowsTaskUser(opts);
+  const xml = lanWindowsTaskXml({ trigger: trigger, host: host, port: port, nodePath: nodePath, scriptPath: scriptPath, logPath: logPath, userId: userId });
+  const xmlDir = opts.xmlDir || process.env.YOTTA_LAN_TASK_XML_DIR || os.tmpdir();
+  const xmlPath = opts.xmlPath || path.join(xmlDir, LAN_TASK_NAME + '-task-' + process.pid + '-' + Date.now() + '.xml');
+  let failure = null;
+  try {
+    fs.mkdirSync(path.dirname(xmlPath), { recursive: true });
+    // UTF-16LE + BOM：与 schtasks /query /xml 导出格式一致，schtasks /create /xml 必然可读
+    fs.writeFileSync(xmlPath, '\ufeff' + xml, 'utf16le');
+    const r = lanWindowsRunSchtasks(opts, ['/create', '/tn', LAN_TASK_NAME, '/xml', xmlPath, '/f']);
+    if (r.status !== 0) failure = String(r.stderr || r.stdout || '').trim() || ('schtasks 退出码 ' + r.status);
+  } catch (e) {
+    failure = String((e && e.message) || e);
+  } finally {
+    try { fs.unlinkSync(xmlPath); } catch (e) { /* 临时 XML 清理尽力而为 */ }
+  }
+  if (!failure) {
+    let removedStartup = [];
+    try { removedStartup = lanRemoveStartupFiles(opts); } catch (e) { removedStartup = []; }
+    return { error: false, mode: 'task', taskName: LAN_TASK_NAME, trigger: trigger, logPath: logPath, removedStartup: removedStartup };
+  }
+  try {
+    lanInstallStartup(opts);
+  } catch (e2) {
+    return { error: true, mode: 'startup', reason: failure, text: String((e2 && e2.message) || e2) };
+  }
+  return {
+    error: false,
+    mode: 'startup',
+    trigger: trigger,
+    reason: failure,
+    accessDenied: isSchtasksAccessDenied(failure),
+    vbsPath: lanVbsPath(opts),
+    cmdPath: lanAutostartCmdPath(opts),
+    logPath: logPath,
+  };
 }
 
 // ---- lan Linux (systemd user unit / user crontab @reboot) ----
@@ -10700,54 +10837,55 @@ function cmdLanLinuxStatus() {
   if (!any) console.log('未启用任何开机自启（可用 yotta-memory lan enable 注册）');
 }
 function cmdLanWinEnable(opts) {
-  if (process.platform !== 'win32') {
-    console.error('lan 命令当前仅支持 Windows（计划任务 / Startup 自启）；本机平台: ' + process.platform);
+  if (lanPlatform() !== 'win32') {
+    console.error('lan 命令当前仅支持 Windows（计划任务 / Startup 自启）；本机平台: ' + lanPlatform());
     process.exit(2);
   }
-  const trigger = opts.onstart ? 'onstart' : 'onlogon';
-  const tr = lanTaskRunCmd(opts);
-  try {
-    child_process.execFileSync('schtasks', ['/create', '/tn', LAN_TASK_NAME, '/tr', tr, '/sc', trigger, '/f'], { stdio: 'inherit' });
-    console.log('已注册开机自启: 计划任务 ' + LAN_TASK_NAME + '（触发器 ' + trigger + '）');
-    console.log('运行命令: ' + tr);
+  const result = lanWindowsEnableCore(opts);
+  if (result.mode === 'task') {
+    const triggerText = result.trigger === 'onstart' ? '开机触发（无需登录）' : '登录触发';
+    console.log('已注册开机自启: 计划任务 ' + LAN_TASK_NAME + '（' + triggerText + '，后台静默运行，不弹窗口）');
+    console.log('运行命令: ' + lanTaskRunCmd(opts));
+    console.log('日志: ' + result.logPath);
+    if (result.removedStartup && result.removedStartup.length) {
+      console.log('已清理旧 Startup 兜底文件 ' + result.removedStartup.length + ' 个（避免双份自启）');
+    }
     console.log('备注: 服务不会立刻启动，需重启/重新登录后自动启动；如需现在运行请执行 yotta-memory serve');
     return;
-  } catch (e) {
-    const firstLine = String((e && e.stderr) || (e && e.message) || e).split(/\r?\n/)[0];
-    if (isSchtasksAccessDenied(e)) console.error('计划任务注册被拒绝（当前用户非管理员，Access denied）: ' + firstLine);
-    else console.error('计划任务注册失败（当前环境不可用计划任务）: ' + firstLine);
-    console.log('自动改用用户级 Startup 静默自启（免管理员）...');
-    try {
-      lanInstallStartup(opts);
-    } catch (e2) {
-      console.error('写 Startup 自启失败: ' + String((e2 && e2.message) || e2).split(/\r?\n/)[0]);
-      console.error('请用管理员终端执行 yotta-memory lan enable，或将以下命令手动加入启动项: ' + tr);
-      process.exit(1);
-    }
-    console.log('已启用用户级 Startup 静默自启（无需管理员）');
-    console.log('启动脚本: ' + lanVbsPath());
-    console.log('启动命令: ' + lanAutostartCmdPath());
-    console.log('日志: ' + lanLogPath(opts));
-    console.log('备注: 服务不会立刻启动，需重新登录后自动启动；如需现在运行请执行 yotta-memory serve');
-    console.log('提示: 如需改回计划任务，请用管理员终端重新执行 yotta-memory lan enable');
-    return;
   }
+  if (result.error) {
+    console.error('计划任务注册失败: ' + String(result.reason || '').split(/\r?\n/)[0]);
+    console.error('写 Startup 自启失败: ' + String(result.text || '').split(/\r?\n/)[0]);
+    console.error('请用管理员终端执行 yotta-memory lan enable，或将以下命令手动加入启动项: ' + lanTaskRunCmd(opts));
+    process.exit(1);
+  }
+  const firstLine = String(result.reason || '').split(/\r?\n/)[0];
+  if (result.accessDenied) console.error('计划任务注册被拒绝（当前用户非管理员，Access denied）: ' + firstLine);
+  else console.error('计划任务注册失败（当前环境不可用计划任务）: ' + firstLine);
+  console.log('自动改用用户级 Startup 静默自启（免管理员）...');
+  console.log('已启用用户级 Startup 静默自启（无需管理员）');
+  console.log('启动脚本: ' + result.vbsPath);
+  console.log('启动命令: ' + result.cmdPath);
+  console.log('日志: ' + result.logPath);
+  console.log('备注: 服务不会立刻启动，需重新登录后自动启动；如需现在运行请执行 yotta-memory serve');
+  console.log('提示: 如需改回计划任务（后台静默），请用管理员终端重新执行 yotta-memory lan enable');
 }
 function cmdLanWinDisable() {
-  if (process.platform !== 'win32') {
-    console.error('lan 命令当前仅支持 Windows（计划任务 / Startup 自启）；本机平台: ' + process.platform);
+  if (lanPlatform() !== 'win32') {
+    console.error('lan 命令当前仅支持 Windows（计划任务 / Startup 自启）；本机平台: ' + lanPlatform());
     process.exit(2);
   }
   let sawError = false;
   let removedAny = false;
-  try {
-    child_process.execFileSync('schtasks', ['/delete', '/tn', LAN_TASK_NAME, '/f'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const del = lanWindowsRunSchtasks({}, ['/delete', '/tn', LAN_TASK_NAME, '/f']);
+  if (del.status === 0) {
     console.log('已移除开机自启计划任务 ' + LAN_TASK_NAME);
     removedAny = true;
-  } catch (e) {
-    const msg = String((e && e.stderr) || (e && e.message) || e);
+  } else {
+    const msg = String(del.stderr || del.stdout || '');
     if (!/cannot find the (path|file)|没有找到|找不到|不存在/i.test(msg)) {
       console.error('移除计划任务失败: ' + msg.split(/\r?\n/)[0]);
+      if (isSchtasksAccessDenied(msg)) console.error('（当前非管理员，无法移除管理员注册的计划任务；请用管理员终端执行 yotta-memory lan disable）');
       sawError = true;
     }
   }
@@ -10759,21 +10897,27 @@ function cmdLanWinDisable() {
   if (sawError) process.exit(1);
 }
 function cmdLanWinStatus() {
-  if (process.platform !== 'win32') {
-    console.log('lan 命令当前仅支持 Windows（计划任务 / Startup 自启）；本机平台: ' + process.platform);
+  if (lanPlatform() !== 'win32') {
+    console.log('lan 命令当前仅支持 Windows（计划任务 / Startup 自启）；本机平台: ' + lanPlatform());
     return;
   }
   let taskFound = false;
-  try {
-    const out = child_process.execFileSync('schtasks', ['/query', '/tn', LAN_TASK_NAME, '/fo', 'LIST', '/v'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  const q = lanWindowsRunSchtasks({}, ['/query', '/tn', LAN_TASK_NAME, '/fo', 'LIST', '/v']);
+  if (q.status === 0) {
     taskFound = true;
     console.log('计划任务 ' + LAN_TASK_NAME + ': 已启用');
-    const re = /^(状态|Status)\s*:\s*(.+)$/;
-    for (const line of String(out).split(/\r?\n/)) {
+    const re = /^(状态|Status|登录模式|Logon Mode|上次运行时间|Last Run Time|上次结果|Last Result)\s*:\s*(.+)$/;
+    let logonMode = '';
+    for (const line of String(q.stdout).split(/\r?\n/)) {
       const m = re.exec(line.trim());
-      if (m) console.log('  ' + m[1] + ': ' + m[2]);
+      if (!m) continue;
+      console.log('  ' + m[1] + ': ' + m[2]);
+      if (/^(登录模式|Logon Mode)$/.test(m[1])) logonMode = m[2];
     }
-  } catch (e) {
+    if (/interactive|交互式/i.test(logonMode)) {
+      console.log('  提示: 登录模式为交互式（仅登录时运行，且在登录会话会弹窗口）——这是旧版任务；请重新执行 yotta-memory lan enable 修复为后台静默');
+    }
+  } else {
     console.log('计划任务 ' + LAN_TASK_NAME + ': 未启用');
   }
   const vbsOk = lanFileHasMarker(lanVbsPath());
@@ -12124,6 +12268,9 @@ module.exports = {
   doctorCore: doctorCore,
   destructiveGuardCore: destructiveGuardCore,
   backupWindowsTaskXml: backupWindowsTaskXml,
+  lanWindowsTaskXml: lanWindowsTaskXml,
+  lanWindowsEnableCore: lanWindowsEnableCore,
+  lanWindowsTaskUser: lanWindowsTaskUser,
   backupSystemdServiceContent: backupSystemdServiceContent,
   backupSystemdTimerContent: backupSystemdTimerContent,
   backupCronLine: backupCronLine,

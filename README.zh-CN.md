@@ -174,7 +174,7 @@
 
 - **记忆库即引擎**：`serve` 把记忆目录挂成 MCP 服务，目录随盘走；引擎主机只需装 CLI 当存放点，无需装任何 AI 智能体。
 - **双模式可并存**：本地 `serve --stdio` 零进程（客户端按需拉起）；局域网 streamable HTTP（默认 `0.0.0.0:8787`）+ 每智能体 token 鉴权。
-- **开机自启**：`lan enable` 注册开机自启——Windows 优先计划任务（默认登录自启，`--onstart` 开机即启需管理员），非管理员自动降级为**用户级 Startup 静默自启**（免管理员，启动脚本内联启动命令、被清理也会在开机时自动重建，v0.6.3 起不再弹 80070002）；Linux 优先 **systemd 用户单元**（`systemctl --user`，登录自启；`--onstart` 附加 `loginctl enable-linger` 开机即启），systemd 不可用时自动降级**用户 crontab @reboot**（v0.6.4）；`lan disable` 移除，`lan status` 查询。
+- **开机自启**：`lan enable` 注册开机自启——Windows 优先计划任务（v0.22.4 起 S4U 主体后台静默、不弹窗口；默认登录自启，`--onstart` 开机即启、无登录会话也可启动，计划任务注册需管理员），非管理员自动降级为**用户级 Startup 静默自启**（免管理员，启动脚本内联启动命令、被清理也会在开机时自动重建，v0.6.3 起不再弹 80070002）；Linux 优先 **systemd 用户单元**（`systemctl --user`，登录自启；`--onstart` 附加 `loginctl enable-linger` 开机即启），systemd 不可用时自动降级**用户 crontab @reboot**（v0.6.4）；`lan disable` 移除，`lan status` 查询。
 - **安全边界**：管理动作（init / config / token / lan / serve）不进 MCP，token 不远程暴露；远程智能体只能读写记忆，且路径限记忆库内（export/import 的 out/src 必须落在库内）、distill 不支持 `--model`（仅本地 CLI），不能改配置、不能管 token。
 - 完整操作步骤见上文「局域网多机共享」章节与 [USER_GUIDE.md](USER_GUIDE.md)。
 
@@ -350,7 +350,7 @@ bash install.sh --agent <智能体名称>
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 为智能体生成 / 列出 / 吊销访问 token（登记于记忆库 `.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
 | `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id + X-Agent-Key 鉴权）|
-| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务，默认 ONLOGON、--onstart 开机即启需管理员，非管理员自动降级用户级 Startup 静默自启；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）|
+| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务 S4U 主体后台静默、不弹窗口；默认登录自启、`--onstart` 开机即启（无登录会话也可启动，注册需管理员），非管理员自动降级用户级 Startup 静默自启；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）|
 | `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--dedup --apply] [--merge A,B]` / `maintain --capacity [--json]` | 记忆自组织：归档 / 遗忘候选 / 置信度查重 / 自动合并高置信组；默认 dry-run；`--dedup` 与归档互斥。`--capacity` 只读报告容量水位、LRU / LFU 淘汰候选与晋升建议（冷却期与常青条目豁免）|
 | `yotta-memory consolidate [--propose] [--min-age N] [--min-idle N] [--max-utility N] [--min-group N] [--period N] [--type T] [--model <cmd>] [--apply [--yes]] [--undo <batch>] [--batches]` | 周期摘要压缩：同主题旧记忆 → 带溯源摘要 + 原文归档；默认等价 `--propose`（结构化报告，不写盘）；`--apply` 需确认（非交互必须 `--yes`）；`--undo <batch>` 回滚批次；`--batches` 查批次 |
 | `yotta-memory feedback <文件|主题> --useful|--useless [--reason <原因>] [--undo]` | 使用反馈（useful/useless 调整 weight / confidence / feedback_net；`--undo` 回滚最近一次）|
@@ -428,7 +428,7 @@ yotta-memory recall --type FACT --limit 10
    yotta-memory lan enable                     # 注册开机自启（Windows：计划任务/用户级 Startup；Linux：systemd 用户单元/用户 crontab）
    yotta-memory lan status                     # 查看自启状态
    ```
-   > `lan enable --onstart` 改为开机即启（需管理员）；非管理员时 `lan enable` 自动改用用户级 Startup 静默自启（无需管理员）；`lan disable` 移除自启。
+   > `lan enable` 注册 S4U 后台静默计划任务（不弹窗口）；`--onstart` 改为开机即启、无登录会话也可启动（注册需管理员）；非管理员时 `lan enable` 自动改用用户级 Startup 静默自启（无需管理员）；`lan disable` 移除自启。
 
 > 首次监听 0.0.0.0 时，Windows / 系统防火墙可能询问是否放行，需允许放行，否则局域网内其它主机无法访问；`--no-auth` 会关闭鉴权，仅限可信内网使用。
 

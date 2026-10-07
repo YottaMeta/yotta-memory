@@ -1,3 +1,10 @@
+## v0.22.4 (2026-10-07)
+
+- **修复 Windows `lan enable` 开机自启三缺陷（实测复现）**：此前计划任务用 schtasks 默认交互式主体——① 在登录会话运行会弹控制台窗口；② `--onstart` 开机触发时无登录会话，任务起不来且不补跑（实测 LastTaskResult 267011）；③ schtasks 默认带电池限制与 72 小时执行时限。本版改为 **S4U 主体 + 任务 XML 注册**（零依赖）：后台静默运行不弹窗口，开机 / 登录触发均可用；默认去掉电池限制与 72h 时限（`ExecutionTimeLimit=PT0S` 不限时）；`--onstart` 在 Windows 真正生效（BootTrigger）。任务注册成功时自动清理旧 Startup 兜底文件，避免双份自启。
+- `lan status` 增加显示「登录模式」并对旧交互式任务给出重新 `lan enable` 的修复提示；非管理员执行 `lan disable` 无法移除管理员注册的任务时，明确提示改用管理员终端。
+- 非管理员路径行为不变：schtasks 失败（含 Access denied）自动降级用户级 Startup 静默自启（VBS 自愈保留）。
+- 新增 `test/lan-windows-autostart.test.js`（11 项：任务 XML 结构 / S4U / 无电池与时限 / XML 转义 / XML 注册 / 旧兜底清理 / 权限与非权限失败降级 / status 登录模式与旧任务告警 / disable 双通道）。
+
 ## v0.22.3 (2026-10-05)
 
 - **安装器 junction 守卫**：`bin/install.js` 对目标基目录 / 技能目录为符号链接（含 Windows junction）时 fail-closed 拒绝（退出码 4，与 `install.sh` 同口径）——不再写穿 Hub 链接指向的真源，也不再误删 Hub 侧 `bin/` runtimePayload。统一安装器以分技能灰度补丁落地（模板与其余技能输出不变）。

@@ -334,10 +334,10 @@ yotta-memory init --dir /srv/yotta-memory               # 新库：初始化（�
 `lan enable` 会先准备稳定运行时入口：没有 `<runtimeRoot>/current` 时自动执行 `runtime install --from-current`，然后把计划任务 / systemd / crontab 指向 `<runtimeRoot>/current/bin/yotta-memory.js`。如需手动准备，可先执行 `yotta-memory runtime install --from-current && yotta-memory runtime status`。
 
 ```bash
-# Windows：内置命令（优先计划任务；非管理员自动降级用户级 Startup 静默自启；
-# v0.6.3 起启动脚本自愈——启动文件被清理也会在开机时自动重建，无需手动处理）
+# Windows：内置命令（优先计划任务——v0.22.4 起 S4U 主体后台静默、不弹窗口；
+# 非管理员自动降级用户级 Startup 静默自启；v0.6.3 起启动脚本自愈——启动文件被清理也会在开机时自动重建）
 yotta-memory lan enable              # 登录后自动启动（默认）
-yotta-memory lan enable --onstart    # 开机即启（需管理员）
+yotta-memory lan enable --onstart    # 开机即启、无登录会话也可启动（计划任务注册需管理员）
 yotta-memory lan status              # 查看状态
 yotta-memory lan disable             # 取消
 

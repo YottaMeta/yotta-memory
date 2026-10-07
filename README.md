@@ -306,7 +306,7 @@ Optional post-upgrade self-check: `yotta-memory config get` (confirm `memory_hom
 | `yotta-memory iam <id> [--name <name>] [--user <user>] [--relationship <rel>] [--force]` | Register this agent's unique identity and auto-write the self profile (`agents.json`, ID must be unique) |
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | Create / list / revoke access tokens for agents (registered at `.server/tokens.json`) |
 | `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | Start the MCP memory engine (streamable HTTP LAN / --stdio local zero-process mode; Bearer token + X-Agent-Id + X-Agent-Key auth) |
-| `yotta-memory lan enable [--onstart] / disable / status` | Autostart management (Windows: scheduled task, default ONLOGON, --onstart needs admin, non-admin auto-degrades to user-level Startup; Linux: systemd user unit, falls back to user crontab @reboot) |
+| `yotta-memory lan enable [--onstart] / disable / status` | Autostart management (Windows: scheduled task with an S4U principal — runs silently in the background with no console window; `--onstart` starts at boot without a logon session, registration needs admin; non-admin auto-degrades to user-level silent Startup; Linux: systemd user unit, falls back to user crontab @reboot) |
 | `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--dedup --apply] [--merge A,B]` | Self-organization: archive / forget candidates / confidence-scored dedup / auto-merge high-confidence groups; dry-run by default; `--dedup` is mutually exclusive with archiving |
 | `yotta-memory consolidate [--min-age N] [--min-idle N] [--max-utility N] [--min-group N] [--period N] [--type T] [--model <cmd>] [--apply] [--undo <batch>] [--batches]` | Periodic-summary compression (v0.10.0): group old idle low-value memories into one traceable summary and archive the originals; dry-run by default; `--undo <batch>` rolls a batch back; `--batches` lists batches |
 | `yotta-memory feedback <file> --useful|--useless [--reason <r>] [--undo]` | Usage feedback (useful/useless adjusts weight / confidence / feedback_net; --undo rolls back the last one) |
@@ -384,7 +384,7 @@ The store can live on any host or disk (= the memory engine) and be reached by a
    yotta-memory lan enable                     # register autostart (Windows: scheduled task / user-level Startup; Linux: systemd user unit / user crontab)
    yotta-memory lan status                     # autostart status
    ```
-   > `lan enable --onstart` switches to start-at-boot (needs admin); non-admin `lan enable` auto-degrades to user-level silent Startup; `lan disable` removes it.
+   > `lan enable` registers a silent S4U scheduled task (no console window); `--onstart` switches to start-at-boot without a logon session (registration needs admin); non-admin `lan enable` auto-degrades to user-level silent Startup; `lan disable` removes it.
 
 > On first listen on 0.0.0.0, Windows / the system firewall may ask to allow it — allow it, or other LAN hosts cannot reach it; `--no-auth` disables auth for trusted intranets only.
 
