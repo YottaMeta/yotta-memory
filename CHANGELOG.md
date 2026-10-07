@@ -1,3 +1,10 @@
+## v0.22.5 (2026-10-07)
+
+- **修复 Electron 宿主（YottaCode shim）下开机自启拉起 GUI 而非服务**：宿主运行时为 Electron 时（`process.versions.electron`；`process.execPath` 指向 Electron 可执行文件），此前生成的任务 / 兜底 / 定时配置不带 `ELECTRON_RUN_AS_NODE=1`，开机拉起的是桌面程序本体、8787 无监听（新机首例实测）。现在自动检测并统一注入：Windows 主任务与每日备份任务（cmd /c + `set "ELECTRON_RUN_AS_NODE=1"`）、Windows Startup 兜底 .cmd（set 前缀）、Linux systemd 单元 / crontab @reboot / 备份定时器（`Environment=` / 行内前缀）、macOS 备份 LaunchAgent（EnvironmentVariables）。
+- `lan status` 新增告警：任务或 Startup 兜底命令指向 Electron 可执行文件且缺少 `ELECTRON_RUN_AS_NODE` 时，提示重新 `lan enable` 修复。
+- 非 Electron 宿主行为不变（纯 Node 下生成的命令与旧版一致）。
+- `test/lan-windows-autostart.test.js` 新增 8 项（Electron / 非 Electron 双态：任务 XML / 兜底 cmd / 备份任务 / Linux 单元与 crontab / macOS plist / status 告警两例）；全量 `npm test` 352/352。
+
 ## v0.22.4 (2026-10-07)
 
 - **修复 Windows `lan enable` 开机自启三缺陷（实测复现）**：此前计划任务用 schtasks 默认交互式主体——① 在登录会话运行会弹控制台窗口；② `--onstart` 开机触发时无登录会话，任务起不来且不补跑（实测 LastTaskResult 267011）；③ schtasks 默认带电池限制与 72 小时执行时限。本版改为 **S4U 主体 + 任务 XML 注册**（零依赖）：后台静默运行不弹窗口，开机 / 登录触发均可用；默认去掉电池限制与 72h 时限（`ExecutionTimeLimit=PT0S` 不限时）；`--onstart` 在 Windows 真正生效（BootTrigger）。任务注册成功时自动清理旧 Startup 兜底文件，避免双份自启。

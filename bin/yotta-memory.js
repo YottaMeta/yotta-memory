@@ -25,7 +25,7 @@ const net = require('net');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.22.4';
+const VERSION = '0.22.5';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path', '--from']);
 const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--propose', '--audit', '--capacity', '--rules', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--no-usage', '--yes', '--keep-memories', '--keep-identity']);
 
@@ -2919,6 +2919,12 @@ function backupWindowsTaskXml(opts) {
   const principal = userId
     ? '<Principal id="Author"><UserId>' + xmlEscape(userId) + '</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>'
     : '<Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>';
+  const cmdPath = opts.cmdPath || process.env.ComSpec || 'cmd.exe';
+  // v0.22.5: Electron 宿主（如 YottaCode shim）下 process.execPath 是 Electron 可执行文件，
+  // 任务需经 cmd /c + ELECTRON_RUN_AS_NODE=1 包装，否则拉起的是桌面程序本体而非 Node。
+  const action = lanElectronHost(opts)
+    ? '<Actions Context="Author"><Exec><Command>' + xmlEscape(cmdPath) + '</Command><Arguments>/c "set "ELECTRON_RUN_AS_NODE=1" &amp;&amp; "' + xmlEscape(nodePath) + '" "' + xmlEscape(scriptPath) + '" backup ensure-daily"</Arguments></Exec></Actions>'
+    : '<Actions Context="Author"><Exec><Command>' + xmlEscape(nodePath) + '</Command><Arguments>"' + xmlEscape(scriptPath) + '" backup ensure-daily</Arguments></Exec></Actions>';
   return [
     '<?xml version="1.0" encoding="UTF-16"?>',
     '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">',
@@ -2940,7 +2946,7 @@ function backupWindowsTaskXml(opts) {
     '<ExecutionTimeLimit>PT2H</ExecutionTimeLimit>',
     '<Priority>7</Priority>',
     '</Settings>',
-    '<Actions Context="Author"><Exec><Command>' + xmlEscape(nodePath) + '</Command><Arguments>"' + xmlEscape(scriptPath) + '" backup ensure-daily</Arguments></Exec></Actions>',
+    action,
     '</Task>',
   ].join('\r\n');
 }
@@ -2948,16 +2954,20 @@ function backupSystemdServiceContent(opts) {
   opts = opts || {};
   const nodePath = opts.nodePath || process.execPath;
   const scriptPath = opts.scriptPath || runtimeManagedScript();
-  return [
+  const lines = [
     '[Unit]',
     'Description=Yotta Memory daily backup',
     '',
     '[Service]',
     'Type=oneshot',
+  ];
+  if (lanElectronHost(opts)) lines.push('Environment=ELECTRON_RUN_AS_NODE=1');
+  lines.push(
     'ExecStart=' + systemdEscapeArg(nodePath) + ' ' + systemdEscapeArg(scriptPath) + ' backup ensure-daily',
     'Nice=10',
     '',
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 function backupSystemdTimerContent(opts) {
   opts = opts || {};
@@ -2983,7 +2993,8 @@ function backupCronLine(opts) {
   const scriptPath = opts.scriptPath || runtimeManagedScript();
   const logPath = opts.logPath || '';
   const redirect = logPath ? ' >> ' + shQuote(logPath) + ' 2>&1' : '';
-  return time.minute + ' ' + time.hour + ' * * * ' + shQuote(nodePath) + ' ' + shQuote(scriptPath) + ' backup ensure-daily' + redirect + ' ' + BACKUP_CRON_MARKER;
+  const env = lanElectronHost(opts) ? 'ELECTRON_RUN_AS_NODE=1 ' : '';
+  return time.minute + ' ' + time.hour + ' * * * ' + env + shQuote(nodePath) + ' ' + shQuote(scriptPath) + ' backup ensure-daily' + redirect + ' ' + BACKUP_CRON_MARKER;
 }
 function backupLaunchdPlist(opts) {
   opts = opts || {};
@@ -2995,6 +3006,11 @@ function backupLaunchdPlist(opts) {
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
     '<plist version="1.0"><dict>',
+  ];
+  if (lanElectronHost(opts)) {
+    lines.push('<key>EnvironmentVariables</key><dict><key>ELECTRON_RUN_AS_NODE</key><string>1</string></dict>');
+  }
+  lines.push(
     '<key>Label</key><string>' + BACKUP_LAUNCHD_LABEL + '</string>',
     '<key>ProgramArguments</key><array>',
     '<string>' + xmlEscape(nodePath) + '</string>',
@@ -3006,7 +3022,7 @@ function backupLaunchdPlist(opts) {
     '<key>Hour</key><integer>' + time.hour + '</integer>',
     '<key>Minute</key><integer>' + time.minute + '</integer>',
     '</dict>',
-  ];
+  );
   if (logPath) {
     lines.push('<key>StandardOutPath</key><string>' + xmlEscape(logPath) + '</string>');
     lines.push('<key>StandardErrorPath</key><string>' + xmlEscape(logPath) + '</string>');
@@ -3046,7 +3062,7 @@ function backupScheduleEnableCore(opts) {
       const userId = opts.userId || (process.env.USERDOMAIN && process.env.USERNAME ? process.env.USERDOMAIN + '\\' + process.env.USERNAME : '');
       const taskName = opts.taskName || BACKUP_TASK_NAME;
       const xmlPath = opts.xmlPath || path.join(os.tmpdir(), taskName + '.xml');
-      fs.writeFileSync(xmlPath, '\ufeff' + backupWindowsTaskXml({ time: time, nodePath: nodePath, scriptPath: scriptPath, userId: userId }), 'utf16le');
+      fs.writeFileSync(xmlPath, '\ufeff' + backupWindowsTaskXml({ time: time, nodePath: nodePath, scriptPath: scriptPath, userId: userId, electronHost: opts.electronHost }), 'utf16le');
       schedulerExec(opts, 'schtasks', ['/create', '/tn', taskName, '/xml', xmlPath, '/f']);
       return { error: false, scheduler: 'windows-task', taskName: taskName, text: '已注册 Windows 每日备份任务: ' + taskName };
     }
@@ -3055,7 +3071,7 @@ function backupScheduleEnableCore(opts) {
       const servicePath = path.join(unitDir, BACKUP_SYSTEMD_SERVICE);
       const timerPath = path.join(unitDir, BACKUP_SYSTEMD_TIMER);
       fs.mkdirSync(unitDir, { recursive: true });
-      fs.writeFileSync(servicePath, backupSystemdServiceContent({ nodePath: nodePath, scriptPath: scriptPath }), 'utf8');
+      fs.writeFileSync(servicePath, backupSystemdServiceContent({ nodePath: nodePath, scriptPath: scriptPath, electronHost: opts.electronHost }), 'utf8');
       fs.writeFileSync(timerPath, backupSystemdTimerContent({ time: time }), 'utf8');
       const reload = schedulerTry(opts, 'systemctl', ['--user', 'daemon-reload']);
       const enable = reload.ok ? schedulerTry(opts, 'systemctl', ['--user', 'enable', '--now', BACKUP_SYSTEMD_TIMER]) : reload;
@@ -3063,7 +3079,7 @@ function backupScheduleEnableCore(opts) {
         return { error: false, scheduler: 'linux-systemd', unit: BACKUP_SYSTEMD_TIMER, text: '已注册 systemd 用户定时器: ' + BACKUP_SYSTEMD_TIMER };
       }
       const logPath = opts.logPath || path.join(os.homedir(), '.yottamemory', 'backup.log');
-      const line = backupCronLine({ time: time, nodePath: nodePath, scriptPath: scriptPath, logPath: logPath });
+      const line = backupCronLine({ time: time, nodePath: nodePath, scriptPath: scriptPath, logPath: logPath, electronHost: opts.electronHost });
       const current = schedulerTry(opts, 'crontab', ['-l']);
       const kept = current.stdout.split(/\r?\n/).filter(function (item) {
         return item && item.indexOf(BACKUP_CRON_MARKER) === -1;
@@ -3087,6 +3103,7 @@ function backupScheduleEnableCore(opts) {
         nodePath: nodePath,
         scriptPath: scriptPath,
         logPath: opts.logPath || path.join(os.homedir(), 'Library', 'Logs', 'yotta-memory-backup.log'),
+        electronHost: opts.electronHost,
       }), 'utf8');
       const uid = typeof process.getuid === 'function' ? process.getuid() : '';
       const bootstrap = schedulerTry(opts, 'launchctl', ['bootstrap', 'gui/' + uid, plistPath]);
@@ -10394,11 +10411,13 @@ const LAN_GEN_MARKER = 'Generated by yotta-memory lan enable';
 const LAN_UNIT_NAME = 'yotta-memory-serve.service';
 const LAN_CRONTAB_MARKER = '#YTM_LAN:yotta-memory-serve';
 function lanTaskRunCmd(opts) {
+  opts = opts || {};
   const host = opts.host || '0.0.0.0';
   const port = opts.port || 8787;
   // schtasks /tr 不接受多余内嵌引号：路径无空格不加引号，含空格/引号用 \" 转义（0.5.2 修复）
   const q = (p) => /[\s"]/.test(p) ? '\\"' + p.replace(/"/g, '\\"') + '\\"' : p;
-  return q(process.execPath) + ' ' + q(runtimeManagedScript()) + ' serve --host ' + host + ' --port ' + port;
+  const prefix = lanElectronHost(opts) ? 'set "ELECTRON_RUN_AS_NODE=1" && ' : '';
+  return prefix + q(process.execPath) + ' ' + q(runtimeManagedScript()) + ' serve --host ' + host + ' --port ' + port;
 }
 
 function lanServeArgs(opts) {
@@ -10414,6 +10433,28 @@ function lanSpawn(bin, args, spawnOpts) {
 }
 // platform override for testing/advanced use (YOTTA_LAN_PLATFORM=linux/win32/...)
 function lanPlatform() { return process.env.YOTTA_LAN_PLATFORM || process.platform; }
+// ---- v0.22.5: Electron 宿主（YottaCode shim）适配 ----
+// 背景：宿主运行时为 Electron 时（如 YottaCode.exe 以 ELECTRON_RUN_AS_NODE=1 当 Node 运行本脚本），
+// process.execPath 指向 Electron 可执行文件；自启 / 定时任务环境不带 ELECTRON_RUN_AS_NODE=1 时，
+// 拉起的是桌面程序本体而非 Node 服务（0.22.4 后新机首例实测）。生成任务 / 兜底 / 定时配置时统一注入。
+function lanElectronHost(opts) {
+  opts = opts || {};
+  if (typeof opts.electronHost === 'boolean') return opts.electronHost;
+  if (process.env.YOTTA_LAN_ELECTRON_HOST === '1') return true;
+  if (process.env.YOTTA_LAN_ELECTRON_HOST === '0') return false;
+  return !!(process.versions && process.versions.electron);
+}
+// 任务 / 兜底命令是否指向 Electron 可执行文件且缺少 ELECTRON_RUN_AS_NODE（旧任务告警用）
+function lanTaskCommandNeedsElectronEnv(text) {
+  const t = String(text || '');
+  if (!t || /ELECTRON_RUN_AS_NODE/.test(t)) return false;
+  if (/electron|yottacode/i.test(t)) return true;
+  if (lanElectronHost({})) {
+    const exe = String(process.execPath || '');
+    if (exe && t.toLowerCase().indexOf(exe.toLowerCase()) !== -1) return true;
+  }
+  return false;
+}
 // sh-style single-quote quoting (crontab line is executed via /bin/sh -c)
 function shQuote(s) {
   const p = String(s);
@@ -10448,13 +10489,16 @@ function lanLogPath(opts) {
   return path.join(os.homedir(), '.yottamemory', 'serve-' + (opts.port || 8787) + '.log');
 }
 function lanAutostartCmdContent(opts) {
+  opts = opts || {};
   const host = opts.host || '0.0.0.0';
   const port = opts.port || 8787;
   const q = (p) => '"' + String(p).replace(/"/g, '""') + '"';
   // 生成文件用纯 ASCII（避免 cmd/VBS 按系统代码页读取中文注释乱码；VBS 自愈内联同一内容）
+  // v0.22.5: Electron 宿主下需先设 ELECTRON_RUN_AS_NODE=1，否则拉起桌面程序本体而非 Node。
   return '@echo off\r\n'
     + 'chcp 65001 >nul\r\n'
     + 'rem ' + LAN_GEN_MARKER + '; remove with: yotta-memory lan disable (English only, keep ASCII)\r\n'
+    + (lanElectronHost(opts) ? 'set "ELECTRON_RUN_AS_NODE=1"\r\n' : '')
     + q(process.execPath) + ' ' + q(runtimeManagedScript()) + ' serve --host ' + host + ' --port ' + port + ' >> ' + q(lanLogPath(opts)) + ' 2>&1\r\n';
 }
 function lanVbsContent(opts) {
@@ -10574,7 +10618,10 @@ function lanWindowsTaskXml(opts) {
   // 让 node/脚本/日志路径里的空格与中文都能安全传递；S4U 非交互会话下不弹窗口。
   // 注意：重定向 `2>&1` 的 & 在 XML 文本里必须写成 &amp;（DOM 解码后仍是 2>&1），
   // 否则 schtasks 报 "The task XML is malformed"。
-  const inner = '"' + xmlEscape(nodePath) + '" "' + xmlEscape(scriptPath) + '" serve --host ' + host + ' --port ' + port
+  // v0.22.5: Electron 宿主（YottaCode shim）下先 set ELECTRON_RUN_AS_NODE=1，
+  // 否则任务会拉起桌面程序本体（GUI）而不是 Node 服务。
+  const envPrefix = lanElectronHost(opts) ? 'set "ELECTRON_RUN_AS_NODE=1" &amp;&amp; ' : '';
+  const inner = envPrefix + '"' + xmlEscape(nodePath) + '" "' + xmlEscape(scriptPath) + '" serve --host ' + host + ' --port ' + port
     + ' >> "' + xmlEscape(logPath) + '" 2>&amp;1';
   const triggerXml = onstart
     ? '<BootTrigger><Enabled>true</Enabled></BootTrigger>'
@@ -10616,7 +10663,7 @@ function lanWindowsEnableCore(opts) {
   const scriptPath = opts.scriptPath || runtimeManagedScript();
   const logPath = lanLogPath(opts);
   const userId = lanWindowsTaskUser(opts);
-  const xml = lanWindowsTaskXml({ trigger: trigger, host: host, port: port, nodePath: nodePath, scriptPath: scriptPath, logPath: logPath, userId: userId });
+  const xml = lanWindowsTaskXml({ trigger: trigger, host: host, port: port, nodePath: nodePath, scriptPath: scriptPath, logPath: logPath, userId: userId, electronHost: opts.electronHost });
   const xmlDir = opts.xmlDir || process.env.YOTTA_LAN_TASK_XML_DIR || os.tmpdir();
   const xmlPath = opts.xmlPath || path.join(xmlDir, LAN_TASK_NAME + '-task-' + process.pid + '-' + Date.now() + '.xml');
   let failure = null;
@@ -10668,7 +10715,7 @@ function lanLinuxExecStart(opts) {
 }
 function lanLinuxUnitContent(opts) {
   // keep comments ASCII (avoid locale/encoding issues); ExecStart uses systemd's own quote rules
-  return [
+  const lines = [
     '# ' + LAN_GEN_MARKER + '; remove with: yotta-memory lan disable (English only, keep ASCII)',
     '',
     '[Unit]',
@@ -10676,6 +10723,9 @@ function lanLinuxUnitContent(opts) {
     '',
     '[Service]',
     'Type=simple',
+  ];
+  if (lanElectronHost(opts)) lines.push('Environment=ELECTRON_RUN_AS_NODE=1');
+  lines.push(
     'ExecStart=' + lanLinuxExecStart(opts),
     'Restart=on-failure',
     'RestartSec=3',
@@ -10683,12 +10733,15 @@ function lanLinuxUnitContent(opts) {
     '[Install]',
     'WantedBy=default.target',
     '',
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 function lanCrontabBin() { return process.env.YOTTA_LAN_CRONTAB_BIN || 'crontab'; }
 function lanCrontabLine(opts) {
-  const parts = ['@reboot', shQuote(process.execPath), shQuote(runtimeManagedScript())].concat(lanServeArgs(opts));
-  return parts.join(' ') + ' >> ' + shQuote(lanLogPath(opts)) + ' 2>&1 ' + LAN_CRONTAB_MARKER;
+  const parts = ['@reboot'];
+  if (lanElectronHost(opts)) parts.push('ELECTRON_RUN_AS_NODE=1');
+  parts.push(shQuote(process.execPath), shQuote(runtimeManagedScript()));
+  return parts.concat(lanServeArgs(opts)).join(' ') + ' >> ' + shQuote(lanLogPath(opts)) + ' 2>&1 ' + LAN_CRONTAB_MARKER;
 }
 function lanCrontabRead() {
   try {
@@ -10906,16 +10959,21 @@ function cmdLanWinStatus() {
   if (q.status === 0) {
     taskFound = true;
     console.log('计划任务 ' + LAN_TASK_NAME + ': 已启用');
-    const re = /^(状态|Status|登录模式|Logon Mode|上次运行时间|Last Run Time|上次结果|Last Result)\s*:\s*(.+)$/;
+    const re = /^(状态|Status|登录模式|Logon Mode|上次运行时间|Last Run Time|上次结果|Last Result|要运行的任务|Task To Run)\s*[:=]\s*(.+)$/;
     let logonMode = '';
+    let taskRun = '';
     for (const line of String(q.stdout).split(/\r?\n/)) {
       const m = re.exec(line.trim());
       if (!m) continue;
       console.log('  ' + m[1] + ': ' + m[2]);
       if (/^(登录模式|Logon Mode)$/.test(m[1])) logonMode = m[2];
+      if (/^(要运行的任务|Task To Run)$/.test(m[1])) taskRun = m[2];
     }
     if (/interactive|交互式/i.test(logonMode)) {
       console.log('  提示: 登录模式为交互式（仅登录时运行，且在登录会话会弹窗口）——这是旧版任务；请重新执行 yotta-memory lan enable 修复为后台静默');
+    }
+    if (lanTaskCommandNeedsElectronEnv(taskRun)) {
+      console.log('  警告: 任务命令指向 Electron 可执行文件（如 YottaCode.exe）但缺少 ELECTRON_RUN_AS_NODE —— 开机将拉起桌面程序而非服务；请重新执行 yotta-memory lan enable 修复');
     }
   } else {
     console.log('计划任务 ' + LAN_TASK_NAME + ': 未启用');
@@ -10926,6 +10984,12 @@ function cmdLanWinStatus() {
     console.log('Startup 静默自启（免管理员）: 已启用');
     console.log('  启动脚本: ' + lanVbsPath());
     console.log('  启动命令: ' + lanAutostartCmdPath());
+    try {
+      const cmdText = fs.readFileSync(lanAutostartCmdPath(), 'utf8');
+      if (lanTaskCommandNeedsElectronEnv(cmdText)) {
+        console.log('  警告: Startup 兜底脚本缺少 ELECTRON_RUN_AS_NODE —— Electron 宿主下会拉起桌面程序而非服务；请重新执行 yotta-memory lan enable 修复');
+      }
+    } catch (e) { /* 读取失败不影响状态输出 */ }
   } else if (vbsOk || cmdOk) {
     console.log('Startup 静默自启: 部分残留（建议执行 yotta-memory lan disable 后重新 lan enable）');
   } else {
@@ -12160,6 +12224,7 @@ module.exports = {
   lanServeArgs: lanServeArgs,
   lanSpawn: lanSpawn,
   lanPlatform: lanPlatform,
+  lanElectronHost: lanElectronHost,
   shQuote: shQuote,
   systemdEscapeArg: systemdEscapeArg,
   lanLinuxSystemdUserDir: lanLinuxSystemdUserDir,

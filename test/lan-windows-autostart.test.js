@@ -245,3 +245,129 @@ test('lan disable on a non-admin shell explains the admin fix for an access-deni
   assert.match(r.stderr, /移除计划任务失败: ERROR: Access is denied\./);
   assert.match(r.stderr, /请用管理员终端执行 yotta-memory lan disable/);
 });
+
+// ---- v0.22.5: Electron host (YottaCode shim) env injection ----
+
+test('Windows task XML injects ELECTRON_RUN_AS_NODE under an Electron host', () => {
+  const xml = memory.lanWindowsTaskXml({
+    trigger: 'onstart',
+    userId: 'DESKTOP-BKLMU7E\\tester',
+    nodePath: 'C:\\Program Files\\YottaCode\\YottaCode.exe',
+    scriptPath: 'C:\\Users\\tester\\.yottamemory\\runtime\\current\\bin\\yotta-memory.js',
+    logPath: 'C:\\Users\\tester\\.yottamemory\\serve-8787.log',
+    electronHost: true,
+  });
+  assert.match(xml, /set "ELECTRON_RUN_AS_NODE=1" &amp;&amp; "C:\\Program Files\\YottaCode\\YottaCode\.exe"/);
+  assert.ok(!/&(?!amp;|lt;|gt;|quot;|apos;)/.test(xml), 'XML text must not contain raw & outside entities');
+
+  const plain = memory.lanWindowsTaskXml({
+    trigger: 'onlogon',
+    nodePath: 'C:\\nodejs\\node.exe',
+    scriptPath: 'C:\\tools\\yotta-memory.js',
+    logPath: 'C:\\logs\\serve.log',
+    electronHost: false,
+  });
+  assert.doesNotMatch(plain, /ELECTRON_RUN_AS_NODE/);
+});
+
+test('lan enable under an Electron host registers an env-injected task XML', (t) => {
+  const dir = tmpDir(t, 'task-electron');
+  let xmlDuringCall = '';
+  const result = memory.lanWindowsEnableCore(coreOpts(dir, {
+    electronHost: true,
+    nodePath: 'C:\\Program Files\\YottaCode\\YottaCode.exe',
+    execFileFn: (command, args) => {
+      const i = args.indexOf('/xml');
+      xmlDuringCall = fs.readFileSync(args[i + 1], 'utf16le');
+      return '';
+    },
+  }));
+  assert.strictEqual(result.error, false);
+  assert.strictEqual(result.mode, 'task');
+  assert.match(xmlDuringCall, /ELECTRON_RUN_AS_NODE=1/);
+});
+
+test('Startup fallback cmd injects the Electron env under an Electron host', (t) => {
+  const dir = tmpDir(t, 'fallback-electron');
+  const result = memory.lanWindowsEnableCore(coreOpts(dir, {
+    electronHost: true,
+    execFileFn: () => {
+      const err = new Error('Access is denied.');
+      err.stderr = 'ERROR: Access is denied.';
+      throw err;
+    },
+  }));
+  assert.strictEqual(result.mode, 'startup');
+  const cmdContent = fs.readFileSync(result.cmdPath, 'utf8');
+  assert.match(cmdContent, /set "ELECTRON_RUN_AS_NODE=1"/);
+  const plain = memory.lanAutostartCmdContent({ electronHost: false, host: '0.0.0.0', port: 8787 });
+  assert.doesNotMatch(plain, /ELECTRON_RUN_AS_NODE/);
+});
+
+test('daily backup task wraps an Electron host with cmd + env', () => {
+  const xml = memory.backupWindowsTaskXml({
+    time: '03:30',
+    nodePath: 'C:\\Program Files\\YottaCode\\YottaCode.exe',
+    scriptPath: 'C:\\tools\\yotta-memory.js',
+    userId: 'TESTPC\\tester',
+    electronHost: true,
+    cmdPath: 'C:\\Windows\\system32\\cmd.exe',
+  });
+  assert.match(xml, /<Command>C:\\Windows\\system32\\cmd\.exe<\/Command>/);
+  assert.match(xml, /set "ELECTRON_RUN_AS_NODE=1" &amp;&amp; "C:\\Program Files\\YottaCode\\YottaCode\.exe" "C:\\tools\\yotta-memory\.js" backup ensure-daily/);
+  const plain = memory.backupWindowsTaskXml({
+    time: '03:30',
+    nodePath: 'C:\\nodejs\\node.exe',
+    scriptPath: 'C:\\tools\\yotta-memory.js',
+    electronHost: false,
+  });
+  assert.match(plain, /<Command>C:\\nodejs\\node\.exe<\/Command>/);
+  assert.doesNotMatch(plain, /ELECTRON_RUN_AS_NODE/);
+});
+
+test('Linux autostart and backup generators inject the Electron env', () => {
+  const unit = memory.lanLinuxUnitContent({ host: '127.0.0.1', port: 8787, electronHost: true });
+  assert.match(unit, /Environment=ELECTRON_RUN_AS_NODE=1/);
+  const line = memory.lanCrontabLine({ host: '127.0.0.1', port: 8787, electronHost: true });
+  assert.match(line, /^@reboot ELECTRON_RUN_AS_NODE=1 /);
+  const backupService = memory.backupSystemdServiceContent({ nodePath: '/opt/YottaCode/yottacode', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: true });
+  assert.match(backupService, /Environment=ELECTRON_RUN_AS_NODE=1/);
+  const backupCron = memory.backupCronLine({ time: '03:30', nodePath: '/opt/YottaCode/yottacode', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: true });
+  assert.match(backupCron, /\* \* \* ELECTRON_RUN_AS_NODE=1 /);
+
+  const plainUnit = memory.lanLinuxUnitContent({ host: '127.0.0.1', port: 8787, electronHost: false });
+  assert.doesNotMatch(plainUnit, /ELECTRON_RUN_AS_NODE/);
+  const plainLine = memory.lanCrontabLine({ host: '127.0.0.1', port: 8787, electronHost: false });
+  assert.doesNotMatch(plainLine, /ELECTRON_RUN_AS_NODE/);
+});
+
+test('macOS backup LaunchAgent injects the Electron env', () => {
+  const plist = memory.backupLaunchdPlist({ time: '03:30', nodePath: '/Applications/YottaCode.app/yottacode', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: true });
+  assert.match(plist, /<key>EnvironmentVariables<\/key><dict><key>ELECTRON_RUN_AS_NODE<\/key><string>1<\/string><\/dict>/);
+  const plain = memory.backupLaunchdPlist({ time: '03:30', nodePath: '/usr/local/bin/node', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: false });
+  assert.doesNotMatch(plain, /ELECTRON_RUN_AS_NODE/);
+});
+
+test('lan status warns when the task launches an Electron exe without the env', (t) => {
+  const dir = tmpDir(t, 'status-electron');
+  const stub = writeStub(dir, 'schtasks-stub.js', [
+    "console.log('状态: 就绪');",
+    "console.log('登录模式: S4U');",
+    "console.log('要运行的任务: \"C:\\\\Program Files\\\\YottaCode\\\\YottaCode.exe\" \"C:\\\\Users\\\\t\\\\.yottamemory\\\\runtime\\\\current\\\\bin\\\\yotta-memory.js\" serve --host 0.0.0.0 --port 8787');",
+  ]);
+  const r = runCli(['lan', 'status'], winCliEnv(dir, { YOTTA_LAN_SCHTASKS_BIN: stub }));
+  assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+  assert.match(r.stdout, /缺少 ELECTRON_RUN_AS_NODE/);
+});
+
+test('lan status does not warn when the task already injects the env', (t) => {
+  const dir = tmpDir(t, 'status-electron-fixed');
+  const stub = writeStub(dir, 'schtasks-stub.js', [
+    "console.log('状态: 就绪');",
+    "console.log('登录模式: S4U');",
+    "console.log('要运行的任务: cmd.exe /c \"set \"ELECTRON_RUN_AS_NODE=1\" && \"C:\\\\Program Files\\\\YottaCode\\\\YottaCode.exe\" serve\"');",
+  ]);
+  const r = runCli(['lan', 'status'], winCliEnv(dir, { YOTTA_LAN_SCHTASKS_BIN: stub }));
+  assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+  assert.doesNotMatch(r.stdout, /缺少 ELECTRON_RUN_AS_NODE/);
+});
