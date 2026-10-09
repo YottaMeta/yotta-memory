@@ -107,6 +107,16 @@ test('view CLI help serves HELP_MODEL and a drift-free quick reference', async (
   assert.ok(Array.isArray(MOD.CONFIG_VALUE_KEYS), 'CONFIG_VALUE_KEYS must be exported as an array');
   assert.deepStrictEqual(r.data.configKeys, JSON.parse(JSON.stringify(MOD.CONFIG_VALUE_KEYS)));
   assert.ok(r.data.configKeys.includes('memory_home'), 'configKeys must include memory_home');
+  assert.ok(MOD.CONFIG_KEY_HELP && typeof MOD.CONFIG_KEY_HELP === 'object', 'CONFIG_KEY_HELP must be exported');
+  assert.deepStrictEqual(r.data.configKeyHelp, JSON.parse(JSON.stringify(MOD.CONFIG_KEY_HELP)));
+  for (const key of r.data.configKeys) {
+    assert.ok(r.data.configKeyHelp[key], 'config key must have a help entry: ' + key);
+    assert.ok(String(r.data.configKeyHelp[key].what || '').trim().length >= 10, 'config key help needs a detailed what: ' + key);
+    assert.ok(String(r.data.configKeyHelp[key].when || '').trim().length > 0, 'config key help needs default/value info: ' + key);
+  }
+  for (const key of Object.keys(r.data.configKeyHelp)) {
+    assert.ok(r.data.configKeys.includes(key), 'config key help must not contain orphan keys: ' + key);
+  }
 
   const groups = r.data.quick;
   assert.deepStrictEqual(groups.map((g) => g.group), QUICK_GROUPS);
@@ -144,6 +154,8 @@ test('view CLI page ships nav, quick list, lazy full help and copy affordances',
   assert.match(html, /id="cliFull"/);
   assert.match(html, /id="cliConfigKeys"/);
   assert.match(html, /configKeys/);
+  assert.match(html, /configKeyHelp/);
+  assert.match(html, /opt-row with-copy/);
   assert.match(html, /copy-btn/);
   assert.match(html, /data-copy/);
   assert.match(html, /findHelpEntry/);

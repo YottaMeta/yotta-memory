@@ -157,6 +157,8 @@
   .opt-what{color:var(--muted)}
   .opt-when{color:var(--faint)}
   .opt-risk{color:var(--danger)}
+  .opt-row.with-copy{grid-template-columns:minmax(150px,auto) minmax(0,1fr) auto;align-items:start}
+  .opt-row.with-copy .ibtn{width:26px;height:26px}
 
   @media (max-width:960px){.g4{grid-template-columns:repeat(2,minmax(0,1fr))}.bars{grid-template-columns:repeat(2,minmax(0,1fr))}.quick-list{grid-template-columns:minmax(0,1fr)}}
   @media (max-width:760px){
@@ -838,11 +840,16 @@
       return '<div class="quick-group"><h4>' + esc(g.group) + '</h4>' + cmds + '</div>';
     }).join('');
     var keys = state.help.configKeys || [];
-    var keysHtml = keys.length ? '<div class="quick-group" id="cliConfigKeys"><h4>配置键（yotta-memory config set &lt;键&gt; &lt;值&gt;）</h4><div class="quick-list">' +
+    var keyHelp = state.help.configKeyHelp || {};
+    var keysHtml = keys.length ? '<div class="quick-group" id="cliConfigKeys"><h4>配置键（config set）</h4>' +
+      '<div class="cmd-when">全部可配置键（共 ' + keys.length + ' 个）。用法：yotta-memory config set &lt;键&gt; &lt;值&gt;，改完用 yotta-memory config get 复查；配置保存在 ~/.yottamemory/config.json。</div>' +
       keys.map(function (k) {
-        return '<div class="cmd-item"><div class="cmd-head"><code class="cmd-name">' + esc(k) + '</code></div>' +
-          codeLine('yotta-memory config set ' + k + ' <值>') + '</div>';
-      }).join('') + '</div></div>' : '';
+        var h = keyHelp[k] || {};
+        return '<div class="opt-row with-copy"><div class="opt-flag">' + esc(k) + '</div><div>' +
+          '<div class="opt-what">' + esc(h.what || '') + '</div>' +
+          (h.when ? '<div class="opt-when">' + esc(h.when) + '</div>' : '') +
+          '</div>' + copyBtn('yotta-memory config set ' + k + ' <值>') + '</div>';
+      }).join('') + '</div>' : '';
     $('#cliFull').innerHTML = groupsHtml + keysHtml;
   }
   async function ensureHelp() {
