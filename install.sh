@@ -127,7 +127,7 @@ assert_safe_target() {
 
 # 清理旧版安装残留（fail-closed 白名单）：仅在目标目录已存在且含 SKILL.md 时触发；
 # 只删顶层开发项 + 任意层级缓存；不整目录删除、不跟随符号链接。
-DEV_SKIP="package.json package-lock.json bin lib test .github .git .gitignore .npmignore .gitattributes .yotta .tmp install.sh node_modules"
+DEV_SKIP="package.json package-lock.json bin lib test .github .git .gitignore .npmignore .gitattributes .yotta .tmp install.sh node_modules test-fixtures"
 clean_residue() {
   local dest="$1" name p
   [ -d "$dest" ] || return 0
@@ -139,6 +139,12 @@ clean_residue() {
       rm -rf -- "$p"
       echo "已清理残留: $name"
     fi
+  done
+  for p in "$dest"/*.tgz; do
+    [ -e "$p" ] || continue
+    [ -L "$p" ] && continue
+    rm -f -- "$p"
+    echo "已清理残留: $(basename "$p")"
   done
   find "$dest" -type d \( -name '__pycache__' -o -name '.pytest_cache' -o -name '.mypy_cache' \) -prune -exec rm -rf -- {} + 2>/dev/null || true
   find "$dest" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete 2>/dev/null || true
@@ -156,6 +162,9 @@ copy_tree() {
       __pycache__|.pytest_cache|.mypy_cache) continue ;;
     esac
     if [ "$top" = "1" ]; then
+      case "$base" in
+        *.tgz) continue ;;
+      esac
       case " $DEV_SKIP " in
         *" $base "*) continue ;;
       esac

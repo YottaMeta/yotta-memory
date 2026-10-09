@@ -250,7 +250,7 @@
 
     <section class="view" id="view-memories">
       <div class="card toolbar">
-        <label class="search" style="min-width:280px;flex:1"><svg class="sv" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="memSearch" placeholder="搜索记忆（标题 / 内容 / 标签）"></label>
+        <label class="search" style="min-width:280px;flex:1"><svg class="sv" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="memSearch" placeholder="搜索记忆（标题 / 内容 / 标签 / 编号）"></label>
         <div class="chips" id="typeChips">
           <button class="chip active" data-type="all">全部</button>
           <button class="chip" data-type="FACT">FACT</button>
@@ -258,6 +258,7 @@
           <button class="chip" data-type="BOUND">BOUND</button>
           <button class="chip" data-type="COMMIT">COMMIT</button>
         </div>
+        <select id="ownerFilter" title="按智能体筛选" style="width:auto;min-width:140px"><option value="">全部智能体</option></select>
         <div class="spacer"></div>
         <button class="btn" id="btnArchived">已藏</button>
         <button class="btn" id="btnTrash">最近删除</button>
@@ -329,7 +330,7 @@
 (function () {
   'use strict';
   var $ = function (s) { return document.querySelector(s); };
-  var state = { view: 'overview', entries: [], count: 0, offset: 0, limit: 20, query: '', type: 'all', owners: [], overview: null, current: null, help: null };
+  var state = { view: 'overview', entries: [], count: 0, offset: 0, limit: 20, query: '', type: 'all', owner: '', owners: [], overview: null, current: null, help: null };
   var typeNames = { FACT: 'FACT 事实', PREF: 'PREF 偏好', BOUND: 'BOUND 边界', COMMIT: 'COMMIT 承诺' };
 
   function esc(s) {
@@ -437,14 +438,24 @@
     $('#ovBytes').textContent = fmtBytes(d.bytes);
     $('#accBackup').textContent = d.backupDir || '未配置';
     var colors = { FACT: 'var(--gold)', PREF: '#b79cdd', BOUND: '#8fb4de', COMMIT: 'var(--ok)' };
+    var byType = d.byType || {};
+    var typeCounts = { all: d.total || 0, FACT: byType.FACT || 0, PREF: byType.PREF || 0, BOUND: byType.BOUND || 0, COMMIT: byType.COMMIT || 0 };
     $('#typeBars').innerHTML = ['FACT', 'PREF', 'BOUND', 'COMMIT'].map(function (t) {
-      var n = d.byType[t] || 0;
-      return '<div class="bar"><span class="dot" style="background:' + colors[t] + '"></span><span class="faint">' + typeNames[t] + '</span><b>' + n + '</b></div>';
+      return '<div class="bar" data-type="' + t + '" style="cursor:pointer" title="查看 ' + typeNames[t] + '"><span class="dot" style="background:' + colors[t] + '"></span><span class="faint">' + typeNames[t] + '</span><b>' + typeCounts[t] + '</b></div>';
     }).join('');
+    Array.prototype.forEach.call(document.querySelectorAll('#typeChips .chip'), function (c) {
+      c.textContent = (c.dataset.type === 'all' ? '全部' : c.dataset.type) + ' ' + (typeCounts[c.dataset.type] || 0);
+    });
   }
   async function loadOwners() {
     var d = await api('/api/owners');
     state.owners = (d && d.owners) || [];
+    var sel = $('#ownerFilter');
+    if (sel) {
+      sel.innerHTML = '<option value="">全部智能体</option>' + state.owners.map(function (o) {
+        return '<option value="' + esc(o.owner) + '"' + (o.owner === state.owner ? ' selected' : '') + '>' + esc(o.owner) + '</option>';
+      }).join('');
+    }
     var box = $('#ownerRows');
     if (!state.owners.length) { box.innerHTML = '<tr><td colspan="5" class="faint">' + esc((d && d.hint) || '当前没有 owner，请先在 CLI 执行 yotta-memory iam <id>。') + '</td></tr>'; return; }
     box.innerHTML = state.owners.map(function (o) {
@@ -456,7 +467,7 @@
     }).join('');
   }
   async function loadEntries() {
-    var d = await api('/api/entries', { query: state.query, offset: state.offset, limit: state.limit, type: state.type === 'all' ? '' : state.type });
+    var d = await api('/api/entries', { query: state.query, offset: state.offset, limit: state.limit, type: state.type === 'all' ? '' : state.type, owner: state.owner || '' });
     if (d.error) { toast(errText(d, '加载失败')); return; }
     state.entries = d.entries || [];
     state.count = d.count || 0;
@@ -669,6 +680,15 @@
     Array.prototype.forEach.call(document.querySelectorAll('#typeChips .chip'), function (c) { c.classList.toggle('active', c === b); });
     loadEntries();
   });
+  $('#typeBars').addEventListener('click', function (e) {
+    var bar = e.target.closest('.bar[data-type]');
+    if (!bar) return;
+    state.type = bar.dataset.type; state.offset = 0;
+    Array.prototype.forEach.call(document.querySelectorAll('#typeChips .chip'), function (c) { c.classList.toggle('active', c.dataset.type === state.type); });
+    switchView('memories');
+    loadEntries();
+  });
+  $('#ownerFilter').addEventListener('change', function () { state.owner = this.value; state.offset = 0; loadEntries(); });
   $('#prevPage').addEventListener('click', function () { if (state.offset > 0) { state.offset -= state.limit; loadEntries(); } });
   $('#nextPage').addEventListener('click', function () { state.offset += state.limit; loadEntries(); });
 
@@ -803,7 +823,7 @@
   }
   function renderFull() {
     if (!state.help) return;
-    $('#cliFull').innerHTML = (state.help.groups || []).map(function (g) {
+    var groupsHtml = (state.help.groups || []).map(function (g) {
       var cmds = (g.commands || []).map(function (c) {
         var subs = (c.subcommands || []).map(function (s) {
           return '<div class="help-sub"><div class="cmd-head"><code class="cmd-name">' + esc(c.name + ' ' + s.name) + '</code></div>' +
@@ -817,6 +837,13 @@
       }).join('');
       return '<div class="quick-group"><h4>' + esc(g.group) + '</h4>' + cmds + '</div>';
     }).join('');
+    var keys = state.help.configKeys || [];
+    var keysHtml = keys.length ? '<div class="quick-group" id="cliConfigKeys"><h4>配置键（yotta-memory config set &lt;键&gt; &lt;值&gt;）</h4><div class="quick-list">' +
+      keys.map(function (k) {
+        return '<div class="cmd-item"><div class="cmd-head"><code class="cmd-name">' + esc(k) + '</code></div>' +
+          codeLine('yotta-memory config set ' + k + ' <值>') + '</div>';
+      }).join('') + '</div></div>' : '';
+    $('#cliFull').innerHTML = groupsHtml + keysHtml;
   }
   async function ensureHelp() {
     if (state.help) { renderQuick(); return; }

@@ -27,7 +27,7 @@ const PKG_ROOT = path.join(__dirname, '..');
 const TOP_SKIP = [
   'package.json', 'package-lock.json', 'bin', 'lib', 'test',
   '.github', '.git', '.gitignore', '.npmignore', '.gitattributes',
-  '.yotta', '.tmp', 'install.sh', 'node_modules',
+  '.yotta', '.tmp', 'install.sh', 'node_modules', 'test-fixtures',
 ];
 const TOP_SKIP_SET = new Set(TOP_SKIP);
 // 缓存 / 编译产物：任意层级跳过，安装时同样清理。
@@ -190,6 +190,7 @@ function copyDir(src, dst, topLevel) {
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     // 只跳过安装包顶层开发文件；template/ 等嵌套同名载荷必须保留。
     if (topLevel && TOP_SKIP_SET.has(entry.name)) continue;
+    if (topLevel && entry.isFile() && /\.tgz$/i.test(entry.name)) continue;
     if (shouldSkipCache(entry.name, entry.isFile())) continue;
     const s = path.join(src, entry.name);
     const d = path.join(dst, entry.name);
@@ -219,6 +220,16 @@ function cleanResidue(target) {
     fs.rmSync(p, { recursive: true, force: true });
     removed.push(name);
   }
+  try {
+    for (const name of fs.readdirSync(target)) {
+      if (!/\.tgz$/i.test(name)) continue;
+      const p = path.join(target, name);
+      const entry = fs.lstatSync(p);
+      if (entry.isSymbolicLink() || !entry.isFile()) continue;
+      fs.rmSync(p, { force: true });
+      removed.push(name);
+    }
+  } catch (_) { /* ignore */ }
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, entry.name);

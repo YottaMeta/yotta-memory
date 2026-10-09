@@ -104,6 +104,9 @@ test('view CLI help serves HELP_MODEL and a drift-free quick reference', async (
   assert.ok(Array.isArray(MOD.VIEW_HELP_QUICK), 'VIEW_HELP_QUICK must be exported as an array');
   assert.deepStrictEqual(r.data.groups, JSON.parse(JSON.stringify(MOD.HELP_MODEL)));
   assert.deepStrictEqual(r.data.quick, JSON.parse(JSON.stringify(MOD.VIEW_HELP_QUICK)));
+  assert.ok(Array.isArray(MOD.CONFIG_VALUE_KEYS), 'CONFIG_VALUE_KEYS must be exported as an array');
+  assert.deepStrictEqual(r.data.configKeys, JSON.parse(JSON.stringify(MOD.CONFIG_VALUE_KEYS)));
+  assert.ok(r.data.configKeys.includes('memory_home'), 'configKeys must include memory_home');
 
   const groups = r.data.quick;
   assert.deepStrictEqual(groups.map((g) => g.group), QUICK_GROUPS);
@@ -139,6 +142,8 @@ test('view CLI page ships nav, quick list, lazy full help and copy affordances',
   assert.match(html, /id="cliQuick"/);
   assert.match(html, /id="btnFullHelp"/);
   assert.match(html, /id="cliFull"/);
+  assert.match(html, /id="cliConfigKeys"/);
+  assert.match(html, /configKeys/);
   assert.match(html, /copy-btn/);
   assert.match(html, /data-copy/);
   assert.match(html, /findHelpEntry/);

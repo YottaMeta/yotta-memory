@@ -52,6 +52,30 @@ function indexEntry(rel, value) {
   };
 }
 
+// 夹具与真实库保持一致：索引条目必须对应磁盘上的记忆文件（文件为唯一真源）。
+function entryFileText(value) {
+  const m = value || {};
+  return [
+    '---',
+    'type: ' + (m.type || 'FACT'),
+    'subject: ' + (m.subject || ''),
+    'statement: ' + (m.statement || ''),
+    'confidence: ' + (m.confidence === undefined ? 1 : m.confidence),
+    'created: ' + (m.created || ''),
+    'updated: ' + (m.updated || m.created || ''),
+    'tags: []',
+    'immutable: ' + (m.immutable ? 'true' : 'false'),
+    'scope: ' + (m.scope || (String(m.owner || '').trim() ? 'private' : 'public')),
+    'owner: ' + (m.owner || ''),
+    'source: ' + (m.source || ''),
+    'weight: ' + (m.weight === undefined ? 1 : m.weight),
+    '---',
+    '',
+    'body',
+    '',
+  ].join('\n');
+}
+
 function withStore(t, options, run) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ytm-paging-'));
   const configDir = path.join(root, '.config');
@@ -62,6 +86,11 @@ function withStore(t, options, run) {
   fs.mkdirSync(providerHome, { recursive: true });
 
   const entries = options.entries || [];
+  for (const entry of entries) {
+    const fp = path.join(root, entry.rel);
+    fs.mkdirSync(path.dirname(fp), { recursive: true });
+    fs.writeFileSync(fp, entryFileText(entry.meta), 'utf8');
+  }
   fs.writeFileSync(path.join(root, 'index.json'), JSON.stringify({
     version: 4,
     updated: '2026-09-30',

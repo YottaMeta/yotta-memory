@@ -1,3 +1,14 @@
+## v0.22.6 (2026-10-09)
+
+- **并发写入加固**：索引更新改为跨进程互斥（`.index.lock`，mkdir 原子语义 + 陈旧锁自动回收）+ 原子落盘（临时文件 + rename）；序号分配 / 记忆落盘 / 索引更新同处一个临界区，多智能体（多宿主、多 MCP 进程）同时写入更稳。
+- **索引一致性维护**：以记忆文件为唯一真源，读取路径与用户平台在后台做轻量一致性校准（自动对齐，无需用户操作；不修改任何记忆文件）。
+- **管理台搜索增强**：搜索支持按编号（文件名）与归属智能体查找（原支持标题 / 内容 / 标签）。
+- **管理台 CLI 页补全配置键**：高级 / CLI 页新增 39 个配置键速查（`config set` 单一真源，含 `memory_home` / `backup_*` / `maintain_*` / `consolidate_*` / `scale_*` 等），可直接搜索与复制。
+- **doctor**：新增索引一致性检查（条数 = 文件数）。
+- **安装器洁净度**：顶层跳过并清理 `*.tgz` 与 `test-fixtures/`（与 npm 包白名单一致），安装副本不再携带源码侧残留。
+- 新增 `test/index-consistency.test.js` 5 项（一致性检测与校准、幂等、6 进程并发 120 条零丢失、跨进程锁互斥、显示与实际对账 + 编号 / 归属搜索）。
+- 新增 `test/password-stdin-bom.test.js`（Windows PowerShell 管道 BOM）与 `test/installer-hygiene.test.js`（薄片洁净度 + 残留清理）。
+
 ## v0.22.5 (2026-10-07)
 
 - **修复 Electron 宿主（YottaCode shim）下开机自启拉起 GUI 而非服务**：宿主运行时为 Electron 时（`process.versions.electron`；`process.execPath` 指向 Electron 可执行文件），此前生成的任务 / 兜底 / 定时配置不带 `ELECTRON_RUN_AS_NODE=1`，开机拉起的是桌面程序本体、8787 无监听（新机首例实测）。现在自动检测并统一注入：Windows 主任务与每日备份任务（cmd /c + `set "ELECTRON_RUN_AS_NODE=1"`）、Windows Startup 兜底 .cmd（set 前缀）、Linux systemd 单元 / crontab @reboot / 备份定时器（`Environment=` / 行内前缀）、macOS 备份 LaunchAgent（EnvironmentVariables）。
