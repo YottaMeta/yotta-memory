@@ -254,3 +254,38 @@ test('encrypted private hits update the owner index in the same call', () => {
   assert.ok(entry, 'owner index must contain the private entry');
   assert.match(entry.hit_days, new RegExp('s' + todayStr() + ':1'), 'owner index must be updated during recall');
 });
+
+// v0.22.8：命中打点是观察性元数据，不能把旧条目顶到「最近更新」最前面。
+test('recall restores the original file mtime after recording a search hit', () => {
+  withStore((root) => {
+    const w = memory.rememberCore('FACT', 'mtime 稳定性', '命中打点不应改变文件时间戳', { _today: todayStr() });
+    assert.strictEqual(w.error, false, w.text);
+    const fp = onlyEntry(root);
+    const past = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+    fs.utimesSync(fp, past, past);
+    const before = fs.statSync(fp).mtimeMs;
+
+    const r = memory.recallCore('mtime 稳定性', { agent: 'codex', limit: 10 });
+    assert.strictEqual(r.exitCode, 0, r.text);
+    assert.strictEqual(r.entries.length, 1, r.text);
+
+    assert.strictEqual(fs.statSync(fp).mtimeMs, before, 'search hit must keep the original mtime');
+    assert.match(readMeta(fp).hit_days, new RegExp('s' + todayStr() + ':1'), 'hit must still be recorded');
+  });
+});
+
+test('direct usage signals keep the original mtime as well', () => {
+  withStore((root) => {
+    memory.rememberCore('FACT', '打点路径二', 'use 信号写回后保持时间戳', { _today: todayStr() });
+    const fp = onlyEntry(root);
+    const rel = path.relative(root, fp).replace(/\\/g, '/');
+    const past = new Date(Date.now() - 2 * 24 * 3600 * 1000);
+    fs.utimesSync(fp, past, past);
+    const before = fs.statSync(fp).mtimeMs;
+
+    const r = memory.applyUsageHits(root, [rel], 'use', null, { selfAgent: 'codex' });
+    assert.strictEqual(r.written, 1, JSON.stringify(r));
+    assert.strictEqual(fs.statSync(fp).mtimeMs, before, 'applyUsageHits must keep the original mtime');
+    assert.match(readMeta(fp).hit_days, new RegExp('u' + todayStr() + ':1'));
+  });
+});

@@ -319,3 +319,24 @@ test('view M1 preserves tags on rewrite and repairs legacy escaping', async (t) 
   assert.strictEqual(upd2.status, 200, JSON.stringify(upd2.data));
   assert.strictEqual(readTags(), '["验收","M1"]', 'legacy escaped tags must be repaired on next rewrite');
 });
+
+// v0.22.8：类型 chips 计数跟随智能体 / 搜索筛选，不再固定显示全库口径。
+test('view M1 type counts follow the owner filter', async (t) => {
+  const ctx = await setup(t);
+  await unlockAndAuthorize(ctx.port);
+  await viewApi(ctx.port, '/api/memory/create', { type: 'FACT', subject: 'cnt-fact', statement: 'x' });
+  await viewApi(ctx.port, '/api/memory/create', { type: 'PREF', owner: 'codex', subject: 'cnt-pref', statement: 'x' });
+  await viewApi(ctx.port, '/api/memory/create', { type: 'COMMIT', owner: 'codex', subject: 'cnt-commit', statement: 'x' });
+
+  const all = await viewApi(ctx.port, '/api/entries', { query: 'cnt-', limit: 50 });
+  assert.strictEqual(all.status, 200, JSON.stringify(all.data));
+  assert.deepStrictEqual(all.data.counts, { all: 3, FACT: 1, PREF: 1, BOUND: 0, COMMIT: 1 });
+
+  const codex = await viewApi(ctx.port, '/api/entries', { query: 'cnt-', owner: 'codex', limit: 50 });
+  assert.strictEqual(codex.data.count, 2);
+  assert.deepStrictEqual(codex.data.counts, { all: 2, FACT: 0, PREF: 1, BOUND: 0, COMMIT: 1 });
+
+  const filtered = await viewApi(ctx.port, '/api/entries', { query: 'cnt-', owner: 'codex', type: 'FACT', limit: 50 });
+  assert.strictEqual(filtered.data.count, 0);
+  assert.deepStrictEqual(filtered.data.counts, { all: 2, FACT: 0, PREF: 1, BOUND: 0, COMMIT: 1 }, 'counts describe the owner+query scope, not the clicked type');
+});
