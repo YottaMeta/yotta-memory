@@ -1554,11 +1554,19 @@ function usagePatchForMeta(meta, signal, query, settings, dateStr) {
 // 独立写点（explain / context use 信号）：写失败只计数，不影响读取结果。
 // v0.22.8：命中打点是观察性元数据，写回后恢复文件原时间戳——避免管理台按 mtime 排序时旧条目被“搜到→顶到最新”。
 function statFileTimes(fp) {
-  try { return fs.statSync(fp); } catch (e) { return null; }
+  // BigInt 统计拿纳秒字段：毫秒精度的 Date 会把亚毫秒部分抹平（WorkBuddy 验收 D1）。
+  try { return fs.statSync(fp, { bigint: true }); } catch (e) { return null; }
 }
 function restoreFileTimes(fp, st) {
   if (!st) return;
-  try { fs.utimesSync(fp, st.atime, st.mtime); } catch (e) { /* 恢复失败不影响打点写入 */ }
+  try {
+    // 毫秒对齐值用 Date 逐 tick 精确还原；带亚毫秒余数的值用纳秒转 float 秒——
+    // 误差为 Node 公开 API 上限（亚微秒级；utimesSync 不接受 BigInt 直传）。
+    const toTime = function (ns) {
+      return (ns % 1000000n === 0n) ? new Date(Number(ns / 1000000n)) : Number(ns) / 1e9;
+    };
+    fs.utimesSync(fp, toTime(st.atimeNs), toTime(st.mtimeNs));
+  } catch (e) { /* 恢复失败不影响打点写入 */ }
 }
 function applyUsageHits(root, relFiles, signal, query, opts) {
   opts = opts || {};

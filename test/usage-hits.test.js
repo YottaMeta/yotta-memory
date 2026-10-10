@@ -289,3 +289,27 @@ test('direct usage signals keep the original mtime as well', () => {
     assert.match(readMeta(fp).hit_days, new RegExp('u' + todayStr() + ':1'));
   });
 });
+
+// v0.22.8 D1（WorkBuddy 验收）：带亚毫秒余数的 mtime 不能被毫秒截断。
+test('recall keeps sub-millisecond mtime precision (no ms truncation)', () => {
+  withStore((root) => {
+    memory.rememberCore('FACT', '亚毫秒精度', '打点恢复不能把 mtime 抹到毫秒', { _today: todayStr() });
+    const fp = onlyEntry(root);
+    // 用 float 秒设置一个确定带大亚毫秒余数的值（约 49 万 ns 余数）。
+    const t = 1791347209.2654951;
+    fs.utimesSync(fp, t, t);
+    const beforeNs = fs.statSync(fp, { bigint: true }).mtimeNs;
+    assert.ok(beforeNs % 1000000n > 100000n,
+      'test setup: mtime must carry a large sub-ms remainder, got ' + beforeNs);
+
+    const r = memory.recallCore('亚毫秒精度', { agent: 'codex', limit: 10 });
+    assert.strictEqual(r.exitCode, 0, r.text);
+    assert.strictEqual(r.entries.length, 1, r.text);
+
+    const afterNs = fs.statSync(fp, { bigint: true }).mtimeNs;
+    const delta = afterNs > beforeNs ? afterNs - beforeNs : beforeNs - afterNs;
+    assert.ok(delta < 5000n,
+      'sub-ms delta must stay within Node native precision (~us), got ' + delta + 'ns');
+    assert.match(readMeta(fp).hit_days, new RegExp('s' + todayStr() + ':1'), 'hit must still be recorded');
+  });
+});
