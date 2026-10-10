@@ -4501,10 +4501,18 @@ function findFirstEncryptedPrivateFile(root) {
     for (const type of PRIVATE_LEAF) {
       const dir = path.join(ownerDir, type);
       if (!fs.existsSync(dir)) continue;
-      for (const name of fs.readdirSync(dir)) {
-        if (!name.endsWith('.md' + ENC_SUFFIX)) continue;
-        const fp = path.join(dir, name);
-        if (fs.statSync(fp).isFile()) return { fp: fp, owner: owner, rel: relOf(root, fp) };
+      // v0.22.8：递归查找年 / 月分层（0.17+ 写入布局）；只看平铺一层会让纯分层库静默跳过私密解密校验。
+      const stack = [dir];
+      while (stack.length) {
+        const current = stack.pop();
+        let items = [];
+        try { items = fs.readdirSync(current, { withFileTypes: true }); } catch (e) { continue; }
+        for (const item of items) {
+          const fp = path.join(current, item.name);
+          if (item.isDirectory()) { stack.push(fp); continue; }
+          if (!item.name.endsWith('.md' + ENC_SUFFIX)) continue;
+          if (fs.statSync(fp).isFile()) return { fp: fp, owner: owner, rel: relOf(root, fp) };
+        }
       }
     }
   }

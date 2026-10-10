@@ -2,7 +2,8 @@
 
 - **管理台「记忆」列表两处展示修复**：① 顶部类型 chips（全部 / FACT / PREF / BOUND / COMMIT）计数跟随当前智能体 / 搜索筛选，不再固定显示全库口径（概览页四类分布保持全局口径）；② 列表排序与时间语义修复：命中打点（search / use 信号写回）改为保留文件原时间戳，旧条目被搜到不再顶到「最新」；卡片与详情显示「创建（frontmatter created，文件 btime 兜底）+ 更新（文件 mtime 到秒）」双时间。
 - **`backup drill` 凭证入口补齐**：帮助新增 `--password` / `--recovery-key` / `--password-stdin`；无凭证时复用统一凭证入口（交互输入 / `--password-stdin` / `YOTTA_MEMORY_PASS` 环境变量），非交互且无凭证时给出明确提示。
-- 测试：新增 search / use 打点 mtime 稳定性回归 2 项、管理台 counts 跟随筛选 1 项、drill needPassword 信号与 CLI 三入口 2 项。
+- **修复：`backup drill` 对年 / 月分层私密条目静默跳过校验**（v0.17+ 分层写入布局回归：旧实现只扫平铺一层 `prefs/*.md.enc`，纯分层库找不到私密文件、直接跳过解密校验）→ 递归查找任意层级 `*.md.enc`，分层库同样走完整私密解密校验。
+- 测试：新增 search / use 打点 mtime 稳定性回归 2 项、管理台 counts 跟随筛选 1 项、drill needPassword / 分层探测 / CLI 三入口 3 项。
 
 ## v0.22.7 (2026-10-09)
 

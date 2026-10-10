@@ -36,6 +36,30 @@ function makeEncryptedStore() {
   return { root, ownerKey };
 }
 
+// v0.22.8：0.17+ 写入布局（年 / 月分层），drill 的私密探测必须递归。
+function makeLayeredEncryptedStore() {
+  const root = tmpdir('ytm-drill-layered-store-');
+  fs.mkdirSync(path.join(root, 'facts'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'private', 'codex', 'prefs', '2026', '10'), { recursive: true });
+  const init = memory.initEncryptionCore(root, 'test-password', null);
+  const ownerKey = memory.wrapOwnerKey(root, init.umk, init.rk, 'codex');
+  const encrypted = memory.encryptMemoryText([
+    '---',
+    'type: PREF',
+    'subject: 分层私密',
+    'statement: 年/月分层的私密条目也能被演练解密校验',
+    'scope: private',
+    'owner: codex',
+    'created: 2026-10-10',
+    'updated: 2026-10-10',
+    '---',
+    '',
+  ].join('\n'), ownerKey);
+  fs.writeFileSync(path.join(root, 'private', 'codex', 'prefs', '2026', '10', '2026-10-10-0001.md.enc'), encrypted);
+  memory.saveIndex(root, []);
+  return { root, ownerKey };
+}
+
 test('backup drill restores, verifies the manifest and decrypts one private entry', () => {
   const { root } = makeEncryptedStore();
   const backupDir = tmpdir('ytm-drill-backups-');
@@ -109,6 +133,26 @@ test('backup drill core flags needPassword when no credential is supplied', () =
   assert.strictEqual(drill.ok, false);
   assert.strictEqual(drill.needPassword, true);
   assert.strictEqual(drill.checks.private.decrypted, false);
+});
+
+// v0.22.8：纯分层库（0.17+ 布局）不能被静默跳过——必须找到私密文件并校验。
+test('backup drill finds layered private entries and verifies them', () => {
+  const { root } = makeLayeredEncryptedStore();
+  const backupDir = tmpdir('ytm-drill-layered-');
+  const created = memory.backupCreateCore({ root, dir: backupDir, allowSameVolume: true });
+  assert.strictEqual(created.error, false, created.text);
+
+  const noCred = memory.backupDrillCore({ id: created.id, dir: backupDir, sourceRoot: root });
+  assert.strictEqual(noCred.error, true);
+  assert.strictEqual(noCred.needPassword, true, 'layered private entry must be found (no silent skip)');
+  assert.strictEqual(noCred.checks.private.checked, true);
+  assert.strictEqual(noCred.checks.private.decrypted, false);
+
+  const ok = memory.backupDrillCore({ id: created.id, dir: backupDir, sourceRoot: root, password: 'test-password' });
+  assert.strictEqual(ok.error, false, ok.text);
+  assert.strictEqual(ok.checks.private.checked, true);
+  assert.strictEqual(ok.checks.private.decrypted, true);
+  assert.strictEqual(ok.checks.private.source, 'password');
 });
 
 // v0.22.8：CLI 凭证三入口（--password / --password-stdin / YOTTA_MEMORY_PASS）+ 无凭证非交互提示。
