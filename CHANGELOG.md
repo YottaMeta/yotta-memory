@@ -1,3 +1,8 @@
+## v0.22.9 (2026-10-11)
+
+- **管理台「高级 / CLI」完整帮助：配置键块与 config 命令相邻化（UX-M-01）**：此前 39 键「配置键（config set）」块统一追加在所有命令分组之后，与「加密与安全」组末尾的 `config` 命令之间隔着整个「平台与服务」组，阅读流断裂；现在键表紧随 `config` 命令（同组相邻），找不到 config 命令时仍回退到末尾（`keysPlaced` 兜底）。
+- 回归门禁：`test/view-cli-help.test.js` 断言放置逻辑标记；`tools/check_memory_view.js` 在 1440 / 390 两档断言「`#cliConfigKeys` 必须是 config 命令 `<details>` 的相邻兄弟节点」。
+
 ## v0.22.8 (2026-10-10)
 
 - **管理台「记忆」列表两处展示修复**：① 顶部类型 chips（全部 / FACT / PREF / BOUND / COMMIT）计数跟随当前智能体 / 搜索筛选，不再固定显示全库口径（概览页四类分布保持全局口径）；② 列表排序与时间语义修复：命中打点（search / use 信号写回）改为保留文件原时间戳，旧条目被搜到不再顶到「最新」；卡片与详情显示「创建（frontmatter created，文件 btime 兜底）+ 更新（文件 mtime 到秒）」双时间。

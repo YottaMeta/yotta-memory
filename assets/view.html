@@ -839,20 +839,6 @@
   }
   function renderFull() {
     if (!state.help) return;
-    var groupsHtml = (state.help.groups || []).map(function (g) {
-      var cmds = (g.commands || []).map(function (c) {
-        var subs = (c.subcommands || []).map(function (s) {
-          return '<div class="help-sub"><div class="cmd-head"><code class="cmd-name">' + esc(c.name + ' ' + s.name) + '</code></div>' +
-            (s.what ? '<div class="cmd-what">' + esc(s.what) + '</div>' : '') +
-            (s.when ? '<div class="cmd-when">' + esc(s.when) + '</div>' : '') +
-            codeLine('yotta-memory ' + c.name + ' ' + s.usage) + optRows(s.options) + '</div>';
-        }).join('');
-        return '<details class="help-cmd"><summary><code class="cmd-name">' + esc(c.name) + '</code><span class="cmd-what">' + esc(c.what) + '</span></summary>' +
-          '<div class="help-body">' + (c.when ? '<div class="cmd-when">' + esc(c.when) + '</div>' : '') +
-          codeLine('yotta-memory ' + c.usage) + optRows(c.options) + subs + '</div></details>';
-      }).join('');
-      return '<div class="quick-group"><h4>' + esc(g.group) + '</h4>' + cmds + '</div>';
-    }).join('');
     var keys = state.help.configKeys || [];
     var keyHelp = state.help.configKeyHelp || {};
     var keysHtml = keys.length ? '<div class="quick-group" id="cliConfigKeys"><h4>配置键（config set）</h4>' +
@@ -864,7 +850,28 @@
           (h.when ? '<div class="opt-when">' + esc(h.when) + '</div>' : '') +
           '</div>' + copyBtn('yotta-memory config set ' + k + ' <值>') + '</div>';
       }).join('') + '</div>' : '';
-    $('#cliFull').innerHTML = groupsHtml + keysHtml;
+    // UX-M-01：配置键块紧随 config 命令（同组相邻）；找不到 config 时回退末尾。
+    var keysPlaced = false;
+    var groupsHtml = (state.help.groups || []).map(function (g) {
+      var cmds = (g.commands || []).map(function (c) {
+        var subs = (c.subcommands || []).map(function (s) {
+          return '<div class="help-sub"><div class="cmd-head"><code class="cmd-name">' + esc(c.name + ' ' + s.name) + '</code></div>' +
+            (s.what ? '<div class="cmd-what">' + esc(s.what) + '</div>' : '') +
+            (s.when ? '<div class="cmd-when">' + esc(s.when) + '</div>' : '') +
+            codeLine('yotta-memory ' + c.name + ' ' + s.usage) + optRows(s.options) + '</div>';
+        }).join('');
+        var cmdHtml = '<details class="help-cmd"><summary><code class="cmd-name">' + esc(c.name) + '</code><span class="cmd-what">' + esc(c.what) + '</span></summary>' +
+          '<div class="help-body">' + (c.when ? '<div class="cmd-when">' + esc(c.when) + '</div>' : '') +
+          codeLine('yotta-memory ' + c.usage) + optRows(c.options) + subs + '</div></details>';
+        if (!keysPlaced && c.name === 'config' && keysHtml) {
+          keysPlaced = true;
+          return cmdHtml + keysHtml;
+        }
+        return cmdHtml;
+      }).join('');
+      return '<div class="quick-group"><h4>' + esc(g.group) + '</h4>' + cmds + '</div>';
+    }).join('');
+    $('#cliFull').innerHTML = groupsHtml + (keysPlaced ? '' : keysHtml);
   }
   async function ensureHelp() {
     if (state.help) { renderQuick(); return; }

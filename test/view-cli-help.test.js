@@ -159,6 +159,29 @@ test('view CLI page ships nav, quick list, lazy full help and copy affordances',
   assert.match(html, /copy-btn/);
   assert.match(html, /data-copy/);
   assert.match(html, /findHelpEntry/);
+  // UX-M-01：配置键块紧随 config 命令（回退末尾由 keysPlaced 兜底）。
+  assert.match(html, /UX-M-01/);
+  assert.match(html, /keysPlaced/);
+});
+
+test('quick list resolves deepest entry and rows stay distinguishable per group', async (t) => {
+  const ctx = await setup(t);
+  await unlock(ctx.port);
+  const r = await viewApi(ctx.port, '/api/help', {});
+  assert.strictEqual(r.status, 200, JSON.stringify(r.data));
+  for (const group of r.data.quick) {
+    const seen = new Set();
+    for (const item of group.items) {
+      const meta = findHelpEntry(r.data.groups, item.cmd);
+      assert.ok(meta, 'quick item must resolve to a model entry: ' + item.cmd);
+      const key = String(meta.what || '') + '|' + String(item.note || '');
+      assert.ok(!seen.has(key), 'duplicate explanation in group ' + group.group + ': ' + item.cmd + ' -> ' + key);
+      seen.add(key);
+    }
+  }
+  // 两级解析必须命中同组最深条目（防回退到父命令）。
+  assert.strictEqual(findHelpEntry(r.data.groups, 'backup drill').name, 'drill');
+  assert.strictEqual(findHelpEntry(r.data.groups, 'config set').name, 'set');
 });
 
 test('view CLI surface stays read-only (no execute endpoint)', async (t) => {
