@@ -25,7 +25,7 @@ const net = require('net');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.22.9';
+const VERSION = '0.23.0';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path', '--from']);
 const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--propose', '--audit', '--capacity', '--rules', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--no-usage', '--yes', '--keep-memories', '--keep-identity']);
 
@@ -400,6 +400,9 @@ const PRIVATE_LEAF = ['prefs', 'bounds', 'commits'];
 const ARCHIVE_DIR = '.archive';
 const INDEX_FILE = 'index.json';
 const PRIVATE_TYPES = ['PREF', 'BOUND', 'COMMIT'];
+// v0.23.0 D1/D2：上下文包 COMMIT 段保留条数（0 = 全部）与归档默认门槛（与效用分地板对齐）
+const CONTEXT_COMMITS_LIMIT_DEFAULT = 20;
+const ARCHIVE_UTILITY_DEFAULT = 0.55;
 const FIELD_ORDER = ['type', 'subject', 'statement', 'confidence', 'created', 'updated', 'tags', 'immutable', 'scope', 'owner', 'source', 'weight', 'access_count', 'last_accessed', 'feedback_net', 'hit_days', 'hit_queries'];
 const CONFIG_FILE = 'config.json';
 const SERVER_SUBDIR = '.server';
@@ -3971,6 +3974,11 @@ const SCALE_THRESHOLD_DEFAULTS = {
   scale_info_files_per_dir: 300,
   scale_info_index_bytes: 3 * 1024 * 1024,
   scale_info_cold_start_ms: 1200,
+  // v0.23.0 D3：超长 statement / 单类型堆积（防写法走偏）
+  scale_warn_long_statements: 50,
+  scale_info_long_statements: 10,
+  scale_warn_type_count: 500,
+  scale_info_type_count: 200,
 };
 function scaleThreshold(cfg, key) {
   const raw = cfg ? cfg[key] : undefined;
@@ -4015,6 +4023,20 @@ function scaleReport(root, cfg) {
   const entries = collectEntryFiles(root).length;
   const filesPerDir = Math.max(maxFilesInDir(path.join(root, PUBLIC_DIR)), maxFilesInDir(path.join(root, PRIVATE_DIR)));
   const indexBytes = indexSizeBytes(root);
+  // v0.23.0 D3：超长 statement（> 2000 字）与单类型堆积（读索引，不逐条解密读文件）
+  const scaleEntries = loadIndex(root) || [];
+  let longStatements = 0;
+  const typeCounts = { FACT: 0, PREF: 0, BOUND: 0, COMMIT: 0 };
+  for (const e of scaleEntries) {
+    const t = String(e.type || 'FACT').toUpperCase();
+    typeCounts[t] = (typeCounts[t] || 0) + 1;
+    if (String(e.statement || '').length > 2000) longStatements++;
+  }
+  let typeMax = 0;
+  let typeMaxName = 'FACT';
+  for (const t of Object.keys(typeCounts)) {
+    if (typeCounts[t] > typeMax) { typeMax = typeCounts[t]; typeMaxName = t; }
+  }
   // 冷启动取多次测量的中位数，避免单次抖动影响只读体检结果。
   const samples = [];
   for (let i = 0; i < 3; i++) samples.push(measureIndexColdStart(root));
@@ -4025,6 +4047,8 @@ function scaleReport(root, cfg) {
     scaleMetric('files_per_dir', filesPerDir, '个文件', thresholds.scale_info_files_per_dir, thresholds.scale_warn_files_per_dir),
     scaleMetric('index_bytes', indexBytes, '字节', thresholds.scale_info_index_bytes, thresholds.scale_warn_index_bytes),
     scaleMetric('cold_start_ms', coldStartMs, 'ms', thresholds.scale_info_cold_start_ms, thresholds.scale_warn_cold_start_ms),
+    scaleMetric('long_statements', longStatements, '条', thresholds.scale_info_long_statements, thresholds.scale_warn_long_statements),
+    scaleMetric('type_max', typeMax, '条', thresholds.scale_info_type_count, thresholds.scale_warn_type_count),
   ];
   const warnings = [];
   if (metrics[0].level === 'warning') {
@@ -4038,6 +4062,12 @@ function scaleReport(root, cfg) {
   }
   if (metrics[3].level === 'warning') {
     warnings.push('规模: 索引冷启动 ' + coldStartMs + 'ms 超过阈值 ' + thresholds.scale_warn_cold_start_ms + 'ms（可用 reindex 重建索引）');
+  }
+  if (metrics[4].level === 'warning') {
+    warnings.push('规模: 超长 statement（> 2000 字）' + longStatements + ' 条超过阈值 ' + thresholds.scale_warn_long_statements + '（建议拆分：记忆宜短句高密度，长文另存文档）');
+  }
+  if (metrics[5].level === 'warning') {
+    warnings.push('规模: 单类型堆积（' + typeMaxName + ' ' + typeMax + ' 条）超过阈值 ' + thresholds.scale_warn_type_count + '（考虑归档 / 合并 / 精简；COMMIT 收工锚点建议短写）');
   }
   // v0.18.0 A6：分级只影响 level 与提示文案；超 warn 仍进 warnings（既有行为），info 不阻断。
   const level = metrics.some(function (m) { return m.level === 'warning'; })
@@ -4699,6 +4729,9 @@ function rememberCore(type, subject, statement, opts) {
           const hit = HINT_KEYWORDS.filter(function (w) { return stmt.indexOf(w) !== -1; });
           if (hit.length) text += '\n[提示] statement 含主观/关系词（' + hit.join('、') + '），疑似用户偏好 / 关系内容——若属此类建议改用 PREF（私密，仅本人可读）。仅提示不拦截；--no-hint 可关闭。';
         }
+        if (opts.hint !== false && t === 'COMMIT' && stmt.length > 1200) {
+          text += '\n[提示] 这条 COMMIT 较长（' + stmt.length + ' 字）：开工上下文包默认只展示最近 ' + CONTEXT_COMMITS_LIMIT_DEFAULT + ' 条 COMMIT；收工锚点建议 ≤500 字（重点放 subject），重要承诺可加 --weight 1.5 或 tags pinned 保持常显。仅提示不拦截；--no-hint 可关闭。';
+        }
         if (opts.verify) {
           const rel = path.relative(root, fp).replace(/\\/g, '/');
           const ok = verifyWrittenReadable(root, rel, subj, selfAgent || opts.agent);
@@ -4741,6 +4774,9 @@ function rememberCore(type, subject, statement, opts) {
   if (opts.hint !== false && t === 'FACT') {
     const hit = HINT_KEYWORDS.filter(function (w) { return stmt.indexOf(w) !== -1; });
     if (hit.length) text += '\n[提示] statement 含主观/关系词（' + hit.join('、') + '），疑似用户偏好 / 关系内容——若属此类建议改用 PREF（私密，仅本人可读）。仅提示不拦截；--no-hint 可关闭。';
+  }
+  if (opts.hint !== false && t === 'COMMIT' && stmt.length > 1200) {
+    text += '\n[提示] 这条 COMMIT 较长（' + stmt.length + ' 字）：开工上下文包默认只展示最近 ' + CONTEXT_COMMITS_LIMIT_DEFAULT + ' 条 COMMIT；收工锚点建议 ≤500 字（重点放 subject），重要承诺可加 --weight 1.5 或 tags pinned 保持常显。仅提示不拦截；--no-hint 可关闭。';
   }
   if (opts.verify) {
     const rel = path.relative(root, file).replace(/\\/g, '/');
@@ -5313,7 +5349,7 @@ function archiveCore(opts) {
   opts = opts || {};
   const cfg = loadConfig();
   const days = opts.days || parseInt(cfg.maintain_archived_age || '180', 10) || 180;
-  const threshold = (opts.threshold !== undefined && opts.threshold !== null) ? opts.threshold : (parseFloat(cfg.maintain_archived_utility || 0.35));
+  const threshold = (opts.threshold !== undefined && opts.threshold !== null) ? opts.threshold : (parseFloat(cfg.maintain_archived_utility || ARCHIVE_UTILITY_DEFAULT));
   const cooldownDays = capacityNumber(cfg, 'capacity_cooldown_days');
   const root = userRoot();
   if (!fs.existsSync(root)) return { error: false, text: '记忆库不存在。' };
@@ -5537,7 +5573,7 @@ function explainCore(ref, opts) {
   const ageDays = entry.created ? daysBetween(entry.created, today()) : 0;
   const cfg = loadConfig();
   const hlText = entry.type === 'BOUND' ? 'BOUND 不衰减' : (decayHalflifeDays(entry.type, cfg) + ' 天');
-  const archU = parseFloat(cfg.maintain_archived_utility || 0.35);
+  const archU = parseFloat(cfg.maintain_archived_utility || ARCHIVE_UTILITY_DEFAULT);
   const archAge = parseInt(cfg.maintain_archived_age || '180', 10) || 180;
   const forgetU = parseFloat(cfg.maintain_forget_utility || 0.12);
   const forgetAge = parseInt(cfg.maintain_forget_age || '365', 10) || 365;
@@ -5679,7 +5715,7 @@ function maintainCore(opts) {
     if (guard.error) return { error: true, text: guard.text };
   }
   const cfg = loadConfig();
-  const archU = parseFloat(opts.threshold !== undefined && opts.threshold !== null ? opts.threshold : (cfg.maintain_archived_utility || 0.35));
+  const archU = parseFloat(opts.threshold !== undefined && opts.threshold !== null ? opts.threshold : (cfg.maintain_archived_utility || ARCHIVE_UTILITY_DEFAULT));
   const archAge = parseInt(opts.age || cfg.maintain_archived_age || '180', 10) || 180;
   const forgetU = parseFloat(cfg.maintain_forget_utility || 0.12);
   const forgetAge = parseInt(cfg.maintain_forget_age || '365', 10) || 365;
@@ -8279,6 +8315,19 @@ function compareContextRecent(a, b) {
   if (byTime !== 0) return byTime;
   return (b.access_count || 0) - (a.access_count || 0);
 }
+// v0.23.0 D1：COMMIT 段保留策略 —— 最近 N 条 + weight≥1.5 / pinned / evergreen 恒显；0 = 全部。
+function contextCommitsLimit(cfg) {
+  const raw = cfg ? cfg.context_commits_limit : undefined;
+  if (raw === undefined || raw === null || raw === '') return CONTEXT_COMMITS_LIMIT_DEFAULT;
+  const n = parseInt(raw, 10);
+  return (n >= 0) ? n : CONTEXT_COMMITS_LIMIT_DEFAULT;
+}
+function commitAlwaysShown(entry) {
+  if (!entry) return false;
+  const w = parseFloat(entry.weight || '1.0');
+  if (w >= 1.5) return true;
+  return isEvergreenTagged(entry);
+}
 
 const MEMORY_HOOK_MAX_CANDIDATES = 500;
 const MEMORY_HOOK_STATEMENT_LIMIT = 2000;
@@ -8830,9 +8879,24 @@ function contextCore(opts) {
   lines.push('');
   lines.push('## 6. 承诺 / 锚点（COMMIT）');
   lines.push('');
-  const commits = readableEntries.filter(function (e) { return e.type === 'COMMIT'; }).sort(compareContextRecent);
-  if (!commits.length) lines.push('（无）');
+  // v0.23.0 D1：保留策略 —— 默认只展示最近 N 条（context_commits_limit，0=全部）；
+  // weight≥1.5 / pinned / evergreen 恒显；其余折叠为一行提示（recall 仍可检索全部）。
+  const ctxCfg = decayConfig();
+  const commitsAll = readableEntries.filter(function (e) { return e.type === 'COMMIT'; }).sort(compareContextRecent);
+  const commitLimit = contextCommitsLimit(ctxCfg);
+  const commits = [];
+  const hiddenCommits = [];
+  for (let i = 0; i < commitsAll.length; i++) {
+    if (commitLimit > 0 && i >= commitLimit && !commitAlwaysShown(commitsAll[i])) hiddenCommits.push(commitsAll[i]);
+    else commits.push(commitsAll[i]);
+  }
+  if (!commitsAll.length) lines.push('（无）');
   for (const e of commits) lines.push('- ' + (e.subject || '承诺') + ': ' + e.statement);
+  if (hiddenCommits.length) {
+    const oldest = contextRecentKey(hiddenCommits[hiddenCommits.length - 1]);
+    const newest = contextRecentKey(hiddenCommits[0]);
+    lines.push('- （另有 ' + hiddenCommits.length + ' 条更早的 COMMIT 未展示：' + (oldest || '?') + ' ~ ' + (newest || '?') + '；可用 yotta-memory recall --type COMMIT 检索；重要承诺可加 weight / pinned 标签保持常显）');
+  }
   lines.push('');
   lines.push('## 7. 本会话闭环契约');
   lines.push('');
@@ -8849,8 +8913,22 @@ function contextCore(opts) {
     const d = daysBetween(latest, today());
     lines.push('- 最近承诺: ' + latest + (d > 7 ? '（超期 ' + d + ' 天，请补 COMMIT）' : ''));
   }
-  const oldCount = allEntries.filter(function (e) { return e.created && daysBetween(e.created, today()) > 180 && classifyRead(e, owner, '', unsafe, selfAgent) !== 'denied'; }).length;
-  if (oldCount > 0) lines.push('- 归档提醒: ' + oldCount + ' 条超 180 天，建议 archive');
+  // v0.23.0 D2：归档提醒可执行化（按 config 门槛算达线条数；只读，不触发写入）
+  const archiveAge = parseInt(ctxCfg.maintain_archived_age || '180', 10) || 180;
+  const archiveUtilityRaw = parseFloat(ctxCfg.maintain_archived_utility || String(ARCHIVE_UTILITY_DEFAULT));
+  const archiveUtility = isNaN(archiveUtilityRaw) ? ARCHIVE_UTILITY_DEFAULT : archiveUtilityRaw;
+  const agedCount = allEntries.filter(function (e) { return e.created && daysBetween(e.created, today()) > archiveAge && classifyRead(e, owner, '', unsafe, selfAgent) !== 'denied'; }).length;
+  const archivableCount = allEntries.filter(function (e) {
+    if (!e.created || classifyRead(e, owner, '', unsafe, selfAgent) === 'denied') return false;
+    if (daysBetween(e.created, today()) <= archiveAge) return false;
+    if (e.immutable || e.type === 'BOUND' || isEvergreenTagged(e)) return false;
+    return utilityScore(e) < archiveUtility;
+  }).length;
+  if (agedCount > 0) {
+    lines.push('- 归档提醒: ' + agedCount + ' 条超 ' + archiveAge + ' 天' + (archivableCount > 0
+      ? '，其中 ' + archivableCount + ' 条已达归档门槛（运行 yotta-memory maintain 预览 / --apply 执行）'
+      : '，暂无达门槛条目（可用 yotta-memory maintain 预览）'));
+  }
   if (explain) {
     lines.push('');
     lines.push('## 8. 选择解释（--explain）');
@@ -10196,11 +10274,11 @@ async function cmdScan(opts) {
 
 // ---- config 命令 ----
 // v0.10.0：maintain_* / consolidate_* 数值键纳入 config set/get（此前只支持 3 个键但文档已写可调）
-function isNumericConfigKey(key) { return /^(maintain_|consolidate_|scale_|backup_max_age_hours$|usage_retention_days$|usage_query_slots$|capacity_|promotion_|context_audit_min_coverage$)/.test(key); }
+function isNumericConfigKey(key) { return /^(maintain_|consolidate_|scale_|backup_max_age_hours$|usage_retention_days$|usage_query_slots$|capacity_|promotion_|context_audit_min_coverage$|context_commits_limit$)/.test(key); }
 // v0.17.0 B2：doctor 规模体检阈值键（0 表示只要超过 0 就告警，便于压测与演练）
-const SCALE_CONFIG_KEYS = ['scale_warn_entries', 'scale_warn_files_per_dir', 'scale_warn_index_bytes', 'scale_warn_cold_start_ms', 'scale_info_entries', 'scale_info_files_per_dir', 'scale_info_index_bytes', 'scale_info_cold_start_ms'];
+const SCALE_CONFIG_KEYS = ['scale_warn_entries', 'scale_warn_files_per_dir', 'scale_warn_index_bytes', 'scale_warn_cold_start_ms', 'scale_info_entries', 'scale_info_files_per_dir', 'scale_info_index_bytes', 'scale_info_cold_start_ms', 'scale_warn_long_statements', 'scale_info_long_statements', 'scale_warn_type_count', 'scale_info_type_count'];
 // v0.18.1 验收修正：config set / get 共用一份键列表，新增配置键不会再出现「读端认、写端拒」。
-const CONFIG_VALUE_KEYS = ['memory_home', 'backup_dir', 'backup_enabled', 'backup_schedule', 'backup_time', 'backup_max_age_hours', 'backup_setup_choice', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'maintain_rule_min_hits', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period', 'usage_enabled', 'usage_retention_days', 'usage_query_slots', 'capacity_cooldown_days', 'capacity_warn_bytes', 'capacity_candidate_limit', 'promotion_min_hits', 'promotion_min_queries', 'context_audit_min_coverage'].concat(SCALE_CONFIG_KEYS);
+const CONFIG_VALUE_KEYS = ['memory_home', 'backup_dir', 'backup_enabled', 'backup_schedule', 'backup_time', 'backup_max_age_hours', 'backup_setup_choice', 'embedding_cmd', 'embedding_timeout', 'maintain_archived_utility', 'maintain_archived_age', 'maintain_forget_utility', 'maintain_forget_age', 'maintain_decay_halflife_FACT', 'maintain_decay_halflife_PREF', 'maintain_decay_halflife_COMMIT', 'maintain_rule_min_hits', 'consolidate_min_age', 'consolidate_min_idle', 'consolidate_max_utility', 'consolidate_min_group', 'consolidate_period', 'usage_enabled', 'usage_retention_days', 'usage_query_slots', 'capacity_cooldown_days', 'capacity_warn_bytes', 'capacity_candidate_limit', 'promotion_min_hits', 'promotion_min_queries', 'context_commits_limit', 'context_audit_min_coverage'].concat(SCALE_CONFIG_KEYS);
 // v0.22.7：配置键逐键人话说明（管理台「高级 / CLI」页与官网 /product/ 共用；必须与 CONFIG_VALUE_KEYS 一一对应）
 const CONFIG_KEY_HELP = {
   memory_home: { what: '记忆库根目录：所有记忆文件、索引都放在这个文件夹里。改它 = 换一个记忆库，原库内容不会自动搬过去。', when: '默认 ~/.yottamemory。优先级：环境变量 YOTTA_MEMORY_HOME > 本键 > 默认。把库换到数据盘 / 移动盘时改这里，改完用 config get 复查。' },
@@ -10212,7 +10290,7 @@ const CONFIG_KEY_HELP = {
   backup_setup_choice: { what: '备份配置向导的选择记录：上次选的是每日备份（daily）还是手动模式（manual）。', when: '默认 manual；选 manual 后 doctor 不再提醒“未配置备份”。一般由 backup setup 自动写入。' },
   embedding_cmd: { what: '本地语义检索（embedding）插件命令：配置后，搜索会额外按“意思相近”找记忆，而不只是按字面词匹配。', when: '可选，默认关闭。命令只在本机执行、不联网上传；需要自备插件程序。示例：python embed.py' },
   embedding_timeout: { what: 'embedding 插件的调用超时：超时就不等它，自动退回普通关键词检索。', when: '毫秒，默认 3000（3 秒）。插件较慢（如本地大模型）可调大，例如 15000。' },
-  maintain_archived_utility: { what: '归档门槛之一：效用分（越高越有价值）低于这个值的旧记忆，才可能被 archive 归档。', when: '默认 0.35。调低 = 更难归档（更保守），调高 = 更容易归档。改完可用 maintain 预览候选。' },
+  maintain_archived_utility: { what: '归档门槛之一：效用分（越高越有价值）低于这个值的旧记忆，才可能被 archive 归档。', when: '默认 0.55（v0.23.0 起与效用分地板对齐——记忆写出来就有约 0.42~0.47 的底分，门槛低于它会永远打不到）。调低 = 更难归档（更保守），调高 = 更容易归档。改完可用 maintain 预览候选。' },
   maintain_archived_age: { what: '归档门槛之一：只有保存超过这么多天的旧记忆，才可能被归档。', when: '默认 180 天。想保守可调大（如 365），想积极瘦身可调小。' },
   maintain_forget_utility: { what: '遗忘（彻底删除）门槛之一：效用分低于这个值的记忆才可能进入遗忘候选，比归档更严格。', when: '默认 0.12，建议保持很低；误删不可恢复（只能靠备份）。' },
   maintain_forget_age: { what: '遗忘（彻底删除）门槛之一：只有保存超过这么多天的记忆才可能进入遗忘候选。', when: '默认 365 天。' },
@@ -10233,6 +10311,7 @@ const CONFIG_KEY_HELP = {
   capacity_candidate_limit: { what: 'maintain --capacity 一次最多列出多少个淘汰候选。', when: '默认 20。' },
   promotion_min_hits: { what: '晋升建议门槛之一：一条记忆累计被命中至少这么多次，才可能被建议“升级”。', when: '默认 3 次；需与 promotion_min_queries 同时满足。' },
   promotion_min_queries: { what: '晋升建议门槛之一：命中要来自至少这么多个不同查询（防止同一句话反复搜把分数刷上去）。', when: '默认 3 个。' },
+  context_commits_limit: { what: '开工上下文包里 COMMIT（承诺 / 收工锚点）段最多展示多少条：超出的旧条目折叠为一行提示，不删除、仍可用 recall 检索。', when: '默认 20；0 = 全部展示（旧行为）。weight ≥ 1.5 或带 pinned / evergreen 标签的条目不受上限影响、始终展示。' },
   context_audit_min_coverage: { what: 'context --audit 的覆盖率闸门：落盘覆盖率低于这个比例时，提示“还有内容没落盘”。', when: '0-1 之间的小数，默认 0.5（即 50%）。' },
   scale_warn_entries: { what: '规模体检（doctor 的“规模”段）：记忆条数超过这个值，升级为 warning 告警。', when: '默认 50000 条。' },
   scale_warn_files_per_dir: { what: '规模体检：单个目录里的文件数超过这个值，升级为 warning。', when: '默认 500 个文件。' },
@@ -10242,6 +10321,10 @@ const CONFIG_KEY_HELP = {
   scale_info_files_per_dir: { what: '规模体检：单目录文件数超过这个值，提示 info。', when: '默认 300 个文件。' },
   scale_info_index_bytes: { what: '规模体检：索引体积超过这个值，提示 info。', when: '默认 3145728 字节（3 MB）。' },
   scale_info_cold_start_ms: { what: '规模体检：索引冷启动超过这个值，提示 info。', when: '默认 1200 毫秒。' },
+  scale_warn_long_statements: { what: '规模体检：超过 2000 字的 statement 条数超过这个值，升级为 warning。', when: '默认 50 条。记忆宜短句高密度，长文建议拆分或另存文档。' },
+  scale_info_long_statements: { what: '规模体检：超过 2000 字的 statement 条数超过这个值，提示 info。', when: '默认 10 条。' },
+  scale_warn_type_count: { what: '规模体检：单类型（FACT / PREF / BOUND / COMMIT 之一）条数超过这个值，升级为 warning。', when: '默认 500 条。COMMIT 堆积通常意味着收工锚点写太长或该跑 maintain 归档了。' },
+  scale_info_type_count: { what: '规模体检：单类型条数超过这个值，提示 info。', when: '默认 200 条。' },
 };
 function cmdConfigSet(key, value) {
   const known = CONFIG_VALUE_KEYS;

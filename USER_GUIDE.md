@@ -94,7 +94,7 @@ yotta-memory iam <id> --name 元忆 --user 用户 --relationship 伙伴   # 自�
 ```
 
 - `profile` 引擎零推断：只按类型 / 主题 / 标签归组呈现原文，画像结论由 AI 内部形成，不当面贴标签。
-- `context` 是每次会话开工的主注入，替代裸 `recall`；长期摘要优先、近期走廊按时间取样、近期高价值补位按文件去重；无画像时自动生成一次或降级，不报错；`--budget` 控制动态记忆字符预算，长期摘要 / 身份 / 铁律 / 画像 / 边界 / 承诺 / 闭环契约必保（token 恒定）。
+- `context` 是每次会话开工的主注入，替代裸 `recall`；长期摘要优先、近期走廊按时间取样、近期高价值补位按文件去重；无画像时自动生成一次或降级，不报错；`--budget` 控制动态记忆字符预算，长期摘要 / 身份 / 铁律 / 画像 / 边界与闭环契约必保；承诺 / 锚点段按保留策略展示（v0.23.0 起默认最近 20 条 + weight≥1.5 / pinned / evergreen 恒显，`config set context_commits_limit <N>`，0=全部）。
 - `context --audit [--from <文件|->] [--json] [--gate N]`：把宿主压缩后的摘要或丢弃段落喂给元忆，逐条核对是否已落盘；输出已落盘 / 未落盘 / 无法判定与 `remember` 建议命令（只打印、不执行）。`--gate N` 在未落盘条数超过 N 时 exit 1，可接自动化。不传 `--from` 时审计当前上下文包的 dropped 清单。审计全程只读：不复制输入、不自动补写、不写命中打点。
 - `remember --verify` 写后回读校验；`remember --no-hint` 关闭「疑似偏好，建议 PREF」的提示。
 
@@ -212,7 +212,7 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 
 **规则层自组织（maintain）**
 
-- `maintain`（默认 dry-run 预览）：列出归档候选与遗忘候选（v0.10.0 起按**分类型衰减后**的效用分 + 年龄判定；默认：utility < 0.35 且超 180 天 = 归档候选，utility < 0.12 且超 365 天 = 遗忘候选）。
+- `maintain`（默认 dry-run 预览）：列出归档候选与遗忘候选（v0.10.0 起按**分类型衰减后**的效用分 + 年龄判定；默认：utility < **0.55** 且超 180 天 = 归档候选，utility < 0.12 且超 365 天 = 遗忘候选）。v0.23.0 起归档门槛与效用分地板对齐（记忆默认 `confidence=1.0`，地板约 0.42~0.47——旧默认 0.35 永远打不到、实际不生效）；COMMIT / PREF / FACT 由此形成约 6 / 13 / 17 个月退役阶梯。
 - **immutable / BOUND 豁免**：红线与边界不参与任何自动归档 / 遗忘。
 - `maintain --apply`：执行归档（公共 → `.archive/facts/`，私密 → `.archive/private/<owner>/<type>/`，可恢复；年/月分层文件保留原分层，如 `.archive/facts/2025/01/`）。
 - `maintain --apply --purge`：真删遗忘候选（谨慎；硬删除不可回滚）。
@@ -220,11 +220,11 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 - `maintain --dedup --apply`：自动合并同归属（同类型 + 同 scope/owner）高置信组：保留 confidence 最高的一条，合并 tags / 使用次数 / 反馈，其余移入 `.archive/` 并写批次审计（可 `consolidate --undo <batch>` 回滚）。**注意 `--dedup` 与归档互斥**：`--dedup [--apply]` 只查重 / 自动合并，不会顺手归档单条旧记忆——要归档请单独跑 `maintain --apply`。
 - `maintain --merge A,B`：手动合并两条相似记忆（保留高 confidence，低 confidence 归档）。
 - `maintain --capacity [--json]`：只读容量报告——水位（条目 / 文件字节 / 索引 / 单目录 / 冷启动）、30 / 90 天活跃度、LRU 与 LFU 淘汰候选、晋升建议（≥3 次命中且 ≥3 个不同查询）。候选排除 30 天冷却期与常青条目（immutable / BOUND / `evergreen` / `pinned`）；每条候选 / 建议都带可执行命令，报告本身不改任何文件。
-- 阈值与半衰可用 `config set maintain_archived_utility 0.3` / `config set maintain_decay_halflife_FACT 1000` 等调整（`config get` 查看）；审计在 `.archive/audit-<日期>.jsonl`。
+- 阈值与半衰可用 `config set maintain_archived_utility 0.6` / `config set maintain_decay_halflife_FACT 1000` 等调整（`config get` 查看；门槛调回 0.35 会重新低于效用地板、基本不生效）；审计在 `.archive/audit-<日期>.jsonl`。
 
 **归档（archive）**
 
-- `archive [--days 180] [--threshold 0.35] [--dry-run] [--json]`：把「效用低于阈值且超过 N 天没用」的旧记忆移入 `.archive/`（可恢复）。`--dry-run` 只打印将归档清单（文件 / 类型 / 天龄 / 效用 / subject）与跳过统计，**不动文件、不建事务快照、不写审计**。
+- `archive [--days 180] [--threshold 0.55] [--dry-run] [--json]`：把「效用低于阈值且超过 N 天没用」的旧记忆移入 `.archive/`（可恢复）。`--dry-run` 只打印将归档清单（文件 / 类型 / 天龄 / 效用 / subject）与跳过统计，**不动文件、不建事务快照、不写审计**。
 - 默认豁免：冷却期（`config set capacity_cooldown_days`，默认 30 天）与常青条目（immutable / BOUND / `evergreen` / `pinned`）。`--force` 只覆盖冷却期与标签常青，immutable 与 BOUND 始终豁免。
 - 真正执行前先过破坏性写入闸门（doctor + 独立备份 + 异卷）并创建事务快照；没有候选时不会建快照。`--json` 输出结构化报告（`mode / candidates / archived / skipped`），便于自动化读取。
 

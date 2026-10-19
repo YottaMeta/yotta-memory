@@ -213,10 +213,14 @@ test('doctor reports a scale section with defaults', () => {
       'scale_info_entries',
       'scale_info_files_per_dir',
       'scale_info_index_bytes',
+      'scale_info_long_statements',
+      'scale_info_type_count',
       'scale_warn_cold_start_ms',
       'scale_warn_entries',
       'scale_warn_files_per_dir',
       'scale_warn_index_bytes',
+      'scale_warn_long_statements',
+      'scale_warn_type_count',
     ]);
 
     const cli = jsonDoctor(root);

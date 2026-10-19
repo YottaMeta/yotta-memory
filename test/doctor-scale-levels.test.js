@@ -121,7 +121,7 @@ test('doctor --json exposes scale metrics for automation', () => {
     const parsed = JSON.parse(cli.stdout);
     assert.ok(Array.isArray(parsed.checks.scale.metrics), 'doctor --json must expose metrics[]');
     const keys = parsed.checks.scale.metrics.map((m) => m.key).sort();
-    assert.deepStrictEqual(keys, ['cold_start_ms', 'entries', 'files_per_dir', 'index_bytes']);
+    assert.deepStrictEqual(keys, ['cold_start_ms', 'entries', 'files_per_dir', 'index_bytes', 'long_statements', 'type_max']);
     assert.strictEqual(parsed.checks.scale.metrics.filter((m) => m.key === 'entries')[0].level, 'info');
   });
 });

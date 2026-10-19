@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
 description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照、基线探针、恢复演练、记忆库安全扫描、scan、命中打点、容量水位、--capacity、--propose、上下文压缩审计、context --audit
-version: 0.22.9
+version: 0.23.0
 license: MIT
 ---
 
@@ -16,6 +16,7 @@ license: MIT
 - **类型体系**：FACT（事实，公共共享）/ PREF（偏好，私密）/ BOUND（边界，私密）/ COMMIT（承诺，私密）。
 - **双级存储**：用户级 `~/.yottamemory/`（跨项目）+ 项目级 `.yottamemory/`（随项目共享）。
 - **越用越懂（v0.14.0）**：`context` 一键生成开工上下文包——长期理解摘要优先（复用 `consolidate` 产物）+ 用户画像（引擎零推断，只归组原文）+ 近期走廊（按更新时间取样）+ 近期高价值补位 + 边界 + 承诺 + 会话闭环契约；SKILL「记忆守则」规则层只注入规则与机制，不注入人格数据（出厂零数据）。
+- **保留策略与归档根治（v0.23.0）**：`context` 的 COMMIT 段默认只展示最近 20 条（`config set context_commits_limit <N>`，0=全部），`weight ≥ 1.5` 或带 `pinned` / `evergreen` 标签的条目恒显，其余折叠为一行提示（不删除，`recall --type COMMIT` 可检索）；BOUND 段保持全量（底线保证不变）。归档默认门槛 `maintain_archived_utility` 0.35 → **0.55**（与效用分地板对齐，COMMIT / PREF / FACT 形成约 6 / 13 / 17 个月退役阶梯）；`context` 末尾的归档提醒会显示已达门槛条数与 `maintain` 命令。收工锚点建议 ≤500 字、重点放 subject。
 - **MCP 工具分组（v0.15.0）**：`serve --tools core|full` 控制工具暴露面。`core` 固定为 `context / recall / search / remember`，适合常驻；`full` 为现有 16 工具，适合维护与诊断。未指定时默认 `full`，保持现有配置兼容。
 - **身份模型（v0.16.0）**：身份不再从环境变量读取。HTTP / 远程 MCP 只认请求头 `Authorization` + `X-Agent-Id` + `X-Agent-Key`；stdio MCP 只认显式参数 `--agent-id` + `--agent-key-file`；CLI 用 `--agent` + `--agent-key` / `--agent-key-file`。旧身份 env 会在 MCP 启动时被明确拒绝。
 - **未授权提示边界（v0.16.4）**：`--agent-key-file` 不存在时不再由主入口向全局 `stderr` 告警。公共 / 维护命令保持安静；只有真正访问私密区时才 fail-closed，并给出缺失文件、`view` / `key bind`、`key status` / `key claim` 的可操作步骤。`whoami --json`、`doctor --json`、`config get --json` 返回 `identity.mode` / `identity.agentKeyStatus`。
@@ -219,7 +220,7 @@ yotta-memory doctor --json
 
 1. 开工：whoami → iam（身份）→ `context`（主注入）→ `recall`（关键词补细节）。
 2. 进行中：增量写，触发信号即记；`remember --verify` 写后回读确认落盘。
-3. 收工：先复盘本轮并检查关键结论是否落盘，再留交接锚点（COMMIT / 笔记）；定期 `archive`。
+3. 收工：先复盘本轮并检查关键结论是否落盘，再留交接锚点（COMMIT / 笔记，建议 ≤500 字、重点放 subject）；定期 `maintain`（建议每月一次；v0.23.0 起归档门槛与效用地板对齐、默认真正生效）。
 
 ### 6. 写后验证
 
@@ -299,7 +300,7 @@ yotta-memory doctor --json
 
 **D. 开工主注入（context）**：
 
-- 身份就绪后运行 `yotta-memory context [--limit 10] [--budget 1800]`（远端经 MCP 用 `recall` 补细节）：一键拿到「身份 + 多智能体铁律 + 用户画像摘要 + 长期理解摘要 + 近期走廊 + 近期高价值记忆 + 边界提醒 + 承诺 / 锚点 + 会话闭环契约」；`--budget` 控制动态记忆字符预算，长期摘要 / 身份 / 铁律 / 画像 / 边界 / 承诺与闭环契约必保（token 恒定，不随记忆膨胀）。
+- 身份就绪后运行 `yotta-memory context [--limit 10] [--budget 1800]`（远端经 MCP 用 `recall` 补细节）：一键拿到「身份 + 多智能体铁律 + 用户画像摘要 + 长期理解摘要 + 近期走廊 + 近期高价值记忆 + 边界提醒 + 承诺 / 锚点 + 会话闭环契约」；`--budget` 控制动态记忆字符预算，长期摘要 / 身份 / 铁律 / 画像 / 边界与闭环契约必保；承诺 / 锚点段按保留策略展示（默认最近 20 条 + weight≥1.5 / pinned / evergreen 恒显；`config set context_commits_limit <N>`，0=全部）。
 - 无画像时 context 自动生成一次或降级输出其余段，不报错。
 - 需要深挖旧事再 `recall <关键词>`。
 - 私密记忆（PREF / BOUND / COMMIT）**必须有 owner**：未声明身份写私密会被引擎拒绝（公共 FACT 不受影响）。
@@ -319,12 +320,12 @@ yotta-memory doctor --json
 | `yotta-memory remember <type> <subject> <statement> [--owner <id>] [--source <来源>] [--weight <0..>] [--verify] [--no-hint]` | 写入（同 subject+statement 自动更新；--owner 标注归属；--source 记录来源；--weight 重要性权重默认 1.0、去重取 max；--verify 写后回读校验；--no-hint 关闭类型启发式提示）|
 | `yotta-memory recall [关键词] [--type T] [--limit N] [--year <yyyy>] [--agent <id>] [--owner <id>] [--all] [--unsafe] [--explain] [--semantic] [--embedding <command>] [--embedding-timeout N]` | 检索（v0.8.0 默认语义检索：同义词 / 拼音全拼+首字母 / 字段加权 / 模糊匹配 + 效用分融合排序；v0.9.0 支持可选本地 embedding 插件，失败自动降级；v0.17.0 起 `--year` 只检索指定年份，分片索引只读取对应分片、可重复传多次、不传即全量；`--explain` 显示命中理由与效用分项；`--semantic` 显式开启；读取分区过滤；越界读其它智能体私密默认拒绝，需 grant / identity=user / `--unsafe`；`--agent <其它>` 只作身份声明/展示，不授予跨读——读他人私密同样要授权；项目级优先）|
 | `yotta-memory profile [--owner <id>]` | 生成用户画像（聚合 `private/<owner>/` 原文，零推断，写 `profile.md`；跨 owner 默认拒绝）|
-| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--year <yyyy>] [--explain] [--embedding <command>]` | 生成开工上下文包（身份 + 多智能体铁律 + 画像 + 长期摘要 + 任务相关记忆 + 近期走廊 + 近期高价值 + 边界 + 承诺 + 会话闭环契约；--budget 控制动态记忆字符预算，0=不限；v0.17.0 起 `--year` 只装载指定年份，口径同 recall；--explain 输出 included / dropped 选择 trace）|
+| `yotta-memory context [--limit N] [--owner <id>] [--budget N] [--focus <关键词>] [--year <yyyy>] [--explain] [--embedding <command>]` | 生成开工上下文包（身份 + 多智能体铁律 + 画像 + 长期摘要 + 任务相关记忆 + 近期走廊 + 近期高价值 + 边界 + 承诺 + 会话闭环契约；--budget 控制动态记忆字符预算，0=不限；v0.17.0 起 `--year` 只装载指定年份，口径同 recall；v0.23.0 起 COMMIT 段默认只展示最近 20 条（`context_commits_limit`，0=全部；weight≥1.5 / pinned / evergreen 恒显）；--explain 输出 included / dropped 选择 trace）|
 | `yotta-memory forget <文件>` | 移入 `.trash/<时间>/` 回收区并写审计（v0.12.0；不再物理删除）|
 | `yotta-memory backup volumes / setup --dir <目录> / status / ensure-daily / schedule enable|disable|status` | 每日自动备份（v0.12.0；只展示实际枚举的异卷、用户确认一次位置后默认每日执行，Windows Task Scheduler / systemd timer / launchd 调度，`serve` 补跑）|
 | `yotta-memory backup create / list / doctor / restore <ID> --to <目录> / drill [<ID>] [--probe] [--against <库路径>]` | 备份、恢复与恢复演练（v0.12.0；独立盘校验、SHA-256 清单、排除 `keys/cache`、恢复默认只写新目录；drill 验证 manifest / 索引 / 测试私密解密；v0.17.0 起 `--probe` 在恢复副本上追加六类基线探针，`--against` 校验备份没有落后于源库）|
 | `yotta-memory doctor [--json] [--runtime] [--mcp-config <文件>] [--skill-dir <目录>] [--baseline [--against <库路径>] [--template <文件>]]` | 开工可靠性检查（v0.12.2；根目录 / 密钥库 / 索引 / 身份 / 最近备份；严重异常时锁定破坏性写入）；全新空库的缺失 index / agents 降为 info；输出 agent home 发现规则与 `YOTTA_MEMORY_AGENT_HOME` 提示；加 `--runtime` 检查 CLI / current / MCP 配置 / 运行中 server / 技能副本漂移；v0.16.4 起 `--json` 含身份 / agent-key 状态；v0.16.5 起顶层含 `schemaVersion` / `encryption` / `migration_required`；v0.17.0 起 `checks.scale` 给规模体检（条数 / 单目录文件数 / 索引体积 / 冷启动耗时，阈值 `scale_*`），`--baseline` 追加恢复 / 迁移基线探针（结果进 `checks.baseline`，失败 exit 2）|
-| `yotta-memory archive [--days 180] [--threshold 0.35] [--dry-run] [--force] [--json]` | 归档旧记忆（v0.8.0 统一效用分 + v0.10.0 分类型衰减；immutable / BOUND 豁免；v0.18.0 起默认豁免冷却期与 `evergreen` / `pinned`，`--force` 显式覆盖；私密归档入 `.archive/private/<owner>/<type>/`；阈值默认读 config `maintain_archived_utility`）。`--dry-run` 只预览、零写入（不动文件 / 不建快照 / 不写审计），无候选时不建整库快照，`--json` 输出结构化报告 |
+| `yotta-memory archive [--days 180] [--threshold 0.55] [--dry-run] [--force] [--json]` | 归档旧记忆（v0.8.0 统一效用分 + v0.10.0 分类型衰减；immutable / BOUND 豁免；v0.18.0 起默认豁免冷却期与 `evergreen` / `pinned`，`--force` 显式覆盖；私密归档入 `.archive/private/<owner>/<type>/`；阈值默认读 config `maintain_archived_utility`，v0.23.0 起默认 0.55）。`--dry-run` 只预览、零写入（不动文件 / 不建快照 / 不写审计），无候选时不建整库快照，`--json` 输出结构化报告 |
 | `yotta-memory reindex` | 重建索引（手动改 .md 后校正）|
 | `yotta-memory export [--out f.json]` / `import <f.json>` | 导出 / 导入 |
 | `yotta-memory config set memory_home <目录>` / `config set backup_dir <目录>` / `config get [--json]` | 持久记住 / 查看记忆库位置与备份目录（`~/.yottamemory/config.json`；`get --json` 同时返回身份状态）；数值类键含 `maintain_*` / `consolidate_*` / `scale_*` / `backup_max_age_hours` |

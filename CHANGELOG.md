@@ -1,3 +1,10 @@
+## v0.23.0 (2026-10-20)
+- **上下文包 COMMIT 段保留策略（根治上下文包无预算膨胀）**：开工上下文包第 6 段默认只展示最近 20 条 COMMIT，`weight ≥ 1.5` 或带 `pinned` / `evergreen` 标签的条目不受上限影响、始终展示；其余折叠为一行提示（不删除，`recall --type COMMIT` 仍可检索）。新配置键 `context_commits_limit`（0 = 全部展示，回旧行为）；BOUND 段保持全量（底线保证不变）。
+- **归档门槛与效用地板对齐（根治「库只长不瘦」）**：`maintain_archived_utility` 默认 0.35 → **0.55**（记忆默认 `confidence=1.0`，效用分地板约 0.42~0.47，旧门槛永远打不到）；按分类型半衰形成退役阶梯：COMMIT 约 6 个月 / PREF 约 13 个月 / FACT 约 17 个月（无再访问时，且需超 180 天龄；BOUND / immutable / pinned / evergreen 豁免不变）。`context` 的「归档提醒」升级为可执行：显示超龄条数与已达门槛条数，并给出 `maintain` 预览 / `--apply` 命令。
+- **规模体检补强（防复发）**：新增「超长 statement（> 2000 字）」与「单类型堆积」两项指标（info / warn 两档，新配置键 `scale_info_long_statements` / `scale_warn_long_statements` / `scale_info_type_count` / `scale_warn_type_count`），随 `doctor` / `context` 可靠性提醒展示。
+- **用法引导**：`remember` 写超长 COMMIT（> 1200 字）时提示精简与常显标签；SKILL / USER_GUIDE 补充收工锚点与保留策略说明。
+- 兼容性：显式设置过 `maintain_archived_utility` / `context_commits_limit` 的用户不受默认值变化影响；`context_commits_limit 0` 可恢复「全部展示」旧行为。
+
 ## v0.22.9 (2026-10-11)
 
 - **管理台「高级 / CLI」完整帮助：配置键块与 config 命令相邻化（UX-M-01）**：此前 39 键「配置键（config set）」块统一追加在所有命令分组之后，与「加密与安全」组末尾的 `config` 命令之间隔着整个「平台与服务」组，阅读流断裂；现在键表紧随 `config` 命令（同组相邻），找不到 config 命令时仍回退到末尾（`keysPlaced` 兜底）。
