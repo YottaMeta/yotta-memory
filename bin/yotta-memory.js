@@ -2570,10 +2570,17 @@ function buildIndex(root) {
       if (skip.has(rel)) continue;
       if (rel.indexOf(PRIVATE_DIR + '/') === 0) {
         const owner = rel.split('/')[1] || '';
-        if (!getOwnerKeyFor(root, owner)) continue;
-        let e;
-        try { e = readEntry(fp, root); } catch (err) { continue; }
-        (privateByOwner[owner] = privateByOwner[owner] || []).push(e);
+        // v0.23.0 修复（WorkBuddy D2）：未加密库没有 owner key（getOwnerKeyFor 恒为 null），
+        // 私密条目须与公共条目同存主索引（与 upsertIndexEntry 口径一致），
+        // 否则 reindex / 静默校准会把私密条目整段跳过，索引越重建越空。
+        if (isEncrypted(root)) {
+          if (!getOwnerKeyFor(root, owner)) continue;
+          let e;
+          try { e = readEntry(fp, root); } catch (err) { continue; }
+          (privateByOwner[owner] = privateByOwner[owner] || []).push(e);
+        } else {
+          try { publicEntries.push(readEntry(fp, root)); } catch (err) { /* ignore */ }
+        }
       } else {
         try { publicEntries.push(readEntry(fp, root)); } catch (err) { /* ignore */ }
       }
@@ -7875,6 +7882,15 @@ function cmdReindex() {
   for (const root of roots) {
     const n = buildIndex(root).length;
     console.log('已重建索引 ' + root + '（' + n + ' 条）');
+    // v0.23.0 修复（WorkBuddy D2）：无授权 key 的加密私密区无法重建——明确提示，
+    // 避免「已重建索引」误导（doctor 建议 → reindex 死路），并给出可执行路径。
+    try {
+      const report = indexConsistencyReport(root);
+      if (report.ownersSkipped && report.ownersSkipped.length) {
+        console.log('[提示] 跳过无授权私密 owner: ' + report.ownersSkipped.join(', ')
+          + '（' + report.skippedFiles + ' 个文件未重建）。加密库重建私密索引请带 --agent <id> --agent-key-file <path> 重跑。');
+      }
+    } catch (e) { /* 提示失败不影响重建结果 */ }
   }
 }
 function collectAll(root) {
@@ -8327,6 +8343,19 @@ function commitAlwaysShown(entry) {
   const w = parseFloat(entry.weight || '1.0');
   if (w >= 1.5) return true;
   return isEvergreenTagged(entry);
+}
+// v0.23.0 修复（WorkBuddy D1）：COMMIT 段按「立下时间」（created）倒序取最近 N 条；
+// 同日条目再按文件名序号倒序（写入先后）。旧实现按 updated（只到「日」）排序，
+// 同日全平局后退化为索引插入序（最旧在前）——刚写入的承诺被折叠、最老的反而进上下文。
+function commitRecencyKey(entry) {
+  return String((entry && (entry.created || entry.updated)) || '');
+}
+function compareCommitRecency(a, b) {
+  const byCreated = commitRecencyKey(b).localeCompare(commitRecencyKey(a));
+  if (byCreated !== 0) return byCreated;
+  const byFile = String((b && b.file) || '').localeCompare(String((a && a.file) || ''));
+  if (byFile !== 0) return byFile;
+  return (b.access_count || 0) - (a.access_count || 0);
 }
 
 const MEMORY_HOOK_MAX_CANDIDATES = 500;
@@ -8881,8 +8910,9 @@ function contextCore(opts) {
   lines.push('');
   // v0.23.0 D1：保留策略 —— 默认只展示最近 N 条（context_commits_limit，0=全部）；
   // weight≥1.5 / pinned / evergreen 恒显；其余折叠为一行提示（recall 仍可检索全部）。
+  // v0.23.0 修复（WorkBuddy D1）：排序键改 created 倒序 + 同日按文件名序号倒序（见 compareCommitRecency）。
   const ctxCfg = decayConfig();
-  const commitsAll = readableEntries.filter(function (e) { return e.type === 'COMMIT'; }).sort(compareContextRecent);
+  const commitsAll = readableEntries.filter(function (e) { return e.type === 'COMMIT'; }).sort(compareCommitRecency);
   const commitLimit = contextCommitsLimit(ctxCfg);
   const commits = [];
   const hiddenCommits = [];
@@ -8893,8 +8923,8 @@ function contextCore(opts) {
   if (!commitsAll.length) lines.push('（无）');
   for (const e of commits) lines.push('- ' + (e.subject || '承诺') + ': ' + e.statement);
   if (hiddenCommits.length) {
-    const oldest = contextRecentKey(hiddenCommits[hiddenCommits.length - 1]);
-    const newest = contextRecentKey(hiddenCommits[0]);
+    const oldest = commitRecencyKey(hiddenCommits[hiddenCommits.length - 1]);
+    const newest = commitRecencyKey(hiddenCommits[0]);
     lines.push('- （另有 ' + hiddenCommits.length + ' 条更早的 COMMIT 未展示：' + (oldest || '?') + ' ~ ' + (newest || '?') + '；可用 yotta-memory recall --type COMMIT 检索；重要承诺可加 weight / pinned 标签保持常显）');
   }
   lines.push('');

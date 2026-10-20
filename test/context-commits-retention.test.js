@@ -143,6 +143,27 @@ function protectedEntries() {
   ];
 }
 
+// 同日批次：created / updated 只有日期粒度，写入先后靠文件名序号区分。
+function sameDayCommitEntries(count) {
+  const entries = [];
+  const day = '2026-09-30';
+  for (let i = 1; i <= count; i++) {
+    entries.push({
+      rel: 'private/codex/commits/2026/09/' + day + '-' + String(i).padStart(4, '0') + '.md',
+      meta: {
+        type: 'COMMIT',
+        subject: 'commit-c' + String(i).padStart(2, '0'),
+        statement: 'body ' + i,
+        created: day,
+        updated: day,
+        scope: 'private',
+        owner: 'codex',
+      },
+    });
+  }
+  return entries;
+}
+
 test('COMMIT 段默认只展示最近 20 条：weight / pinned 恒显 + 折叠行', (t) => {
   withStore(t, { entries: commitEntries(25).concat(protectedEntries()) }, (ctx) => {
     const r = runCli(ctx.env, ['context', '--agent', 'codex', '--no-usage']);
@@ -182,6 +203,46 @@ test('context_commits_limit 自定义值生效；非法值回退默认 20', (t) 
     const s6 = splitSection6(r.stdout);
     assert.strictEqual(s6.shown.length, 22, '非法值回退默认 20');
     assert.match(s6.collapsed[0], /另有 5 条/);
+  });
+});
+
+test('COMMIT 段取最近 N 条：同日批次按写入先后（文件名序号）倒序，不退化为索引插入序', (t) => {
+  withStore(t, { entries: sameDayCommitEntries(26) }, (ctx) => {
+    const r = runCli(ctx.env, ['context', '--agent', 'codex', '--no-usage']);
+    assert.strictEqual(r.status, 0, r.stderr);
+    const s6 = splitSection6(r.stdout);
+    assert.strictEqual(s6.shown.length, 20, '默认展示最近 20 条');
+    assert.ok(s6.shown.some((line) => line.includes('commit-c26')), '最后写入的条目应在展示窗口');
+    assert.ok(s6.shown.some((line) => line.includes('commit-c07')), '窗口边界内的条目应展示');
+    assert.ok(!s6.shown.some((line) => line.includes('commit-c06')), '超出窗口的旧条目不应展示');
+    assert.ok(!s6.shown.some((line) => line.includes('commit-c01')), '最旧条目不应展示');
+    assert.strictEqual(s6.collapsed.length, 1, '应有折叠提示行');
+    assert.match(s6.collapsed[0], /另有 6 条更早的 COMMIT/);
+  });
+});
+
+test('context_commits_limit=3：后追加写入的最新条目必须进展示窗口（WorkBuddy D1 复现回归）', (t) => {
+  const entries = sameDayCommitEntries(25);
+  entries.push({
+    rel: 'private/codex/commits/2026/09/2026-09-30-0026.md',
+    meta: { type: 'COMMIT', subject: 'commit-focus', statement: 'weight 恒显', created: '2026-09-30', updated: '2026-09-30', scope: 'private', owner: 'codex', weight: 1.5 },
+  });
+  ['a', 'b', 'c'].forEach((tag, i) => {
+    entries.push({
+      rel: 'private/codex/commits/2026/09/2026-09-30-00' + (27 + i) + '.md',
+      meta: { type: 'COMMIT', subject: 'commit-new-' + tag, statement: '最新追加 ' + tag, created: '2026-09-30', updated: '2026-09-30', scope: 'private', owner: 'codex' },
+    });
+  });
+  withStore(t, { entries, config: { context_commits_limit: 3 } }, (ctx) => {
+    const r = runCli(ctx.env, ['context', '--agent', 'codex', '--no-usage']);
+    assert.strictEqual(r.status, 0, r.stderr);
+    const s6 = splitSection6(r.stdout);
+    assert.ok(s6.shown.some((line) => line.includes('commit-new-c')), '最新写入的条目应展示');
+    assert.ok(s6.shown.some((line) => line.includes('commit-new-a')), '最近 3 条都应展示');
+    assert.ok(s6.shown.some((line) => line.includes('commit-focus')), 'weight≥1.5 条目恒显');
+    assert.ok(!s6.shown.some((line) => line.includes('commit-c01')), '最旧条目不应展示');
+    assert.strictEqual(s6.collapsed.length, 1);
+    assert.match(s6.collapsed[0], /另有 25 条更早的 COMMIT/);
   });
 });
 

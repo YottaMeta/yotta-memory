@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const memory = require('../bin/yotta-memory.js');
 
 const BIN = path.join(__dirname, '..', 'bin', 'yotta-memory.js');
@@ -87,6 +87,47 @@ test('index consistency check is a no-op when files and index already match', ()
     const heal = memory.maybeHealIndex(root, { force: true });
     assert.strictEqual(heal.healed, false);
     assert.deepStrictEqual(fs.readFileSync(path.join(root, 'index.json')), bytes);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('未加密库重建包含私密条目：静默校准与 CLI reindex 都以磁盘为准（WorkBuddy D2 回归）', () => {
+  const root = tmpdir('ytm-reindex-private-');
+  try {
+    for (let i = 1; i <= 3; i++) {
+      const r = memory.rememberCore('COMMIT', '锚点' + i, '第 ' + i + ' 条', { root, owner: 'wb-smoke', agent: 'wb-smoke' });
+      assert.strictEqual(r.error, false, r.text);
+    }
+    assert.strictEqual(readIndex(root).entries.length, 3);
+
+    // 模拟索引损坏：条目全丢 → 静默校准应扫盘重建（此前私密条目会被整段跳过）
+    writeIndex(root, []);
+    const heal = memory.maybeHealIndex(root, { force: true });
+    assert.strictEqual(heal.healed, true);
+    assert.strictEqual(readIndex(root).entries.length, 3, '静默校准应重建私密条目');
+    assert.strictEqual(memory.indexConsistencyReport(root).drift, false);
+
+    // 再次损坏 → CLI reindex 也必须全量重建（此前输出「已重建索引（0 条）」且检索永久失效）
+    writeIndex(root, []);
+    const configDir = path.join(root, '.config');
+    fs.mkdirSync(configDir, { recursive: true });
+    const env = Object.assign({}, process.env, {
+      YOTTA_MEMORY_HOME: root,
+      YOTTA_MEMORY_CONFIG_DIR: configDir,
+      YOTTA_MEMORY_AGENT_HOME: path.join(root, '.agent-home'),
+    });
+    const r = spawnSync(process.execPath, [BIN, 'reindex'], { encoding: 'utf8', env });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stdout, /已重建索引 .*（3 条）/);
+    const entries = readIndex(root).entries;
+    assert.strictEqual(entries.length, 3);
+    assert.strictEqual(entries.filter((e) => e.scope === 'private').length, 3, '私密条目应同存主索引');
+
+    // 重建后可检索
+    const recall = spawnSync(process.execPath, [BIN, 'recall', '--agent', 'wb-smoke'], { encoding: 'utf8', env });
+    assert.strictEqual(recall.status, 0, recall.stderr);
+    assert.match(recall.stdout, /共 3 条记忆/);
   } finally {
     cleanup(root);
   }
