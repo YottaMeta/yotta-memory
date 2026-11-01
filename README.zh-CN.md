@@ -22,7 +22,7 @@
 </p>
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
-> 🆕 **v0.23.1（ClawHub 门面）**：ClawHub 上的技能卡改为英文优先的双语摘要与描述（新增 `clawhub-dist/yotta-memory` 专属发布副本），README 首屏新增上面三条使用案例；命令、参数、输出与记忆库格式全部不变。
+> 🆕 **v0.23.2（ClawHub 门面）**：ClawHub 上的技能卡改为英文优先的双语摘要与描述（新增 `clawhub-dist/yotta-memory` 专属发布副本），README 首屏新增上面三条使用案例；命令、参数、输出与记忆库格式全部不变。
 > 🆕 **v0.20.0（上下文分页 + 画像驱逐修复）**：`memory.hook` 的 PREF 驱逐空转已修复——hook / paging 决策生效时，画像段落按实时可读条目渲染并套用同一套过滤；自我接入档案不进候选、不可驱逐。新增 `context.paging`：仅在显式 `--budget` 时调用，hook 先过滤、paging 再排序与分页；`drop` 始终安全应用，`order` 仅在 `complete:true` 且未截断时应用。`context --json` 新增 `paging` 块，`--explain` 增加 `[paging]` 轨迹。配置与协议见 `references/provider-protocol.md`。
 > 🆕 **v0.18.1（蒸馏溯源 + 日期绝对化 + 巩固标记 + 规则晋升建议 + 写入纪律）**：`distill` 新增分类型提取清单（事件 / 教训 / 待办 / 成长 / 规则边界 / 其他）+ 逐条 `[溯源: 文件#L<a>-L<b>]` + 实测质量指标 + 跳过与边界，`--json` 输出结构化报告；`consolidate` 摘要按条目 `created` 把「昨天 / 上周 / 本月 / 今年」写成绝对日期，归档副本写入巩固标记（`--undo` 剥离还原）；`maintain --rules` 只读给出「重复踩坑 → 建议升级为规则」（默认阈值 3，不自动写 BOUND）；记忆守则新增冲突权威顺序 6 层与写入纪律 3 条。
 

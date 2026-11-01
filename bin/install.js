@@ -108,7 +108,12 @@ function skillVersion() {
     const data = JSON.parse(fs.readFileSync(path.join(PKG_ROOT, 'package.json'), 'utf8'));
     return data.version || null;
   } catch (_) {
-    return null;
+    try {
+      const version = fs.readFileSync(path.join(PKG_ROOT, 'VERSION'), 'utf8').trim();
+      return version || null;
+    } catch (_) {
+      return null;
+    }
   }
 }
 
@@ -178,6 +183,63 @@ function assertSafeTarget(target) {
   if (rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))) {
     throw new UsageError('目标目录不能在技能源目录内（防止自装自毁）');
   }
+  if (isDirectLink(target) && !isManagedHubTarget(target)) {
+    throw new TargetError('目标目录是符号链接或 junction，拒绝跟随: ' + target);
+  }
+}
+
+function isDirectLink(target) {
+  let stat = null;
+  try { stat = fs.lstatSync(target); } catch (_) { return false; }
+  if (stat.isSymbolicLink()) return true;
+  try {
+    const real = fs.realpathSync(target);
+    const parentReal = fs.realpathSync(path.dirname(target));
+    const norm = (value) => process.platform === 'win32'
+      ? path.resolve(value).toLowerCase()
+      : path.resolve(value);
+    return norm(real) !== norm(path.join(parentReal, path.basename(target)));
+  } catch (_) {
+    return false;
+  }
+}
+
+function isManagedHubTarget(target) {
+  if (!isDirectLink(target)) return false;
+  try {
+    const real = fs.realpathSync(target);
+    if (path.basename(real) !== SKILL_NAME) return false;
+    const parent = path.dirname(real);
+    return fs.existsSync(path.join(parent, '.yotta-hub.json'))
+      || fs.existsSync(path.join(parent, '.yotta-links.json'));
+  } catch (_) {
+    return false;
+  }
+}
+
+function removeLink(target) {
+  try {
+    fs.unlinkSync(target);
+  } catch (_) {
+    fs.rmdirSync(target);
+  }
+}
+
+function safeRemove(target) {
+  let stat = null;
+  try { stat = fs.lstatSync(target); } catch (_) { return; }
+  if (isDirectLink(target)) {
+    removeLink(target);
+    return;
+  }
+  if (stat.isDirectory()) {
+    for (const name of fs.readdirSync(target)) {
+      safeRemove(path.join(target, name));
+    }
+    fs.rmdirSync(target);
+  } else {
+    fs.unlinkSync(target);
+  }
 }
 
 function shouldSkipCache(name, isFile) {
@@ -195,9 +257,18 @@ function copyDir(src, dst, topLevel) {
     const s = path.join(src, entry.name);
     const d = path.join(dst, entry.name);
     if (entry.isDirectory()) {
+      if (isDirectLink(d)) {
+        throw new TargetError('目标目录包含符号链接或 junction，拒绝写入: ' + d);
+      }
       fs.mkdirSync(d, { recursive: true });
+      if (isDirectLink(d)) {
+        throw new TargetError('目标目录包含符号链接或 junction，拒绝写入: ' + d);
+      }
       copyDir(s, d, false);
     } else if (entry.isFile()) {
+      if (isDirectLink(d)) {
+        throw new TargetError('目标文件是符号链接，拒绝写入: ' + d);
+      }
       fs.copyFileSync(s, d);
     }
   }
@@ -208,16 +279,18 @@ function copyDir(src, dst, topLevel) {
 // 不整目录删除、不跟随符号链接。
 function cleanResidue(target) {
   const removed = [];
+  const workTarget = isManagedHubTarget(target) ? fs.realpathSync(target) : target;
   let stat = null;
-  try { stat = fs.statSync(target); } catch (_) { return removed; }
+  try { stat = fs.lstatSync(workTarget); } catch (_) { return removed; }
   if (!stat.isDirectory()) return removed;
-  if (!fs.existsSync(path.join(target, 'SKILL.md'))) return removed;
+  if (isDirectLink(workTarget)) return removed;
+  if (!fs.existsSync(path.join(workTarget, 'SKILL.md'))) return removed;
   for (const name of TOP_SKIP) {
-    const p = path.join(target, name);
+    const p = path.join(workTarget, name);
     let entry = null;
     try { entry = fs.lstatSync(p); } catch (_) { continue; }
-    if (entry.isSymbolicLink()) continue;
-    fs.rmSync(p, { recursive: true, force: true });
+    if (entry.isSymbolicLink() || isDirectLink(p)) continue;
+    safeRemove(p);
     removed.push(name);
   }
   try {
@@ -233,10 +306,10 @@ function cleanResidue(target) {
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, entry.name);
-      if (entry.isSymbolicLink()) continue;
+      if (entry.isSymbolicLink() || isDirectLink(p)) continue;
       if (entry.isDirectory()) {
         if (CACHE_DIRS.has(entry.name)) {
-          fs.rmSync(p, { recursive: true, force: true });
+          safeRemove(p);
           removed.push(path.relative(target, p));
         } else {
           walk(p);
@@ -247,7 +320,7 @@ function cleanResidue(target) {
       }
     }
   };
-  walk(target);
+  walk(workTarget);
   return removed;
 }
 
@@ -255,13 +328,6 @@ function installTo(dest, opts) {
   if (!dest || typeof dest !== 'string') throw new UsageError('目标目录不能为空');
   const target = path.resolve(dest, SKILL_NAME);
   assertSafeTarget(target);
-  // fail-closed：目标基目录 / 技能目录是符号链接（含 Windows junction）时拒绝跟随；
-  // 与 install.sh 同口径，避免安装器改写 Hub 链接指向的真源（含 runtimePayload）。
-  for (const p of [path.resolve(dest), target]) {
-    let st = null;
-    try { st = fs.lstatSync(p); } catch (_) { continue; }
-    if (st.isSymbolicLink()) throw new TargetError('目标路径是符号链接，拒绝跟随：' + p);
-  }
   if (opts.dryRun) {
     console.log('[dry-run] 将安装到 -> ' + target);
     return target;
@@ -269,6 +335,9 @@ function installTo(dest, opts) {
   try {
     for (const rel of cleanResidue(target)) console.log('已清理残留: ' + rel);
     fs.mkdirSync(target, { recursive: true });
+    if (isDirectLink(target) && !isManagedHubTarget(target)) {
+      throw new TargetError('目标目录在安装期间变成了链接，拒绝写入: ' + target);
+    }
     copyDir(PKG_ROOT, target, true);
     if (!fs.existsSync(path.join(target, 'SKILL.md'))) {
       throw new InstallError('安装结果缺少 SKILL.md');

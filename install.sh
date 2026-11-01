@@ -125,6 +125,25 @@ assert_safe_target() {
   return 0
 }
 
+is_managed_hub_link() {
+  local p="$1" real parent
+  [ -L "$p" ] || return 1
+  real="$(resolve_path "$p")" || return 1
+  [ "$(basename "$real")" = "$SKILL_NAME" ] || return 1
+  parent="$(dirname "$real")"
+  [ -f "$parent/.yotta-hub.json" ] || [ -f "$parent/.yotta-links.json" ]
+}
+
+assert_no_nested_links() {
+  local dest="$1"
+  [ -d "$dest" ] || return 0
+  if find "$dest" -mindepth 1 -type l -print -quit 2>/dev/null | grep -q .; then
+    echo "安装失败：目标目录包含符号链接，拒绝写入：$dest" >&2
+    return 1
+  fi
+  return 0
+}
+
 # 清理旧版安装残留（fail-closed 白名单）：仅在目标目录已存在且含 SKILL.md 时触发；
 # 只删顶层开发项 + 任意层级缓存；不整目录删除、不跟随符号链接。
 DEV_SKIP="package.json package-lock.json bin lib test .github .git .gitignore .npmignore .gitattributes .yotta .tmp install.sh node_modules test-fixtures"
@@ -154,7 +173,15 @@ clean_residue() {
 # 任意层级跳过缓存（__pycache__ / .pytest_cache / .mypy_cache / *.pyc / *.pyo）。
 copy_tree() {
   local src="$1" dst="$2" top="$3" entry base
-  mkdir -p "$dst"
+  if [ "$top" != "1" ] && [ -L "$dst" ]; then
+    echo "安装失败：目标目录包含符号链接，拒绝写入：$dst" >&2
+    return 1
+  fi
+  mkdir -p "$dst" || return 1
+  if [ "$top" != "1" ] && [ -L "$dst" ]; then
+    echo "安装失败：目标目录包含符号链接，拒绝写入：$dst" >&2
+    return 1
+  fi
   for entry in "$src"/* "$src"/.[!.]* "$src"/..?*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     base="$(basename "$entry")"
@@ -170,11 +197,19 @@ copy_tree() {
       esac
     fi
     if [ -d "$entry" ] && [ ! -L "$entry" ]; then
+      if [ -L "$dst/$base" ]; then
+        echo "安装失败：目标目录包含符号链接，拒绝写入：$dst/$base" >&2
+        return 1
+      fi
       copy_tree "$entry" "$dst/$base" 0 || return 1
     else
       case "$base" in
         *.pyc|*.pyo) continue ;;
       esac
+      if [ -L "$dst/$base" ]; then
+        echo "安装失败：目标文件是符号链接，拒绝写入：$dst/$base" >&2
+        return 1
+      fi
       cp -RP "$entry" "$dst/$base" || return 1
     fi
   done
@@ -191,7 +226,7 @@ install_to() {
     echo "安装失败：目标路径已存在且不是目录：$base" >&2
     return 1
   fi
-  if [ -L "$dest" ]; then
+  if [ -L "$dest" ] && ! is_managed_hub_link "$dest"; then
     echo "安装失败：技能目录是符号链接，拒绝跟随：$dest" >&2
     return 1
   fi
@@ -200,12 +235,17 @@ install_to() {
     return 1
   fi
   assert_safe_target "$dest" || return 1
+  assert_no_nested_links "$dest" || return 1
   if [ "$dry" = "1" ]; then
     echo "[dry-run] 将安装到 -> $dest"
     return 0
   fi
   clean_residue "$dest"
   mkdir -p "$dest" || return 1
+  if [ -L "$dest" ] && ! is_managed_hub_link "$dest"; then
+    echo "安装失败：技能目录在安装期间变成了链接，拒绝写入：$dest" >&2
+    return 1
+  fi
   copy_tree "$SOURCE_DIR" "$dest" 1 || return 1
   if [ ! -f "$dest/SKILL.md" ]; then
     echo "安装失败：结果缺少 SKILL.md" >&2
