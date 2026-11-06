@@ -78,6 +78,13 @@ function runHelp() {
   return result.stdout;
 }
 
+function runHelpStable() {
+  return runHelp()
+    .split('\n')
+    .filter((line) => !/^yotta-memory v\d/.test(line))
+    .join('\n');
+}
+
 test('HELP_MODEL is the single source for commands, subcommands and options', () => {
   assert.ok(Array.isArray(memory.HELP_MODEL), 'HELP_MODEL must be exported as an array');
   const commands = flattenCommands(memory.HELP_MODEL);
@@ -147,11 +154,11 @@ test('command-specific options stay documented', () => {
 });
 
 test('top-level help remains render-stable', () => {
-  const stdout = runHelp();
+  const stdout = runHelpStable();
   const digest = crypto.createHash('sha256').update(stdout).digest('hex');
   assert.strictEqual(
     digest,
-    '258af2d6f7e2711b9017065684de54e42ed2f3092507943f1a354cb1b1cfb807',
+    '9a56e2fe0a289b6a6a18170d6708d7a4deed64ab6658adeca27767b862581bcf',
     'top-level help changed; review every command/option line, then update the snapshot digest intentionally'
   );
 });
