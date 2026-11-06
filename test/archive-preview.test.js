@@ -173,7 +173,7 @@ test('archive 有候选时执行路径不变：闸门 + 快照 + 审计 + 归档
 
     assert.strictEqual(r.error, false, r.text);
     assert.match(r.text, /^已归档 1 条旧记忆到/);
-    assert.match(r.text, /事务快照: GoN-/);
+    assert.ok(r.text.includes('事务快照: ' + os.hostname() + '-'), r.text);
     assert.strictEqual(r.report.archived.length, 1);
     assert.strictEqual(dirEntries(opts.snapshotDir).length, 1, '执行路径必须创建事务快照');
     assert.ok(!fs.existsSync(target), '被归档条目应离开主库');

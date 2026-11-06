@@ -107,8 +107,15 @@ test('doctor is available through the CLI and MCP surface', () => {
     assert.match(parsed.text, /yotta-memory doctor/);
 
     assert.ok(memory.mcpTools().some((tool) => tool.name === 'doctor'));
-    const call = memory.callTool('doctor', {}, { agent: 'codex' });
-    assert.strictEqual(call.error, false);
-    assert.match(call.text, /yotta-memory doctor/);
+    const oldHome = process.env.YOTTA_MEMORY_HOME;
+    process.env.YOTTA_MEMORY_HOME = root;
+    try {
+      const call = memory.callTool('doctor', {}, { agent: 'codex' });
+      assert.strictEqual(call.error, false);
+      assert.match(call.text, /yotta-memory doctor/);
+    } finally {
+      if (oldHome === undefined) delete process.env.YOTTA_MEMORY_HOME;
+      else process.env.YOTTA_MEMORY_HOME = oldHome;
+    }
   });
 });

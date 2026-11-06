@@ -45,7 +45,9 @@ function runCli(args, env) {
 
 function writeStub(dir, name, lines) {
   const stub = path.join(dir, name);
-  fs.writeFileSync(stub, ["'use strict';"].concat(lines).join('\n') + '\n', 'utf8');
+  const shebang = process.platform === 'win32' ? [] : ['#!/usr/bin/env node'];
+  fs.writeFileSync(stub, shebang.concat(["'use strict';"], lines).join('\n') + '\n', 'utf8');
+  if (process.platform !== 'win32') fs.chmodSync(stub, 0o755);
   return stub;
 }
 
