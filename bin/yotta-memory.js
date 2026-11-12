@@ -22,12 +22,13 @@ const os = require('os');
 const crypto = require('crypto');
 const http = require('http');
 const net = require('net');
+const zlib = require('zlib');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.23.3';
-const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path', '--from']);
-const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--propose', '--audit', '--capacity', '--rules', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--no-usage', '--yes', '--keep-memories', '--keep-identity']);
+const VERSION = '0.24.0';
+const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path', '--from', '--from-plan', '--batch']);
+const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--propose', '--audit', '--capacity', '--rules', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--no-usage', '--yes', '--keep-memories', '--keep-identity', '--stats', '--include-flat', '--no-policy', '--policy-candidates']);
 
 function helpOption(flag, arg, what, when, caution) {
   return { flag: flag, arg: arg || '', what: what, when: when || '', caution: caution || '' };
@@ -119,6 +120,28 @@ const HELP_MODEL = [
       helpOption('--template', '<文件>', '用模板声明显式期望（owner / 最小条数 / 类型条数 / 查询）', '有明确验收清单、要按清单核对时', '模板只加严判定，不会放宽或改写探针'),
       helpOption('--json', '', '输出 JSON', '脚本或自动化读取体检结果时', ''),
     ] },
+    { name: 'index', usage: 'index --stats [--json]', what: '只读分析公共索引体积、字段占比与 gzip 分片预估', when: '判断是否需要升级索引格式、压缩或分片时', options: [
+      helpOption('--stats', '', '输出索引统计报告', '分析索引膨胀根因与预估压缩收益时', '只读：不重建索引，不改任何记忆文件'),
+      helpOption('--json', '', '输出 JSON', '脚本读取字段体积、token 与压缩预估时', ''),
+    ] },
+    { name: 'layout', usage: 'layout <plan|apply|rollback> [选项]', what: '预演、执行或回滚日级目录重平衡', when: '单个年/月目录文件数超过阈值、需要可回滚迁移时', subcommands: [
+      helpSub('plan', 'plan [--threshold <数量>] [--include-flat] [--out <文件>] [--json]', '生成布局迁移计划', '先确定会移动哪些文件、目标路径和冲突时', [
+        helpOption('--threshold', '<数量>', '目录文件数超过该值时进入计划', '默认阈值不合适时', ''),
+        helpOption('--include-flat', '', '把旧平铺根也纳入计划', '确认愿意迁移旧平铺文件时', '默认只处理年/月桶，旧平铺保持原位'),
+        helpOption('--out', '<文件>', '把计划写到指定位置', '需要把计划交给维护窗口审阅时', ''),
+        helpOption('--json', '', '输出 JSON', '自动化读取候选、操作与冲突时', ''),
+      ]),
+      helpSub('apply', 'apply --from-plan <文件> --yes [--json]', '执行已审阅的布局迁移计划', '维护窗口内确认计划无冲突后', [
+        helpOption('--from-plan', '<文件>', '指定布局迁移计划文件', '执行 plan 生成的计划时', ''),
+        helpOption('--yes', '', '跳过交互确认', '计划已审阅且维护窗口已开始时', '会移动记忆文件；失败时自动逆序回滚'),
+        helpOption('--json', '', '输出 JSON', '自动化执行迁移时', ''),
+      ]),
+      helpSub('rollback', 'rollback --batch <id> --yes [--json]', '按 journal 回滚一次布局迁移', '迁移后发现问题、需要恢复原路径时', [
+        helpOption('--batch', '<id>', '指定布局迁移批次', '找回滚 journal 时', ''),
+        helpOption('--yes', '', '跳过交互确认', '已确认要恢复原布局时', '会移动记忆文件；按 journal 逆序恢复'),
+        helpOption('--json', '', '输出 JSON', '自动化回滚时', ''),
+      ]),
+    ] },
     { name: 'maintain', usage: 'maintain [选项]', what: '记忆自组织：归档、遗忘候选、去重和合并', when: '定期清理低价值记忆、合并重复条目时', options: [
       helpOption('--capacity', '', '查看容量水位与淘汰 / 晋升建议', '库变大，想看哪些条目值得清理或提升时', '只读报告，不会自动归档或改权重'),
       helpOption('--rules', '', '查看重复踩坑 → 建议升级为规则的清单', '同一类问题反复出现、想把它固化成 BOUND 规则时', '只读报告，不自动写规则；阈值走 config maintain_rule_min_hits'),
@@ -183,6 +206,9 @@ const HELP_MODEL = [
       helpOption('--yes', '', '跳过交互确认', '自动化里执行隔离时', '跳过确认后不再二次询问，请先看一遍命中清单'),
       helpOption('--restore', '', '还原最近一个隔离批次', '隔离后发现问题、要恢复原文时', '会覆盖当前文件；批次已还原过则拒绝重复还原'),
       helpOption('--id', '<id>', '指定要还原的隔离批次', '要还原的不是最近一批时', ''),
+      helpOption('--no-policy', '', '忽略扫描例外策略做全量复核', '怀疑策略过期或想重新确认所有历史命中时', '会重新显示已抑制命中，不改策略文件'),
+      helpOption('--policy-candidates', '', '只生成例外策略候选清单', '历史安全语料需要人工复核后配置例外时', '只读扫描；不自动写入 security/scan-policy.json'),
+      helpOption('--out', '<文件>', '把候选清单写到文件', '想把候选交给人工复核或评审时', '仅用于 --policy-candidates；不会写策略文件'),
     ] },
     { name: 'reindex', usage: 'reindex', what: '重建记忆索引', when: '索引损坏、手动改过记忆文件或 doctor 提示索引异常时', options: [] },
     { name: 'export', usage: 'export --out <文件.json>', what: '导出全部记忆', when: '备份、迁移或做离线检查时', options: [helpOption('--out', '<文件>', '指定导出文件', '导出时必须给出目标 JSON 文件', '')] },
@@ -332,6 +358,11 @@ const VIEW_HELP_QUICK = [
     { cmd: 'backup restore', example: 'yotta-memory backup restore <id> --to <目录>', danger: true, note: '恢复会写入目标目录；覆盖非空目录需显式 --force，先确认目标和备份' },
     { cmd: 'backup drill', example: 'yotta-memory backup drill <id>', note: '先演练确认备份可用，再正式恢复' },
     { cmd: 'doctor', example: 'yotta-memory doctor' },
+    { cmd: 'index', example: 'yotta-memory index --stats --json', note: '只读统计；--stats 不会重建索引' },
+    { cmd: 'layout', example: 'yotta-memory layout <子命令>' },
+    { cmd: 'layout plan', example: 'yotta-memory layout plan --json' },
+    { cmd: 'layout apply', example: 'yotta-memory layout apply --from-plan <文件> --yes', danger: true, note: '会移动记忆文件；先审阅计划，失败时自动逆序回滚' },
+    { cmd: 'layout rollback', example: 'yotta-memory layout rollback --batch <id> --yes', danger: true, note: '按 journal 逆序恢复原路径；先确认批次' },
     { cmd: 'maintain', example: 'yotta-memory maintain --capacity', note: '只读报告，不会自动归档或改权重' },
     { cmd: 'consolidate', example: 'yotta-memory consolidate --propose' },
     { cmd: 'distill', example: 'yotta-memory distill --model <命令>' },
@@ -1077,12 +1108,13 @@ function typeSubdir(type, owner) {
   const id = owner || '';
   return path.join(PRIVATE_DIR, id, TYPE_DIRS[t]);
 }
-// v0.17.0 规模：新写入按 <yyyy>/<mm> 分层（公共 facts/<yyyy>/<mm>/，私密 private/<owner>/<type>/<yyyy>/<mm>/）。
+// v0.24.0 规模：新写入按 <yyyy>/<mm>/<dd> 分层（公共 facts/<yyyy>/<mm>/<dd>/，
+// 私密 private/<owner>/<type>/<yyyy>/<mm>/<dd>/）。
 // 只影响新写入；旧平铺文件保持原位继续可读，不自动迁移。
 function dateSubdir(dateStr) {
   const d = String(dateStr || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return '';
-  return path.join(d.slice(0, 4), d.slice(5, 7));
+  return path.join(d.slice(0, 4), d.slice(5, 7), d.slice(8, 10));
 }
 function entryWriteDir(root, type, owner, dateStr) {
   const base = path.join(root, typeSubdir(type, owner));
@@ -1717,10 +1749,7 @@ function recentlyWrittenFiles(typeDir, writeDir) {
   const yearDir = path.dirname(writeDir);
   const seen = new Set(out);
   if (fs.existsSync(yearDir)) {
-    for (const fp of fs.readdirSync(yearDir)) {
-      const full = path.join(yearDir, fp);
-      if (fs.statSync(full).isFile() && MEMORY_FILE_RE.test(fp) && !seen.has(full)) out.push(full);
-    }
+    walkEntryFiles(yearDir, out);
   }
   if (fs.existsSync(typeDir)) {
     for (const f of fs.readdirSync(typeDir)) {
@@ -2287,14 +2316,38 @@ function writeProfileText(root, owner, text) {
 
 // ---- 索引（index.json）----
 function indexPath(root) { return path.join(root, INDEX_FILE); }
-const INDEX_VERSION = 4;
-// v0.8.1 超大库索引分片：公共 index.json 超过阈值按年份分片（index-<year>.json），避免单文件膨胀。
+const INDEX_VERSION = 5;
+const INDEX_MIN_SUPPORTED_VERSION = 4;
+// v0.24.0：索引按逻辑体积或条目数触发年份分片；大库使用 gzip 分片。
 const INDEX_SHARD_THRESHOLD = 5000;
-// 安全校验：分片文件名必须匹配 index-YYYY.json，防 manifest 篡改导致路径穿越。
-const SHARD_RE = /^index-\d{4}\.json$/;
+const INDEX_COMPRESS_TRIGGER_BYTES = 4 * 1024 * 1024;
+// 安全校验：只接受 index-YYYY.json(.gz)，防 manifest 篡改导致路径穿越。
+const SHARD_RE = /^index-\d{4}\.json(?:\.gz)?$/;
 function isSafeShardName(name) { return typeof name === 'string' && SHARD_RE.test(name); }
-function indexShardName(year) { return 'index-' + year + '.json'; }
-function shardYear(name) { return String(name).slice('index-'.length, -'.json'.length); }
+function isGzipShardName(name) { return typeof name === 'string' && /\.json\.gz$/.test(name); }
+function indexShardName(year, compressed) { return 'index-' + year + '.json' + (compressed === false ? '' : '.gz'); }
+function shardYear(name) {
+  const match = String(name || '').match(/^index-(\d{4})\.json(?:\.gz)?$/);
+  return match ? match[1] : '';
+}
+function readIndexShard(root, name) {
+  if (!isSafeShardName(name)) return null;
+  const full = path.join(root, name);
+  if (!fs.existsSync(full)) return null;
+  try {
+    const raw = fs.readFileSync(full);
+    const text = isGzipShardName(name) ? zlib.gunzipSync(raw).toString('utf8') : raw.toString('utf8');
+    const parsed = JSON.parse(text);
+    return parsed && Array.isArray(parsed.entries) ? parsed : null;
+  } catch (error) {
+    return null;
+  }
+}
+function writeIndexShard(root, name, payload) {
+  const raw = Buffer.from(JSON.stringify(payload), 'utf8');
+  const data = isGzipShardName(name) ? zlib.gzipSync(raw, { level: 9, mtime: 0 }) : raw;
+  atomicWriteFileSync(path.join(root, name), data);
+}
 function entryYear(entry) {
   return String((entry && entry.created) || '').slice(0, 4) || String(today()).slice(0, 4);
 }
@@ -2317,7 +2370,7 @@ function loadIndexManifest(root) {
   if (!fs.existsSync(p)) return null;
   try {
     const d = JSON.parse(fs.readFileSync(p, 'utf8'));
-    if (d && Array.isArray(d.shards)) return d;
+    if (d && Array.isArray(d.shards) && (!d.version || d.version >= INDEX_MIN_SUPPORTED_VERSION)) return d;
   } catch (e) { /* ignore */ }
   return null;
 }
@@ -2328,20 +2381,17 @@ function loadIndex(root) {
     const d = JSON.parse(fs.readFileSync(p, 'utf8'));
     if (!d) return null;
     if (Array.isArray(d.entries)) {
-      // v0.8.0 语义索引（字段加权 + 拼音 token）version=3；v0.8.1 分片 version=4；旧版索引返回 null 触发重建
-      if (d.version && d.version >= INDEX_VERSION) return d.entries;
+      // v4 平铺索引与 v5 平铺索引都继续读取；更旧版本返回 null 触发重建。
+      if (d.version && d.version >= INDEX_MIN_SUPPORTED_VERSION) return d.entries;
       return null;
     }
     if (Array.isArray(d.shards)) {
-      // v0.8.1 分片 manifest：串联各分片条目
-      if (d.version && d.version < INDEX_VERSION) return null;
+      if (d.version && d.version < INDEX_MIN_SUPPORTED_VERSION) return null;
       const out = [];
       for (const sh of d.shards) {
-        if (!isSafeShardName(sh)) continue;
-        const sp = path.join(root, sh);
-        if (!fs.existsSync(sp)) continue;
-        const sd = JSON.parse(fs.readFileSync(sp, 'utf8'));
-        if (sd && Array.isArray(sd.entries)) out.push.apply(out, sd.entries);
+        const sd = readIndexShard(root, sh);
+        if (!sd) return null;
+        out.push.apply(out, sd.entries);
       }
       return out;
     }
@@ -2361,21 +2411,20 @@ function loadIndexFor(root, options) {
     const d = JSON.parse(fs.readFileSync(p, 'utf8'));
     if (!d) return null;
     if (Array.isArray(d.entries)) {
-      if (d.version && d.version < INDEX_VERSION) return null;
+      if (d.version && d.version < INDEX_MIN_SUPPORTED_VERSION) return null;
       const want = new Set(years);
       return d.entries.filter(function (e) { return want.has(entryYear(e)); });
     }
     if (Array.isArray(d.shards)) {
-      if (d.version && d.version < INDEX_VERSION) return null;
+      if (d.version && d.version < INDEX_MIN_SUPPORTED_VERSION) return null;
       const want = new Set(years);
       const out = [];
       for (const sh of d.shards) {
         if (!isSafeShardName(sh)) continue;
         if (!want.has(shardYear(sh))) continue; // 只读取命中年份的分片文件
-        const sp = path.join(root, sh);
-        if (!fs.existsSync(sp)) continue;
-        const sd = JSON.parse(fs.readFileSync(sp, 'utf8'));
-        if (sd && Array.isArray(sd.entries)) out.push.apply(out, sd.entries);
+        const sd = readIndexShard(root, sh);
+        if (!sd) return null;
+        out.push.apply(out, sd.entries);
       }
       return out;
     }
@@ -2395,10 +2444,15 @@ function indexEntriesFor(root, options) {
   return { entries: all.filter(function (e) { return want.has(entryYear(e)); }), error: '' };
 }
 function getIndex(root) { return loadIndex(root) || []; }
-function saveIndex(root, entries) {
+function saveIndex(root, entries, options) {
+  options = options || {};
   const clean = entries.map(function (e) { const c = Object.assign({}, e); delete c.meta; return c; });
   const old = loadIndexManifest(root);
-  if (clean.length > INDEX_SHARD_THRESHOLD) {
+  const shardThreshold = options.shardThresholdEntries === undefined ? INDEX_SHARD_THRESHOLD : Number(options.shardThresholdEntries);
+  const byteThreshold = options.compressThresholdBytes === undefined ? INDEX_COMPRESS_TRIGGER_BYTES : Number(options.compressThresholdBytes);
+  const compress = options.compress !== false;
+  const logicalBytes = jsonByteLength(clean);
+  if (clean.length > shardThreshold || logicalBytes > byteThreshold) {
     const byYear = {};
     for (const e of clean) {
       const y = entryYear(e);
@@ -2406,20 +2460,205 @@ function saveIndex(root, entries) {
     }
     const newShards = [];
     for (const y of Object.keys(byYear).sort()) {
-      const name = indexShardName(y);
-      atomicWriteFileSync(path.join(root, name), JSON.stringify({ version: INDEX_VERSION, year: (parseInt(y, 10) || 0), entries: byYear[y] }, null, 2), 'utf8');
+      const name = indexShardName(y, compress);
+      writeIndexShard(root, name, { version: INDEX_VERSION, year: (parseInt(y, 10) || 0), entries: byYear[y] });
       newShards.push(name);
     }
-    atomicWriteFileSync(indexPath(root), JSON.stringify({ version: INDEX_VERSION, updated: today(), shards: newShards, count: clean.length }, null, 2), 'utf8');
+    atomicWriteFileSync(indexPath(root), JSON.stringify({
+      version: INDEX_VERSION,
+      updated: today(),
+      format: compress ? 'gzip-year' : 'json-year',
+      shards: newShards,
+      count: clean.length,
+    }, null, 2), 'utf8');
     if (old && Array.isArray(old.shards)) {
       for (const sh of old.shards) if (newShards.indexOf(sh) === -1 && isSafeShardName(sh)) { try { fs.unlinkSync(path.join(root, sh)); } catch (e) {} }
     }
   } else {
+    atomicWriteFileSync(indexPath(root), JSON.stringify({ version: INDEX_VERSION, updated: today(), entries: clean }, null, 2), 'utf8');
     if (old && Array.isArray(old.shards)) {
       for (const sh of old.shards) { try { fs.unlinkSync(path.join(root, sh)); } catch (e) {} }
     }
-    atomicWriteFileSync(indexPath(root), JSON.stringify({ version: INDEX_VERSION, updated: today(), entries: clean }, null, 2), 'utf8');
   }
+}
+function jsonByteLength(value) {
+  return Buffer.byteLength(JSON.stringify(value === undefined ? null : value), 'utf8');
+}
+function indexFieldBytes(entries) {
+  const groups = {
+    tokens: ['tokens'],
+    statement: ['statement'],
+    subject: ['subject'],
+    tags: ['tags'],
+    usage: ['access_count', 'last_accessed', 'feedback_net', 'hit_days', 'hit_queries'],
+  };
+  const grouped = new Set();
+  for (const names of Object.values(groups)) for (const name of names) grouped.add(name);
+  const out = { tokens: 0, statement: 0, subject: 0, tags: 0, usage: 0, other: 0, total: 0, overhead: 0 };
+  for (const entry of entries) {
+    out.total += jsonByteLength(entry);
+    for (const group of Object.keys(groups)) {
+      for (const name of groups[group]) out[group] += jsonByteLength(entry[name]);
+    }
+    for (const name of Object.keys(entry)) {
+      if (!grouped.has(name)) out.other += jsonByteLength(entry[name]);
+    }
+  }
+  out.overhead = Math.max(0, out.total - (out.tokens + out.statement + out.subject + out.tags + out.usage + out.other));
+  return out;
+}
+function indexTokenStats(entries) {
+  let unique = 0;
+  let weighted = 0;
+  let pinyin = 0;
+  for (const entry of entries) {
+    const tokens = entry && entry.tokens && typeof entry.tokens === 'object' ? entry.tokens : {};
+    for (const key of Object.keys(tokens)) {
+      unique += 1;
+      weighted += Number(tokens[key]) || 0;
+      if (key.indexOf('py:') === 0 || key.indexOf('pyi:') === 0) pinyin += 1;
+    }
+  }
+  return {
+    unique: unique,
+    weighted: Math.round(weighted * 1000) / 1000,
+    pinyin: pinyin,
+    averageUniquePerEntry: entries.length ? Math.round((unique / entries.length) * 1000) / 1000 : 0,
+  };
+}
+function indexGzipProjection(entries) {
+  const byYear = {};
+  for (const entry of entries) {
+    const clean = Object.assign({}, entry);
+    delete clean.meta;
+    const year = entryYear(clean);
+    (byYear[year] = byYear[year] || []).push(clean);
+  }
+  const shards = [];
+  let gzipBytes = 0;
+  for (const year of Object.keys(byYear).sort()) {
+    const raw = Buffer.from(JSON.stringify({ version: 5, year: parseInt(year, 10) || 0, entries: byYear[year] }), 'utf8');
+    const compressed = zlib.gzipSync(raw, { level: 9, mtime: 0 });
+    gzipBytes += compressed.length;
+    shards.push({
+      year: year,
+      entries: byYear[year].length,
+      jsonBytes: raw.length,
+      gzipBytes: compressed.length,
+    });
+  }
+  const manifest = Buffer.from(JSON.stringify({
+    version: 5,
+    updated: '',
+    shards: shards.map(function (item) { return 'index-' + item.year + '.json.gz'; }),
+    count: entries.length,
+  }), 'utf8');
+  const storageBytes = gzipBytes + manifest.length;
+  return {
+    format: 'index-v5-gzip-year',
+    storageBytes: storageBytes,
+    manifestBytes: manifest.length,
+    shards: shards,
+  };
+}
+function indexStatsCore(opts) {
+  opts = opts || {};
+  const root = path.resolve(opts.root || userRoot());
+  const idx = indexPath(root);
+  if (!fs.existsSync(idx)) {
+    return { error: true, format: 'missing', entryCount: 0, storageBytes: 0, text: '索引不存在: ' + idx + '。请先运行 yotta-memory reindex。' };
+  }
+  let manifestBytes = 0;
+  let data = null;
+  try {
+    manifestBytes = fs.statSync(idx).size;
+    data = JSON.parse(fs.readFileSync(idx, 'utf8'));
+  } catch (error) {
+    return { error: true, format: 'invalid', entryCount: 0, storageBytes: manifestBytes, text: '索引无法解析: ' + error.message };
+  }
+  if (!data || (!Array.isArray(data.entries) && !Array.isArray(data.shards))) {
+    return { error: true, format: 'invalid', entryCount: 0, storageBytes: manifestBytes, text: '索引结构无效：缺少 entries 或 shards 数组。' };
+  }
+  const warnings = [];
+  const entries = [];
+  let shardBytes = 0;
+  const shards = [];
+  if (Array.isArray(data.entries)) {
+    entries.push.apply(entries, data.entries);
+  } else {
+    for (const shard of data.shards) {
+      if (!isSafeShardName(shard)) {
+        warnings.push('忽略不安全分片名: ' + String(shard));
+        continue;
+      }
+      const full = path.join(root, shard);
+      if (!fs.existsSync(full)) {
+        warnings.push('分片缺失: ' + shard);
+        continue;
+      }
+      try {
+        const bytes = fs.statSync(full).size;
+        const parsed = readIndexShard(root, shard);
+        shardBytes += bytes;
+        if (parsed) {
+          entries.push.apply(entries, parsed.entries);
+          shards.push({ name: shard, bytes: bytes, entries: parsed.entries.length });
+        } else {
+          warnings.push('分片结构无效: ' + shard);
+        }
+      } catch (error) {
+        warnings.push('分片无法解析: ' + shard + '（' + error.message + '）');
+      }
+    }
+  }
+  const storageBytes = manifestBytes + shardBytes;
+  const logicalBytes = jsonByteLength(entries);
+  const fieldBytes = indexFieldBytes(entries);
+  const tokens = indexTokenStats(entries);
+  const gzipProjection = indexGzipProjection(entries);
+  const warnBytes = scaleThreshold(loadConfig(), 'scale_warn_index_bytes');
+  gzipProjection.underWarningThreshold = gzipProjection.storageBytes <= warnBytes;
+  gzipProjection.warningThresholdBytes = warnBytes;
+  gzipProjection.compressionRatio = storageBytes ? Math.round((gzipProjection.storageBytes / storageBytes) * 1000) / 1000 : 0;
+  const triggerReasons = [];
+  if (entries.length > INDEX_SHARD_THRESHOLD) triggerReasons.push('entries');
+  if (logicalBytes > INDEX_COMPRESS_TRIGGER_BYTES) triggerReasons.push('logical_bytes');
+  const lines = [
+    '索引统计（只读）',
+    '- 格式: ' + (Array.isArray(data.entries) ? 'inline' : 'sharded'),
+    '- 条目: ' + entries.length,
+    '- 索引存储: ' + storageBytes + ' 字节（manifest ' + manifestBytes + ' / 分片 ' + shardBytes + '）',
+    '- 逻辑原始体积: ' + logicalBytes + ' 字节',
+    '- token: ' + tokens.unique + ' 个唯一 token（加权 ' + tokens.weighted + ' / 拼音 ' + tokens.pinyin + ' / 平均 ' + tokens.averageUniquePerEntry + ' 每条例）',
+    '- 字段体积: tokens ' + fieldBytes.tokens + ' / statement ' + fieldBytes.statement + ' / subject ' + fieldBytes.subject + ' / tags ' + fieldBytes.tags + ' / usage ' + fieldBytes.usage + ' / other ' + fieldBytes.other,
+    '- gzip 年份分片预估: ' + gzipProjection.storageBytes + ' 字节（压缩比 ' + gzipProjection.compressionRatio + ' / 低于告警线 ' + (gzipProjection.underWarningThreshold ? '是' : '否') + '）',
+    '- 触发建议: ' + (triggerReasons.length ? triggerReasons.join(' + ') : '当前无需按现有阈值分片'),
+  ];
+  if (warnings.length) lines.push('- 告警: ' + warnings.join('；'));
+  return {
+    error: false,
+    root: root,
+    format: Array.isArray(data.entries) ? 'inline' : 'sharded',
+    version: Number(data.version || 0),
+    updated: data.updated || '',
+    entryCount: entries.length,
+    shardCount: shards.length,
+    shards: shards,
+    manifestBytes: manifestBytes,
+    shardBytes: shardBytes,
+    storageBytes: storageBytes,
+    logicalBytes: logicalBytes,
+    fieldBytes: fieldBytes,
+    tokens: tokens,
+    gzipProjection: gzipProjection,
+    trigger: {
+      entryThreshold: INDEX_SHARD_THRESHOLD,
+      logicalByteThreshold: INDEX_COMPRESS_TRIGGER_BYTES,
+      reasons: triggerReasons,
+    },
+    warnings: warnings,
+    text: lines.join('\n'),
+  };
 }
 function collectEntryFiles(root) {
   const dirs = [];
@@ -2533,6 +2772,318 @@ function layoutCollisionReport(root) {
   }
   report.ok = report.conflicts === 0 && report.unverified === 0;
   return report;
+}
+const LAYOUT_PLAN_DIR = path.join('.maintenance', 'layout-plans');
+const LAYOUT_JOURNAL_DIR = path.join('.maintenance', 'layout-journals');
+function safeLayoutRel(value) {
+  const rel = String(value || '').replace(/\\/g, '/');
+  if (!rel || path.isAbsolute(rel) || rel.split('/').includes('..')) return false;
+  if (!MEMORY_FILE_RE.test(path.posix.basename(rel))) return false;
+  return rel.indexOf(PUBLIC_DIR + '/') === 0 || rel.indexOf(PRIVATE_DIR + '/') === 0;
+}
+function layoutInsideRoot(root, rel) {
+  const base = path.resolve(root);
+  const full = path.resolve(root, String(rel || ''));
+  return full === base || full.indexOf(base + path.sep) === 0;
+}
+function layoutBaseInfo(rel) {
+  const parts = String(rel || '').split('/');
+  if (parts[0] === PUBLIC_DIR) return { kind: 'public', baseDepth: 1, owner: '', type: 'facts' };
+  if (parts[0] === PRIVATE_DIR && parts.length >= 3) {
+    return { kind: 'private', baseDepth: 3, owner: parts[1], type: parts[2] };
+  }
+  return null;
+}
+function isLayoutMonthBucket(rel, includeFlat) {
+  const parts = String(rel || '').split('/');
+  const info = layoutBaseInfo(rel);
+  if (!info) return false;
+  if (parts.length === info.baseDepth) return !!includeFlat;
+  if (parts.length !== info.baseDepth + 2) return false;
+  return /^\d{4}$/.test(parts[info.baseDepth]) && /^\d{2}$/.test(parts[info.baseDepth + 1]);
+}
+function layoutTargetFor(rel) {
+  const parts = String(rel || '').split('/');
+  const info = layoutBaseInfo(rel);
+  const base = path.basename(rel);
+  const match = base.match(/^(\d{4})-(\d{2})-(\d{2})-\d{4}\.md(?:\.enc)?$/);
+  if (!info || !match) return '';
+  return parts.slice(0, info.baseDepth).concat([match[1], match[2], match[3], base]).join('/');
+}
+function layoutCandidateDirs(root, includeFlat, threshold) {
+  const seeds = [];
+  const facts = path.join(root, PUBLIC_DIR);
+  if (fs.existsSync(facts)) seeds.push({ dir: facts, baseDepth: 1, owner: '' });
+  const pdir = path.join(root, PRIVATE_DIR);
+  if (fs.existsSync(pdir)) {
+    for (const owner of fs.readdirSync(pdir)) {
+      const ownerDir = path.join(pdir, owner);
+      if (!fs.statSync(ownerDir).isDirectory()) continue;
+      for (const type of PRIVATE_LEAF) {
+        const typeDir = path.join(ownerDir, type);
+        if (fs.existsSync(typeDir)) seeds.push({ dir: typeDir, baseDepth: 3, owner: owner });
+      }
+    }
+  }
+  const found = [];
+  const visit = function (dir) {
+    const rel = path.relative(root, dir).replace(/\\/g, '/');
+    if (isLayoutMonthBucket(rel, includeFlat)) {
+      const files = fs.readdirSync(dir, { withFileTypes: true })
+        .filter(function (entry) { return entry.isFile() && MEMORY_FILE_RE.test(entry.name); })
+        .map(function (entry) { return entry.name; });
+      if (files.length > threshold) {
+        const info = layoutBaseInfo(rel);
+        if (info && info.kind === 'private' && isEncrypted(root) && !getOwnerKeyFor(root, info.owner)) {
+          found.push({ path: rel, files: files.length, skipped: true, reason: 'encrypted_owner_without_key' });
+        } else {
+          found.push({ path: rel, files: files.length, skipped: false, reason: '' });
+        }
+      }
+    }
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) visit(path.join(dir, entry.name));
+    }
+  };
+  for (const seed of seeds) visit(seed.dir);
+  return found.sort(function (a, b) { return a.path.localeCompare(b.path); });
+}
+function layoutBatchId(now) {
+  return 'layout-' + now.toISOString().replace(/[:.]/g, '-') + '-' + crypto.randomBytes(3).toString('hex');
+}
+function layoutPlanCore(opts) {
+  opts = opts || {};
+  const root = path.resolve(opts.root || userRoot());
+  const cfg = loadConfig();
+  const threshold = opts.threshold === undefined ? scaleThreshold(cfg, 'scale_warn_files_per_dir') : Number(opts.threshold);
+  const includeFlat = !!opts.includeFlat;
+  const now = opts.now ? new Date(opts.now) : new Date();
+  const batch = layoutBatchId(now);
+  const candidates = layoutCandidateDirs(root, includeFlat, threshold);
+  const operations = [];
+  const conflicts = [];
+  const warnings = [];
+  for (const candidate of candidates) {
+    if (candidate.skipped) {
+      warnings.push('跳过 ' + candidate.path + ': 加密 owner 无可用密钥');
+      continue;
+    }
+    const dir = path.join(root, candidate.path);
+    for (const name of fs.readdirSync(dir)) {
+      if (!MEMORY_FILE_RE.test(name)) continue;
+      const from = path.posix.join(candidate.path, name);
+      const to = layoutTargetFor(from);
+      if (!to || !safeLayoutRel(to)) {
+        conflicts.push({ from: from, to: to, reason: 'target_invalid' });
+        continue;
+      }
+      if (fs.existsSync(path.join(root, to))) {
+        conflicts.push({ from: from, to: to, reason: 'target_exists' });
+        continue;
+      }
+      operations.push({
+        from: from,
+        to: to,
+        sha256: normalizedLayoutDigest(fs.readFileSync(path.join(root, from))),
+        status: 'pending',
+      });
+    }
+  }
+  operations.sort(function (a, b) { return a.from.localeCompare(b.from); });
+  const plan = {
+    batch: batch,
+    createdAt: now.toISOString(),
+    root: root,
+    threshold: threshold,
+    includeFlat: includeFlat,
+    candidates: candidates,
+    operations: operations,
+    conflicts: conflicts,
+    warnings: warnings,
+    planFile: '',
+  };
+  if (conflicts.length) {
+    plan.error = true;
+    plan.text = '布局迁移计划存在 ' + conflicts.length + ' 个冲突，拒绝生成可执行计划。\n'
+      + conflicts.map(function (item) { return '- ' + item.from + ' -> ' + item.to + '（' + item.reason + '）'; }).join('\n');
+    return plan;
+  }
+  const planFile = opts.out
+    ? path.resolve(String(opts.out))
+    : path.join(root, LAYOUT_PLAN_DIR, batch + '.json');
+  fs.mkdirSync(path.dirname(planFile), { recursive: true });
+  plan.planFile = planFile;
+  atomicWriteFileSync(planFile, JSON.stringify(plan, null, 2), 'utf8');
+  plan.error = false;
+  plan.text = '布局迁移计划: ' + batch + '\n- 目录: ' + candidates.length + ' 个候选'
+    + '（可迁移 ' + candidates.filter(function (item) { return !item.skipped; }).length + '）\n'
+    + '- 文件: ' + operations.length + ' 个\n- 计划: ' + planFile
+    + (warnings.length ? '\n- 告警: ' + warnings.join('；') : '');
+  return plan;
+}
+function validateLayoutPlan(root, plan) {
+  if (!plan || plan.root !== root) return '计划 root 与当前记忆库不一致，拒绝执行。';
+  if (!/^layout-[A-Za-z0-9-]+$/.test(String(plan.batch || ''))) return '计划 batch 不安全。';
+  if (!Array.isArray(plan.operations) || !plan.operations.length) return '计划没有可执行文件。';
+  if (Array.isArray(plan.conflicts) && plan.conflicts.length) return '计划包含冲突，拒绝执行。';
+  for (const op of plan.operations) {
+    if (!safeLayoutRel(op.from) || !safeLayoutRel(op.to) || !layoutInsideRoot(root, op.from) || !layoutInsideRoot(root, op.to)) {
+      return '计划包含不安全路径: ' + String(op.from) + ' -> ' + String(op.to);
+    }
+  }
+  return '';
+}
+function writeLayoutJournal(pathname, journal) {
+  atomicWriteFileSync(pathname, JSON.stringify(journal, null, 2), 'utf8');
+}
+function restoreLayoutDone(root, journal, pathname) {
+  let ok = true;
+  for (let i = journal.operations.length - 1; i >= 0; i--) {
+    const op = journal.operations[i];
+    if (op.status !== 'done') continue;
+    const from = path.join(root, op.from);
+    const to = path.join(root, op.to);
+    if (!fs.existsSync(to) || fs.existsSync(from)) {
+      op.status = 'rollback_conflict';
+      ok = false;
+      continue;
+    }
+    fs.mkdirSync(path.dirname(from), { recursive: true });
+    fs.renameSync(to, from);
+    op.status = 'rolled_back';
+    writeLayoutJournal(pathname, journal);
+  }
+  return ok;
+}
+function withLayoutLock(root, fn) {
+  const lock = path.join(root, '.maintenance', 'layout.lock');
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  try {
+    fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, created: new Date().toISOString() }), { encoding: 'utf8', flag: 'wx' });
+  } catch (error) {
+    return { error: true, text: '已有布局迁移在运行或上次未清理 lock: ' + lock };
+  }
+  try {
+    return fn();
+  } finally {
+    try { fs.unlinkSync(lock); } catch (error) { /* ignore */ }
+  }
+}
+function layoutApplyCore(opts) {
+  opts = opts || {};
+  const root = path.resolve(opts.root || userRoot());
+  if (!opts.yes) return { error: true, text: '拒绝执行布局迁移：请复核计划后显式加 --yes。' };
+  if (!opts.planFile) return { error: true, text: '请用 --from-plan <文件> 指定布局迁移计划。' };
+  const planFile = path.resolve(String(opts.planFile));
+  let plan = null;
+  try { plan = JSON.parse(fs.readFileSync(planFile, 'utf8')); } catch (error) {
+    return { error: true, text: '无法读取布局迁移计划: ' + error.message };
+  }
+  const invalid = validateLayoutPlan(root, plan);
+  if (invalid) return { error: true, text: invalid };
+  return withLayoutLock(root, function () {
+    const journalFile = path.join(root, LAYOUT_JOURNAL_DIR, plan.batch + '.json');
+    if (fs.existsSync(journalFile)) return { error: true, text: '该计划已有 journal，拒绝重复执行: ' + journalFile };
+    const journal = {
+      batch: plan.batch,
+      createdAt: plan.createdAt,
+      startedAt: new Date().toISOString(),
+      root: root,
+      status: 'applying',
+      operations: plan.operations.map(function (op) {
+        return { from: op.from, to: op.to, sha256: op.sha256, status: 'pending' };
+      }),
+    };
+    fs.mkdirSync(path.dirname(journalFile), { recursive: true });
+    writeLayoutJournal(journalFile, journal);
+    let moved = 0;
+    try {
+      for (const op of journal.operations) {
+        const from = path.join(root, op.from);
+        const to = path.join(root, op.to);
+        if (!fs.existsSync(from)) throw new Error('源文件缺失: ' + op.from);
+        const digest = normalizedLayoutDigest(fs.readFileSync(from));
+        if (digest !== op.sha256) throw new Error('源文件哈希变化: ' + op.from);
+        if (fs.existsSync(to)) throw new Error('目标已存在: ' + op.to);
+        fs.mkdirSync(path.dirname(to), { recursive: true });
+        fs.renameSync(from, to);
+        op.status = 'done';
+        moved += 1;
+        writeLayoutJournal(journalFile, journal);
+      }
+      buildIndex(root);
+      journal.status = 'applied';
+      journal.completedAt = new Date().toISOString();
+      writeLayoutJournal(journalFile, journal);
+      return {
+        error: false,
+        batch: plan.batch,
+        moved: moved,
+        rolledBack: false,
+        planFile: planFile,
+        journalFile: journalFile,
+        text: '布局迁移完成: ' + plan.batch + '（' + moved + ' 文件）\n计划: ' + planFile + '\nJournal: ' + journalFile,
+      };
+    } catch (error) {
+      const rolledBack = restoreLayoutDone(root, journal, journalFile);
+      journal.status = rolledBack ? 'rolled_back' : 'rollback_failed';
+      journal.error = error.message;
+      journal.completedAt = new Date().toISOString();
+      writeLayoutJournal(journalFile, journal);
+      try { buildIndex(root); } catch (e) { /* ignore */ }
+      return {
+        error: true,
+        batch: plan.batch,
+        moved: moved,
+        rolledBack: rolledBack,
+        planFile: planFile,
+        journalFile: journalFile,
+        text: '布局迁移失败并' + (rolledBack ? '已回滚' : '回滚不完整') + ': ' + error.message + '\nJournal: ' + journalFile,
+      };
+    }
+  });
+}
+function layoutRollbackCore(opts) {
+  opts = opts || {};
+  const root = path.resolve(opts.root || userRoot());
+  if (!opts.yes) return { error: true, text: '拒绝回滚布局迁移：请显式加 --yes。' };
+  if (!/^layout-[A-Za-z0-9-]+$/.test(String(opts.batch || ''))) return { error: true, text: '请用 --batch <id> 指定安全的布局迁移批次。' };
+  const journalFile = path.join(root, LAYOUT_JOURNAL_DIR, opts.batch + '.json');
+  let journal = null;
+  try { journal = JSON.parse(fs.readFileSync(journalFile, 'utf8')); } catch (error) {
+    return { error: true, text: '无法读取布局迁移 journal: ' + error.message };
+  }
+  if (journal.root !== root) return { error: true, text: 'journal root 与当前记忆库不一致。' };
+  if (journal.status === 'rolled_back') return { error: false, batch: opts.batch, rolledBack: 0, journalFile: journalFile, text: '布局迁移批次已回滚，无需重复操作。' };
+  if (journal.status !== 'applied') return { error: true, text: '批次状态不是 applied，不能常规回滚: ' + journal.status };
+  return withLayoutLock(root, function () {
+    let restored = 0;
+    try {
+      for (let i = journal.operations.length - 1; i >= 0; i--) {
+        const op = journal.operations[i];
+        if (op.status !== 'done') continue;
+        const from = path.join(root, op.from);
+        const to = path.join(root, op.to);
+        if (!fs.existsSync(to)) throw new Error('迁移目标缺失: ' + op.to);
+        if (fs.existsSync(from)) throw new Error('回滚目标已存在: ' + op.from);
+        fs.mkdirSync(path.dirname(from), { recursive: true });
+        fs.renameSync(to, from);
+        op.status = 'rolled_back';
+        restored += 1;
+        writeLayoutJournal(journalFile, journal);
+      }
+      buildIndex(root);
+      journal.status = 'rolled_back';
+      journal.rolledBackAt = new Date().toISOString();
+      writeLayoutJournal(journalFile, journal);
+      return { error: false, batch: opts.batch, restored: restored, journalFile: journalFile, text: '布局迁移已回滚: ' + opts.batch + '（' + restored + ' 文件）' };
+    } catch (error) {
+      journal.status = 'rollback_failed';
+      journal.rollbackError = error.message;
+      writeLayoutJournal(journalFile, journal);
+      return { error: true, batch: opts.batch, restored: restored, journalFile: journalFile, text: '布局回滚失败: ' + error.message };
+    }
+  });
 }
 // 迁移：把根下旧平铺 prefs|bounds|commits/*.md 按 frontmatter owner 迁入 private/<owner>/<type>/
 function migrateLayout(root) {
@@ -2804,15 +3355,13 @@ function touchIndex(root, relFiles, options) {
       for (const sh of manifest.shards) {
         if (!isSafeShardName(sh)) continue;
         if (yearSet && !yearSet.has(shardYear(sh))) continue;
-        const sp = path.join(root, sh);
-        if (!fs.existsSync(sp)) continue;
-        let sd = null; try { sd = JSON.parse(fs.readFileSync(sp, 'utf8')); } catch (e) { continue; }
-        if (!sd || !Array.isArray(sd.entries)) continue;
+        const sd = readIndexShard(root, sh);
+        if (!sd) continue;
         let dirty = false;
         for (const e of sd.entries) {
           if (set.has(e.file)) { bumpEntry(e); dirty = true; }
         }
-        if (dirty) atomicWriteFileSync(sp, JSON.stringify(sd, null, 2), 'utf8');
+        if (dirty) writeIndexShard(root, sh, sd);
       }
     });
     return;
@@ -3429,6 +3978,53 @@ function backupSetupCore(opts) {
       + (schedule && schedule.error ? '\n[警告] ' + schedule.text + '；serve 补跑仍会在启动后检查。' : ''),
   };
 }
+const BACKUP_FUTURE_TOLERANCE_MS = 15 * 60 * 1000;
+function backupCreatedTs(value) {
+  const ts = Date.parse(String(value || ''));
+  return Number.isFinite(ts) ? ts : null;
+}
+function compareBackupCreatedDesc(a, b) {
+  const at = backupCreatedTs(a && a.created);
+  const bt = backupCreatedTs(b && b.created);
+  if (at !== null && bt !== null && at !== bt) return bt - at;
+  if (at !== null && bt === null) return -1;
+  if (at === null && bt !== null) return 1;
+  return String((b && b.id) || '').localeCompare(String((a && a.id) || ''));
+}
+function selectLatestValidBackup(backups, nowMs) {
+  const now = Number.isFinite(nowMs) ? nowMs : Date.now();
+  const valid = [];
+  const anomalies = [];
+  for (const backup of backups || []) {
+    if (!backup || !backup.manifest) {
+      anomalies.push({ id: backup && backup.id || '', type: 'manifest_missing', created: backup && backup.created || '' });
+      continue;
+    }
+    if (!Array.isArray(backup.manifest.files)) {
+      anomalies.push({ id: backup.id, type: 'manifest_incomplete', created: backup.created || '' });
+      continue;
+    }
+    const createdTs = backupCreatedTs(backup.created);
+    if (createdTs === null) {
+      anomalies.push({ id: backup.id, type: 'invalid_created', created: backup.created || '' });
+      continue;
+    }
+    if (createdTs > now + BACKUP_FUTURE_TOLERANCE_MS) {
+      anomalies.push({ id: backup.id, type: 'future_timestamp', created: backup.created || '' });
+      continue;
+    }
+    valid.push(Object.assign({}, backup, { createdTs: createdTs }));
+  }
+  valid.sort(compareBackupCreatedDesc);
+  return { latestValid: valid[0] || null, anomalies: anomalies };
+}
+function backupAnomalyLabel(type) {
+  if (type === 'future_timestamp') return '未来时间';
+  if (type === 'manifest_missing') return 'manifest 缺失';
+  if (type === 'manifest_incomplete') return 'manifest 不完整';
+  if (type === 'invalid_created') return 'created 无效';
+  return type;
+}
 function backupStatusCore(opts) {
   opts = opts || {};
   const root = path.resolve(opts.root || userRoot());
@@ -3450,14 +4046,20 @@ function backupStatusCore(opts) {
     };
   }
   const listed = backupListCore({ dir: dir });
-  const latest = listed.backups[0] || null;
   const now = opts.now ? new Date(opts.now).getTime() : Date.now();
-  const createdTs = latest && latest.created ? new Date(latest.created).getTime() : NaN;
-  const ageHours = isNaN(createdTs) ? null : (now - createdTs) / 3600000;
+  const selection = selectLatestValidBackup(listed.backups, now);
+  const latest = selection.latestValid;
+  const ageHours = latest ? (now - latest.createdTs) / 3600000 : null;
   const fresh = ageHours !== null && ageHours <= maxAge;
   const same = opts.sameVolumeFn ? !!opts.sameVolumeFn(root, dir) : sameVolume(root, dir);
   const independent = !same;
   const healthy = !!latest && fresh && independent && !cfg.backup_last_error && !cfg.backup_scheduler_error;
+  const configLastSuccess = cfg.backup_last_success || null;
+  const effectiveLastSuccess = latest ? latest.created : configLastSuccess;
+  const source = latest ? 'latest_valid' : (configLastSuccess ? 'config' : 'none');
+  const anomalyLines = selection.anomalies.map(function (item) {
+    return item.id + '（' + backupAnomalyLabel(item.type) + (item.created ? ' / ' + item.created : '') + '）';
+  });
   const lines = [
     '备份状态: ' + (cfg.backup_enabled ? '已启用' : '已关闭'),
     '- 备份目录: ' + dir,
@@ -3465,8 +4067,12 @@ function backupStatusCore(opts) {
     '- 计划: ' + (cfg.backup_schedule || 'manual') + (cfg.backup_time ? ' ' + cfg.backup_time : ''),
     '- 调度器: ' + (cfg.backup_scheduler || '(未注册)'),
     '- 调度异常: ' + (cfg.backup_scheduler_error || '(无)'),
-    '- 上次成功: ' + (cfg.backup_last_success || (latest && latest.created) || '(无)'),
+    '- 配置缓存上次成功: ' + (configLastSuccess || '(无)'),
+    '- 有效备份: ' + (latest ? latest.id + ' / ' + latest.created : '(无)'),
+    '- 有效上次成功: ' + (effectiveLastSuccess || '(无)'),
+    '- 来源: ' + source,
     '- 备份年龄: ' + (ageHours === null ? '(无可用备份)' : ageHours.toFixed(1) + ' 小时'),
+    '- 异常备份: ' + (anomalyLines.length ? anomalyLines.join('；') : '(无)'),
     '- 最近失败: ' + (cfg.backup_last_error || '(无)'),
     '- 健康: ' + (healthy ? '正常' : '异常'),
   ];
@@ -3477,6 +4083,11 @@ function backupStatusCore(opts) {
     healthy: healthy,
     independent: independent,
     latest: latest,
+    latest_valid: latest,
+    config_last_success: configLastSuccess,
+    effective_last_success: effectiveLastSuccess,
+    source: source,
+    anomalies: selection.anomalies,
     ageHours: ageHours,
     text: lines.join('\n'),
   };
@@ -3487,9 +4098,7 @@ function localDateKey(value) {
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
 function latestBackupByCreated(backups) {
-  return (backups || []).slice().sort(function (a, b) {
-    return String(b.created || '').localeCompare(String(a.created || ''));
-  })[0] || null;
+  return (backups || []).slice().sort(compareBackupCreatedDesc)[0] || null;
 }
 function acquireBackupLock(lockPath, now, staleHours) {
   const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
@@ -3560,7 +4169,7 @@ function backupEnsureDailyCore(opts) {
     const listed = backupListCore({ dir: dir });
     if (listed.error) throw new Error(listed.text);
     const todayKey = localDateKey(now);
-    const latest = latestBackupByCreated(listed.backups);
+    const latest = selectLatestValidBackup(listed.backups, now.getTime()).latestValid;
     if (latest && latest.created && localDateKey(latest.created) === todayKey) {
       cfg.backup_last_check = nowIso;
       cfg.backup_last_success = latest.created;
@@ -3609,7 +4218,14 @@ function backupHealthCore(opts) {
   const maxAge = Number(cfg.backup_max_age_hours) || 36;
   if (cfg.backup_last_error) return { level: 'warning', needsSetup: false, text: '最近一次备份失败: ' + cfg.backup_last_error };
   if (cfg.backup_scheduler_error) return { level: 'warning', needsSetup: false, text: '每日备份调度注册异常: ' + cfg.backup_scheduler_error };
-  if (!status.latest) return { level: 'warning', needsSetup: true, text: '自动备份已启用，但还没有成功备份。请检查 backup 目录与调度器。' };
+  if (!status.latest_valid) {
+    const anomalies = (status.anomalies || []).map(function (item) { return item.id + '（' + item.type + '）'; });
+    return {
+      level: 'warning',
+      needsSetup: true,
+      text: '自动备份已启用，但没有可用备份。' + (anomalies.length ? '检测到异常备份: ' + anomalies.join('；') + '。' : '请检查 backup 目录与调度器。'),
+    };
+  }
   if (status.ageHours !== null && status.ageHours > maxAge) {
     return { level: 'warning', needsSetup: false, text: '最近备份已过期（' + status.ageHours.toFixed(1) + ' 小时，超过 ' + maxAge + ' 小时）；请检查备份盘与每日调度。' };
   }
@@ -4024,6 +4640,56 @@ function scaleMetric(key, value, unit, info, warn) {
   const level = value > warn ? 'warning' : (value > info ? 'info' : 'ok');
   return { key: key, value: value, unit: unit, info: info, warn: warn, level: level };
 }
+function typePressureReport(entries, cfg) {
+  const archiveUtility = parseFloat(cfg && cfg.maintain_archived_utility || ARCHIVE_UTILITY_DEFAULT);
+  const archiveAge = parseInt(cfg && cfg.maintain_archived_age || '180', 10) || 180;
+  const report = {};
+  for (const entry of entries) {
+    const type = String(entry.type || 'FACT').toUpperCase();
+    if (!report[type]) {
+      report[type] = {
+        total: 0,
+        stale_180d: 0,
+        archive_candidates: 0,
+        growth_30d: 0,
+        stale_ratio: 0,
+        growth_ratio_30d: 0,
+        pressure_level: 'ok',
+        observation_days: 7,
+        final_thresholds_deferred: true,
+        warnings: [],
+      };
+    }
+    const row = report[type];
+    row.total += 1;
+    const last = entry.last_accessed || entry.updated || entry.created || '';
+    if (last && daysBetween(last, today()) > 180) row.stale_180d += 1;
+    if (entry.created && daysBetween(entry.created, today()) <= 30) row.growth_30d += 1;
+    const createdAge = entry.created ? daysBetween(entry.created, today()) : 0;
+    if (type !== 'BOUND' && !entry.immutable && createdAge > archiveAge && utilityScore(entry) < archiveUtility) {
+      row.archive_candidates += 1;
+    }
+  }
+  for (const type of Object.keys(report)) {
+    const row = report[type];
+    row.stale_ratio = row.total ? Math.round((row.stale_180d / row.total) * 1000) / 1000 : 0;
+    const prior = Math.max(0, row.total - row.growth_30d);
+    row.growth_ratio_30d = prior ? Math.round((row.growth_30d / prior) * 1000) / 1000 : (row.growth_30d ? 1 : 0);
+    if (row.total > 5000) {
+      row.pressure_level = 'warning';
+      row.warnings.push('类型压力: ' + type + ' 总量 ' + row.total + ' 超过 5000，需要分类型瘦身或归档。');
+    } else if (row.total > 500 && row.stale_ratio >= 0.3 && row.archive_candidates > 0) {
+      row.pressure_level = 'warning';
+      row.warnings.push('类型压力: ' + type + ' ' + row.total + ' 条中 ' + row.stale_180d
+        + ' 条超过 180 天未活跃，且有 ' + row.archive_candidates + ' 条归档候选。');
+    } else if (row.total > 500 || row.growth_ratio_30d >= 0.2) {
+      row.pressure_level = 'info';
+    } else {
+      row.pressure_level = 'observe';
+    }
+  }
+  return report;
+}
 function scaleReport(root, cfg) {
   const thresholds = {};
   for (const key of Object.keys(SCALE_THRESHOLD_DEFAULTS)) thresholds[key] = scaleThreshold(cfg, key);
@@ -4032,6 +4698,13 @@ function scaleReport(root, cfg) {
   const indexBytes = indexSizeBytes(root);
   // v0.23.0 D3：超长 statement（> 2000 字）与单类型堆积（读索引，不逐条解密读文件）
   const scaleEntries = loadIndex(root) || [];
+  let indexData = null;
+  try { indexData = JSON.parse(fs.readFileSync(indexPath(root), 'utf8')); } catch (e) { indexData = null; }
+  const indexShards = indexData && Array.isArray(indexData.shards) ? indexData.shards.length : 0;
+  const indexFormat = indexData
+    ? String(indexData.format || (Array.isArray(indexData.entries) ? 'inline' : (indexShards && indexData.shards.every(isGzipShardName) ? 'gzip-year' : 'json-year')))
+    : 'missing';
+  const indexLogicalBytes = jsonByteLength(scaleEntries);
   let longStatements = 0;
   const typeCounts = { FACT: 0, PREF: 0, BOUND: 0, COMMIT: 0 };
   for (const e of scaleEntries) {
@@ -4049,6 +4722,7 @@ function scaleReport(root, cfg) {
   for (let i = 0; i < 3; i++) samples.push(measureIndexColdStart(root));
   samples.sort(function (a, b) { return a - b; });
   const coldStartMs = samples[Math.floor(samples.length / 2)];
+  const typePressure = typePressureReport(scaleEntries, cfg);
   const metrics = [
     scaleMetric('entries', entries, '条', thresholds.scale_info_entries, thresholds.scale_warn_entries),
     scaleMetric('files_per_dir', filesPerDir, '个文件', thresholds.scale_info_files_per_dir, thresholds.scale_warn_files_per_dir),
@@ -4076,17 +4750,25 @@ function scaleReport(root, cfg) {
   if (metrics[5].level === 'warning') {
     warnings.push('规模: 单类型堆积（' + typeMaxName + ' ' + typeMax + ' 条）超过阈值 ' + thresholds.scale_warn_type_count + '（考虑归档 / 合并 / 精简；COMMIT 收工锚点建议短写）');
   }
+  for (const type of Object.keys(typePressure)) {
+    for (const message of typePressure[type].warnings) warnings.push(message);
+  }
   // v0.18.0 A6：分级只影响 level 与提示文案；超 warn 仍进 warnings（既有行为），info 不阻断。
-  const level = metrics.some(function (m) { return m.level === 'warning'; })
+  const pressureWarning = Object.keys(typePressure).some(function (type) { return typePressure[type].pressure_level === 'warning'; });
+  const level = pressureWarning || metrics.some(function (m) { return m.level === 'warning'; })
     ? 'warning'
     : (metrics.some(function (m) { return m.level === 'info'; }) ? 'info' : 'ok');
   return {
     entries: entries,
     files_per_dir: filesPerDir,
     index_bytes: indexBytes,
+    index_logical_bytes: indexLogicalBytes,
+    index_shards: indexShards,
+    index_format: indexFormat,
     cold_start_ms: coldStartMs,
     thresholds: thresholds,
     metrics: metrics,
+    type_pressure: typePressure,
     level: level,
     warnings: warnings,
   };
@@ -4411,7 +5093,7 @@ function isAllowedBackupPath(rel) {
   if (!normalized) return true;
   const top = normalized.split('/')[0];
   if (top === 'facts' || top === 'private' || top === '.archive') return true;
-  if (top === 'agents.json' || top === 'index.json' || /^index-\d{4}\.json$/.test(top)) return true;
+  if (top === 'agents.json' || top === 'index.json' || /^index-\d{4}\.json(?:\.gz)?$/.test(top)) return true;
   if (top === 'keys') {
     return normalized !== 'keys/cache' && normalized.indexOf('keys/cache/') !== 0 &&
       normalized !== 'keys/pending' && normalized.indexOf('keys/pending/') !== 0;
@@ -4475,7 +5157,7 @@ function backupListCore(opts) {
       manifest: manifest,
     });
   }
-  backups.sort(function (a, b) { return String(b.id).localeCompare(String(a.id)); });
+  backups.sort(compareBackupCreatedDesc);
   const lines = backups.length
     ? backups.map(function (b) { return '- ' + b.id + '  ' + (b.created || '?') + '  ' + (b.files === null ? 'manifest 缺失' : b.files + ' 文件'); })
     : ['（无备份）'];
@@ -4485,7 +5167,7 @@ function backupDoctorCore(opts) {
   opts = opts || {};
   const listed = backupListCore(opts);
   if (listed.error) return { error: true, ok: false, text: listed.text };
-  const id = opts.id || (listed.backups[0] && listed.backups[0].id);
+  const id = opts.id || (selectLatestValidBackup(listed.backups, Date.now()).latestValid || {}).id;
   if (!id) return { error: false, ok: false, text: '没有可检查的备份。' };
   const backup = listed.backups.find(function (item) { return item.id === id; });
   if (!backup) return { error: true, ok: false, text: '未找到备份: ' + id };
@@ -7849,6 +8531,29 @@ function cmdBackupDoctor(opts) {
   console.log(r.text);
   if (r.error || !r.ok) process.exit(2);
 }
+function cmdIndex(opts) {
+  if (!opts.stats) {
+    console.error('index 只提供只读统计：请使用 yotta-memory index --stats [--json]。');
+    process.exit(2);
+  }
+  const r = indexStatsCore(opts);
+  if (opts.json) console.log(JSON.stringify(r, null, 2));
+  else console.log(r.text);
+  if (r.error) process.exit(2);
+}
+function cmdLayout(action, opts) {
+  let r;
+  if (action === 'plan') r = layoutPlanCore(opts);
+  else if (action === 'apply') r = layoutApplyCore(Object.assign({}, opts, { planFile: opts.fromPlan }));
+  else if (action === 'rollback') r = layoutRollbackCore(opts);
+  else {
+    console.error('layout 子命令: plan [--threshold N] [--include-flat] [--out <文件>] / apply --from-plan <文件> --yes / rollback --batch <id> --yes');
+    process.exit(2);
+  }
+  if (opts.json) console.log(JSON.stringify(r, null, 2));
+  else console.log(r.text);
+  if (r.error) process.exit(2);
+}
 function cmdBackupRestore(id, opts) {
   const r = backupRestoreCore(id, opts);
   console.log(r.text);
@@ -9915,6 +10620,7 @@ const SCAN_SEVERITIES = ['safe', 'low', 'medium', 'high', 'critical'];
 const SCAN_MAX_FINDINGS = 500;
 const SCAN_MAX_FILES = 20000;
 const SCAN_QUARANTINE_DIR = '.memory-scan';
+const SCAN_POLICY_FILE = 'security/scan-policy.json';
 const MEMORY_SCAN_RULES = [
   // ── 恶意指令（元安 DownloadExec / 元盾危险命令）──
   { id: 'YTM-MAL-001', class: 'malicious-instruction', severity: 'critical', ref: 'DEX-001@yotta-security-audit', title: 'curl 下载内容交给 shell 执行', mask: false, re: /\bcurl\b[^\n|;]{0,120}\|\s*(?:ba)?sh\b/i },
@@ -9966,7 +10672,77 @@ function scanEmptySummary() {
   for (const cls of SCAN_CLASSES) byClass[cls] = 0;
   const bySeverity = {};
   for (const sev of SCAN_SEVERITIES) bySeverity[sev] = 0;
-  return { files: 0, encrypted: 0, mislabelled: 0, scanned: 0, hits: 0, byClass: byClass, bySeverity: bySeverity, maxSeverity: 'safe', truncated: false };
+  return {
+    files: 0,
+    encrypted: 0,
+    mislabelled: 0,
+    scanned: 0,
+    hits: 0,
+    suppressed: 0,
+    invalid_policy: 0,
+    expired_policy: 0,
+    byClass: byClass,
+    bySeverity: bySeverity,
+    maxSeverity: 'safe',
+    truncated: false,
+  };
+}
+function scanLineHash(line) {
+  return crypto.createHash('sha256').update(String(line || ''), 'utf8').digest('hex');
+}
+function loadScanPolicy(root, noPolicy) {
+  const pathname = path.join(root, SCAN_POLICY_FILE);
+  if (noPolicy) {
+    return { path: pathname, entries: [], map: new Map(), invalid: 0, expired: 0, used: new Set(), warnings: [] };
+  }
+  if (!fs.existsSync(pathname)) {
+    return { path: pathname, entries: [], map: new Map(), invalid: 0, expired: 0, used: new Set(), warnings: [] };
+  }
+  let data = null;
+  try { data = JSON.parse(fs.readFileSync(pathname, 'utf8')); } catch (error) {
+    return { path: pathname, entries: [], map: new Map(), invalid: 1, expired: 0, used: new Set(), warnings: ['扫描策略 JSON 无法解析: ' + error.message] };
+  }
+  const rawEntries = data && Array.isArray(data.entries) ? data.entries : [];
+  const entries = [];
+  const map = new Map();
+  let invalid = data && Array.isArray(data.entries) ? 0 : 1;
+  let expired = 0;
+  const warnings = [];
+  if (!data || !Array.isArray(data.entries)) warnings.push('扫描策略结构无效：缺少 entries 数组。');
+  for (const raw of rawEntries) {
+    const rule = String(raw && raw.rule || '').trim();
+    const file = String(raw && raw.file || '').replace(/\\/g, '/');
+    const hash = String(raw && raw.line_sha256 || '').trim().toLowerCase();
+    const reviewBy = String(raw && raw.review_by || '').trim();
+    const reason = String(raw && raw.reason || '').trim();
+    const valid = /^YTM-[A-Z]+-\d{3}$/.test(rule) &&
+      isSafeRelPath(file) && file.indexOf('*') === -1 && MEMORY_FILE_RE.test(file) &&
+      /^[a-f0-9]{64}$/.test(hash) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(reviewBy) && !isNaN(new Date(reviewBy).getTime()) &&
+      reason.length > 0;
+    if (!valid) {
+      invalid++;
+      continue;
+    }
+    if (reviewBy < today()) {
+      expired++;
+      continue;
+    }
+    const entry = {
+      rule: rule,
+      file: file,
+      line_sha256: hash,
+      reason: reason,
+      review_by: reviewBy,
+      added_by: String(raw.added_by || ''),
+      added_at: String(raw.added_at || ''),
+    };
+    entries.push(entry);
+    map.set(rule + '\0' + file + '\0' + hash, entry);
+  }
+  if (invalid) warnings.push('扫描策略有 ' + invalid + ' 条无效条目，已 fail-closed 忽略。');
+  if (expired) warnings.push('扫描策略有 ' + expired + ' 条已过期，已恢复为命中。');
+  return { path: pathname, entries: entries, map: map, invalid: invalid, expired: expired, used: new Set(), warnings: warnings };
 }
 function isSafeRelPath(rel) {
   const value = String(rel || '');
@@ -10108,10 +10884,16 @@ function renderScanText(report) {
     '',
     '- 扫描路径: ' + report.root,
     '- 扫描文件: ' + report.summary.files + '（加密跳过 ' + report.summary.encrypted + (report.summary.mislabelled ? '；.enc 后缀但内容是明文 ' + report.summary.mislabelled + ' 个已按文本扫描' : '') + '）',
-    '- 结果: ' + label[report.level] + ' · 命中 ' + report.summary.hits + ' 条' + (report.summary.truncated ? '（已达上限，结果被截断）' : ''),
+    '- 结果: ' + label[report.level] + ' · 命中 ' + report.summary.hits + ' 条'
+      + (report.summary.suppressed ? ' · 已抑制 ' + report.summary.suppressed + ' 条' : '')
+      + (report.summary.truncated ? '（已达上限，结果被截断）' : ''),
     '- 分级: ' + SCAN_SEVERITIES.map(function (s) { return s + '=' + report.summary.bySeverity[s]; }).join(' / '),
     '- 类别: ' + SCAN_CLASSES.map(function (c) { return c + '=' + report.summary.byClass[c]; }).join(' / '),
   ];
+  if (report.policy && (report.policy.invalid || report.policy.expired || report.policy.unused)) {
+    lines.push('- 策略: 无效 ' + report.policy.invalid + ' / 过期 ' + report.policy.expired + ' / 未命中 ' + report.policy.unused);
+  }
+  for (const warning of (report.policy && report.policy.warnings) || []) lines.push('- [策略警告] ' + warning);
   if (report.gate) lines.push('- 门禁: 命中 ' + report.gate + ' 及以上即 exit 1（当前 ' + report.level + '）');
   if (!report.findings.length) lines.push('- 未发现可疑内容。');
   for (const finding of report.findings) {
@@ -10149,6 +10931,8 @@ function scanCore(opts) {
   if (opts.restore) return scanRestoreCore(root, opts);
 
   const findings = [];
+  const suppressed = [];
+  const policy = loadScanPolicy(root, opts.noPolicy);
   const byClass = {};
   for (const cls of SCAN_CLASSES) byClass[cls] = 0;
   const bySeverity = {};
@@ -10182,6 +10966,25 @@ function scanCore(opts) {
         const start = Math.max(0, match.index - 40);
         const end = Math.min(line.length, match.index + match[0].length + 40);
         const snippet = scrubSecrets((start > 0 ? '…' : '') + line.slice(start, end) + (end < line.length ? '…' : '')).slice(0, 200);
+        const lineHash = scanLineHash(line);
+        const policyKey = rule.id + '\0' + rel + '\0' + lineHash;
+        if (policy.map.has(policyKey)) {
+          const exception = policy.map.get(policyKey);
+          policy.used.add(policyKey);
+          suppressed.push({
+            file: rel,
+            line: i + 1,
+            evidence: rel + ':' + (i + 1),
+            rule: rule.id,
+            class: rule.class,
+            severity: rule.severity,
+            title: rule.title,
+            line_sha256: lineHash,
+            reason: exception.reason,
+            review_by: exception.review_by,
+          });
+          continue;
+        }
         findings.push({
           file: rel,
           line: i + 1,
@@ -10191,6 +10994,7 @@ function scanCore(opts) {
           severity: rule.severity,
           title: rule.title,
           ref: rule.ref,
+          line_sha256: lineHash,
           match: scrubSecrets(match[0]).slice(0, 80),
           snippet: snippet,
         });
@@ -10213,6 +11017,9 @@ function scanCore(opts) {
     bySeverity: bySeverity,
     maxSeverity: level,
     truncated: truncated,
+    suppressed: suppressed.length,
+    invalid_policy: policy.invalid,
+    expired_policy: policy.expired,
   };
   const report = {
     schemaVersion: SCAN_SCHEMA_VERSION,
@@ -10223,7 +11030,16 @@ function scanCore(opts) {
     root: root,
     gate: gate,
     findings: findings,
+    suppressed: suppressed,
     summary: summary,
+    policy: {
+      path: policy.path,
+      entries: policy.entries.length,
+      invalid: policy.invalid,
+      expired: policy.expired,
+      unused: Math.max(0, policy.entries.length - policy.used.size),
+      warnings: policy.warnings,
+    },
     quarantine: null,
     restore: null,
   };
@@ -10251,6 +11067,64 @@ function scanCore(opts) {
     if (failed) report.exitCode = 1;
   }
   return report;
+}
+function scanPolicyCandidatesCore(opts) {
+  opts = opts || {};
+  const root = path.resolve(opts.path || opts.root || userRoot());
+  const scan = scanCore({
+    root: root,
+    noPolicy: true,
+    quarantine: false,
+    restore: false,
+    gate: '',
+  });
+  if (scan.error) return scan;
+  const seen = new Set();
+  const candidates = [];
+  for (const finding of scan.findings) {
+    const key = finding.rule + '\0' + finding.file + '\0' + finding.line_sha256;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidates.push({
+      rule: finding.rule,
+      file: finding.file,
+      line: finding.line,
+      line_sha256: finding.line_sha256,
+      class: finding.class,
+      severity: finding.severity,
+      title: finding.title,
+      reason: '',
+      review_by: '',
+      added_by: '',
+      added_at: '',
+    });
+  }
+  let outPath = '';
+  if (opts.out) {
+    const rel = String(opts.out).replace(/\\/g, '/');
+    if (!layoutInsideRoot(root, rel)) {
+      return {
+        schemaVersion: SCAN_SCHEMA_VERSION,
+        error: true,
+        exitCode: 2,
+        candidates: [],
+        text: '拒绝写出策略候选：--out 必须位于当前记忆库内。',
+      };
+    }
+    outPath = path.resolve(root, rel);
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    atomicWriteFileSync(outPath, JSON.stringify({ version: 1, candidates: candidates }, null, 2), 'utf8');
+  }
+  return {
+    schemaVersion: SCAN_SCHEMA_VERSION,
+    error: false,
+    exitCode: 0,
+    root: root,
+    candidates: candidates,
+    out: outPath,
+    text: '扫描策略候选: ' + candidates.length + ' 条'
+      + (outPath ? '\n已写出: ' + outPath : '\n未写文件；请人工复核后配置 security/scan-policy.json。'),
+  };
 }
 // 交互确认：非 TTY 一律返回 null（由调用方给 --yes 指引），避免自动化里静默改写记忆。
 function promptYesNo(promptText) {
@@ -10283,6 +11157,12 @@ function promptYesNo(promptText) {
 }
 async function cmdScan(opts) {
   opts = opts || {};
+  if (opts.policyCandidates) {
+    const candidates = scanPolicyCandidatesCore(opts);
+    console.log(opts.json ? JSON.stringify(candidates, null, 2) : candidates.text);
+    if (candidates.error) process.exit(candidates.exitCode || 2);
+    return;
+  }
   if (opts.quarantine && !opts.yes) {
     const preview = scanCore(Object.assign({}, opts, { quarantine: false }));
     if (preview.error) {
@@ -12327,6 +13207,10 @@ async function main() {
     else if (a === '--rules') opts.rules = true;
     else if (a === '--propose') opts.propose = true;
     else if (a === '--audit') opts.audit = true;
+    else if (a === '--stats') opts.stats = true;
+    else if (a === '--include-flat') opts.includeFlat = true;
+    else if (a === '--no-policy') opts.noPolicy = true;
+    else if (a === '--policy-candidates') opts.policyCandidates = true;
     else if (valueOpts.has(a)) {
       const v = args[++i];
       if (a === '--type') opts.type = v;
@@ -12382,6 +13266,8 @@ async function main() {
       else if (a === '--template') opts.template = v;
       else if (a === '--path') opts.path = v;
       else if (a === '--from') opts.from = v;
+      else if (a === '--from-plan') opts.fromPlan = v;
+      else if (a === '--batch') opts.batch = v;
     } else if (a.startsWith('--')) {
       if (a === '--query') {
         console.error('未知选项: --query。recall/search 的关键词是位置参数：yotta-memory recall [关键词]');
@@ -12458,6 +13344,8 @@ async function main() {
       break;
     }
     case 'reindex': cmdReindex(); break;
+    case 'index': cmdIndex(opts); break;
+    case 'layout': cmdLayout(rest[0], opts); break;
     case 'doctor': cmdDoctor(opts); break;
     case 'profile': cmdProfile(opts); break;
     case 'context': cmdContext(opts); break;
@@ -12565,6 +13453,9 @@ module.exports = {
   viewEntriesCore: viewEntriesCore,
   viewOverviewCore: viewOverviewCore,
   migrateLayout: migrateLayout,
+  layoutPlanCore: layoutPlanCore,
+  layoutApplyCore: layoutApplyCore,
+  layoutRollbackCore: layoutRollbackCore,
   loadIndexFor: loadIndexFor,
   indexEntriesFor: indexEntriesFor,
   loadOwnerIndex: loadOwnerIndex,
@@ -12575,6 +13466,10 @@ module.exports = {
   baselineCore: baselineCore,
   loadBaselineTemplate: loadBaselineTemplate,
   scanCore: scanCore,
+  scanPolicyCandidatesCore: scanPolicyCandidatesCore,
+  loadScanPolicy: loadScanPolicy,
+  scanLineHash: scanLineHash,
+  SCAN_POLICY_FILE: SCAN_POLICY_FILE,
   scanQuarantineCore: scanQuarantineCore,
   scanRestoreCore: scanRestoreCore,
   promptYesNo: promptYesNo,
@@ -12702,6 +13597,10 @@ module.exports = {
 
   loadIndex: loadIndex,
   saveIndex: saveIndex,
+  indexStatsCore: indexStatsCore,
+  INDEX_VERSION: INDEX_VERSION,
+  INDEX_SHARD_THRESHOLD: INDEX_SHARD_THRESHOLD,
+  INDEX_COMPRESS_TRIGGER_BYTES: INDEX_COMPRESS_TRIGGER_BYTES,
   buildIndex: buildIndex,
   getIndex: getIndex,
   touchIndex: touchIndex,
@@ -12736,6 +13635,8 @@ module.exports = {
   listBackupVolumesCore: listBackupVolumesCore,
   backupSetupCore: backupSetupCore,
   backupStatusCore: backupStatusCore,
+  selectLatestValidBackup: selectLatestValidBackup,
+  BACKUP_FUTURE_TOLERANCE_MS: BACKUP_FUTURE_TOLERANCE_MS,
   backupEnsureDailyCore: backupEnsureDailyCore,
   backupHealthCore: backupHealthCore,
   doctorCore: doctorCore,

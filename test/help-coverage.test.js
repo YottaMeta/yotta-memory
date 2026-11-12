@@ -15,7 +15,7 @@ const REQUIRED_COMMANDS = [
   'maintain', 'consolidate', 'distill', 'feedback', 'explain', 'reindex',
   'export', 'import', 'iam', 'whoami', 'profile', 'context', 'token',
   'migrate', 'view', 'reset-password', 'key', 'config', 'runtime', 'serve',
-  'lan', 'bench', 'scan', 'identity', '--version',
+  'lan', 'bench', 'scan', 'identity', 'index', 'layout', '--version',
 ];
 
 const REQUIRED_SUBCOMMANDS = {
@@ -26,6 +26,7 @@ const REQUIRED_SUBCOMMANDS = {
   runtime: ['install', 'use', 'rollback', 'status', 'list'],
   lan: ['enable', 'disable', 'status'],
   identity: ['remove'],
+  layout: ['plan', 'apply', 'rollback'],
 };
 
 const RISK_OPTIONS = ['--no-encrypt', '--unsafe', '--apply', '--force', '--purge', '--allow-same-volume', '--quarantine', '--restore', '--yes'];
@@ -103,7 +104,7 @@ test('HELP_MODEL is the single source for commands, subcommands and options', ()
       subcommandCount += 1;
     }
   }
-  assert.strictEqual(subcommandCount, 31, 'all 31 parser subcommand paths must be represented');
+  assert.strictEqual(subcommandCount, 34, 'all 34 parser subcommand paths must be represented');
 });
 
 test('registered parser options and HELP_MODEL stay bidirectionally consistent', () => {
@@ -142,6 +143,7 @@ test('command-specific options stay documented', () => {
   const expected = {
     distill: ['--model', '--subject', '--owner', '--out', '--json'],
     maintain: ['--capacity', '--rules', '--dedup', '--apply', '--purge'],
+    scan: ['--no-policy', '--policy-candidates', '--out'],
   };
   for (const name of Object.keys(expected)) {
     const command = byName[name];
@@ -158,7 +160,7 @@ test('top-level help remains render-stable', () => {
   const digest = crypto.createHash('sha256').update(stdout).digest('hex');
   assert.strictEqual(
     digest,
-    '9a56e2fe0a289b6a6a18170d6708d7a4deed64ab6658adeca27767b862581bcf',
+    'd8bdf436cf298df56d40668439e8eaccd6eec54b7c00532ef3a117c76d3041c0',
     'top-level help changed; review every command/option line, then update the snapshot digest intentionally'
   );
 });

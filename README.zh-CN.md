@@ -22,6 +22,7 @@
 </p>
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
+> 🆕 **v0.24.0（结构容量整改）**：`backup status` 按 manifest 时间选择有效备份并隔离未来时间异常；新增只读 `index --stats`，索引 v5 使用年份 gzip 分片并兼容 v4；新写入进入 `yyyy/mm/dd` 日级桶，`layout plan/apply/rollback` 支持可回滚迁移；`doctor` 增加类型压力四指标；`scan` 支持精确文件 + 规则 + 行哈希 + 有效期的例外策略，`--policy-candidates` 只生成候选、不自动启用。
 > 🆕 **v0.23.2（ClawHub 门面）**：ClawHub 上的技能卡改为英文优先的双语摘要与描述（新增 `clawhub-dist/yotta-memory` 专属发布副本），README 首屏新增上面三条使用案例；命令、参数、输出与记忆库格式全部不变。
 > 🆕 **v0.20.0（上下文分页 + 画像驱逐修复）**：`memory.hook` 的 PREF 驱逐空转已修复——hook / paging 决策生效时，画像段落按实时可读条目渲染并套用同一套过滤；自我接入档案不进候选、不可驱逐。新增 `context.paging`：仅在显式 `--budget` 时调用，hook 先过滤、paging 再排序与分页；`drop` 始终安全应用，`order` 仅在 `complete:true` 且未截断时应用。`context --json` 新增 `paging` 块，`--explain` 增加 `[paging]` 轨迹。配置与协议见 `references/provider-protocol.md`。
 > 🆕 **v0.18.1（蒸馏溯源 + 日期绝对化 + 巩固标记 + 规则晋升建议 + 写入纪律）**：`distill` 新增分类型提取清单（事件 / 教训 / 待办 / 成长 / 规则边界 / 其他）+ 逐条 `[溯源: 文件#L<a>-L<b>]` + 实测质量指标 + 跳过与边界，`--json` 输出结构化报告；`consolidate` 摘要按条目 `created` 把「昨天 / 上周 / 本月 / 今年」写成绝对日期，归档副本写入巩固标记（`--undo` 剥离还原）；`maintain --rules` 只读给出「重复踩坑 → 建议升级为规则」（默认阈值 3，不自动写 BOUND）；记忆守则新增冲突权威顺序 6 层与写入纪律 3 条。
@@ -151,7 +152,7 @@
 
 ### 检索：语义检索（v0.8.0 + v0.9.0 embedding）
 
-- `remember` 时自动构建 `index.json` 索引（v0.8.1 起 version=4，含字段加权与拼音 token；公共索引超过 5000 条按年份分片 `index-<year>.json`；旧索引首次 recall 自动重建）；recall 默认语义检索——精确（字段加权：subject×3 / tags×2 / statement×1）+ 同义词（内置词表，可扩展）+ 拼音（全拼 / 首字母，内置 3755 常用字表）+ 模糊（编辑距离 ≤ 2）+ 子串兜底，并与效用分融合排序（0.65 × 语义 + 0.35 × 效用），零依赖。
+- `remember` 时自动构建索引（v0.24.0 起 version=5，含字段加权与拼音 token；逻辑体积 > 4 MB 或条目数 > 5000 时按年份写入 `index-<year>.json.gz`，同时兼容 v4 平铺 / 分片；旧索引首次 recall 自动重建）；recall 默认语义检索——精确（字段加权：subject×3 / tags×2 / statement×1）+ 同义词（内置词表，可扩展）+ 拼音（全拼 / 首字母，内置 3755 常用字表）+ 模糊（编辑距离 ≤ 2）+ 子串兜底，并与效用分融合排序（0.65 × 语义 + 0.35 × 效用），零依赖。
 - `recall --explain`：展示每条命中理由（精确 / 同义 / 拼音 / 模糊 + 字段）与效用分项。
 - **recall 候选预过滤（v0.8.1）**：语义打分前先用索引 token 粗筛候选集（精确 / 同义 / 拼音 / 子串 / 模糊长度门槛），命中集与 v0.8.0 完全一致；`view` 查看平台按偏移分页返回，一次只取当前页。
 - **可选 embedding 插件（v0.9.0）**：`recall --embedding <命令>` 或 `config set embedding_cmd <命令>`，本地子进程通过 stdin/stdout JSON 协议返回向量；结果并入同一套排序。插件失败、超时或输出非法时自动降级为零依赖词法检索。

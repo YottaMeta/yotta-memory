@@ -74,17 +74,17 @@ function jsonDoctor(root, extraEnv) {
 
 // ---- B1: 记忆文件按年分层 ----
 
-test('remember writes new entries into the year/month layout', () => {
+test('remember writes new entries into the year/month/day layout', () => {
   withStore((root) => {
     const result = memory.rememberCore('FACT', '分层测试', '新写入应落到年/月子目录', { _today: '2026-09-25' });
     assert.strictEqual(result.error, false, result.text);
-    assert.match(result.text, /facts[\\/]2026[\\/]09[\\/]2026-09-25-0001\.md$/);
-    assert.ok(fs.existsSync(path.join(root, 'facts', '2026', '09', '2026-09-25-0001.md')));
-    assert.deepStrictEqual(relativeEntryFiles(root), ['facts/2026/09/2026-09-25-0001.md']);
+    assert.match(result.text, /facts[\\/]2026[\\/]09[\\/]25[\\/]2026-09-25-0001\.md$/);
+    assert.ok(fs.existsSync(path.join(root, 'facts', '2026', '09', '25', '2026-09-25-0001.md')));
+    assert.deepStrictEqual(relativeEntryFiles(root), ['facts/2026/09/25/2026-09-25-0001.md']);
 
     const index = memory.getIndex(root);
     assert.strictEqual(index.length, 1);
-    assert.strictEqual(index[0].file, 'facts/2026/09/2026-09-25-0001.md');
+    assert.strictEqual(index[0].file, 'facts/2026/09/25/2026-09-25-0001.md');
   });
 });
 
@@ -100,8 +100,8 @@ test('sequence numbering never collides across layout generations', () => {
     assert.match(second.text, /2026-09-25-0003\.md$/);
     assert.deepStrictEqual(relativeEntryFiles(root), [
       'facts/2026-09-25-0001.md',
-      'facts/2026/09/2026-09-25-0002.md',
-      'facts/2026/09/2026-09-25-0003.md',
+      'facts/2026/09/25/2026-09-25-0002.md',
+      'facts/2026/09/25/2026-09-25-0003.md',
     ]);
   });
 });
@@ -117,11 +117,11 @@ test('mixed old flat and new layered files stay readable', () => {
     const files = entries.map((e) => e.file).sort();
     assert.deepStrictEqual(files, [
       'facts/2026-09-24-0001.md',
-      'facts/2026/09/2026-09-25-0002.md',
+      'facts/2026/09/25/2026-09-25-0002.md',
     ]);
 
     memory.forgetCore('2026-09-24-0001.md', { selfAgent: 'codex', unsafe: false });
-    assert.deepStrictEqual(relativeEntryFiles(root), ['facts/2026/09/2026-09-25-0002.md']);
+    assert.deepStrictEqual(relativeEntryFiles(root), ['facts/2026/09/25/2026-09-25-0002.md']);
     assert.strictEqual(memory.getIndex(root).length, 1);
   });
 });
@@ -137,7 +137,7 @@ test('export then import round-trips layered memories', () => {
     const imp = memory.importCore(restored, exported);
     assert.strictEqual(imp.error, false, imp.text);
     assert.strictEqual(memory.buildIndex(restored).length, 1);
-    assert.deepStrictEqual(relativeEntryFiles(restored), ['facts/2026/09/2026-09-25-0001.md']);
+    assert.deepStrictEqual(relativeEntryFiles(restored), ['facts/2026/09/25/2026-09-25-0001.md']);
     const entries = memory.ensureIndex(restored);
     assert.strictEqual(entries[0].subject, '往返记忆');
   });
@@ -151,13 +151,13 @@ test('private entries layer under their owner and stay owner-scoped', () => {
       unsafe: false,
     });
     assert.strictEqual(written.error, false, written.text);
-    assert.match(written.text, /private[\\/]codex[\\/]prefs[\\/]2026[\\/]09[\\/]2026-09-25-0001\.md$/);
-    assert.deepStrictEqual(relativeEntryFiles(root), ['private/codex/prefs/2026/09/2026-09-25-0001.md']);
+    assert.match(written.text, /private[\\/]codex[\\/]prefs[\\/]2026[\\/]09[\\/]25[\\/]2026-09-25-0001\.md$/);
+    assert.deepStrictEqual(relativeEntryFiles(root), ['private/codex/prefs/2026/09/25/2026-09-25-0001.md']);
 
-    const fp = path.join(root, 'private', 'codex', 'prefs', '2026', '09', '2026-09-25-0001.md');
+    const fp = path.join(root, 'private', 'codex', 'prefs', '2026', '09', '25', '2026-09-25-0001.md');
     assert.strictEqual(memory.ownerFromPrivatePath(root, fp), 'codex');
     assert.strictEqual(
-      memory.archiveRelFor(root, 'private/codex/prefs/2026/09/2026-09-25-0001.md', 'PREF', 'codex'),
+      memory.archiveRelFor(root, 'private/codex/prefs/2026/09/25/2026-09-25-0001.md', 'PREF', 'codex'),
       '.archive/private/codex/prefs/2026/09/2026-09-25-0001.md'
     );
 

@@ -94,7 +94,13 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 运行 `yotta-memory doctor`。它只读检查记忆库根目录、加密库密钥文件、公共索引、`agents.json` 与最近备份；`--json` 可输出机器可读结果。严重异常时会锁定 `maintain --apply`、`consolidate --apply`、`merge`、`archive` 与 `--purge` 等破坏性写入，`context` 也会在开工提醒中显示“破坏性写入已锁定”。先按 doctor 提示修复，再继续写操作。
 
 ## 17. 记忆库很大，检索能快一点吗？
-公共索引超过 5000 条会按年份分片（`index-<year>.json`）。只关心某一年时用 `yotta-memory recall <关键词> --year 2026`（可重复传多次）或 `yotta-memory context --year 2026`：引擎只读取命中年份的分片文件，不再把所有年份载入内存。不传 `--year` 时行为与旧版完全一致（全量读取）。规模体检看 `yotta-memory doctor` 的「规模」段（条数 / 单目录最大文件数 / 索引总体积），阈值用 `config set scale_warn_entries` 等键调整。
+v0.24.0 起索引为 v5：逻辑体积超过 4 MB 或条目数超过 5000 时按年份写入 gzip 分片（`index-<year>.json.gz`），同时兼容 v4。只关心某一年时用 `yotta-memory recall <关键词> --year 2026`（可重复传多次）或 `yotta-memory context --year 2026`：引擎只读取命中年份的分片文件。想先看字段体积与预估压缩收益，运行 `yotta-memory index --stats --json`（只读）。规模体检看 `yotta-memory doctor` 的 `checks.scale`（条数 / 单目录最大文件数 / 索引体积 / `index_format` / `type_pressure`），阈值用 `config set scale_warn_entries` 等键调整。
+
+## 17.1 某个年/月目录文件太多，怎么安全迁移到日级桶？
+先预演：`yotta-memory layout plan --threshold 500 --json`。计划只处理超过阈值的年/月桶，旧平铺默认不迁；有目标占用或哈希异常会拒绝生成可执行计划。审阅后运行 `yotta-memory layout apply --from-plan <计划文件> --yes`；失败会自动逆序恢复。需要还原时运行 `yotta-memory layout rollback --batch <id> --yes`。迁移期间应停止其它写入进程。
+
+## 17.2 历史安全语料被 scan 命中，怎样设置不掩盖新风险？
+用 `yotta-memory scan --policy-candidates --out security/scan-policy.candidates.json` 生成候选，再人工复核。正式策略写入 `security/scan-policy.json`，每条必须同时匹配 `rule`、`file`、整行 `line_sha256`、`reason` 和未过期的 `review_by`；通配、路径穿越、无效哈希一律忽略。行内容变化或过期后会自动恢复命中；随时可用 `scan --no-policy` 做全量复核。
 
 ## 18. 怎么证明改了检索 / 索引之后「没变差」？
 用 `yotta-memory bench`。默认按库内条目做确定性抽样生成基线评测集，也可以用 `--evalset <文件>` 固定一组查询（评测集 v1：`{"version":1,"queries":[{"query":"...","expect":["<记忆 id>"]}]}`，记忆 id 写相对路径或文件名都可以）。报告给 Recall@k / MRR / nDCG@k / HitRate + 固定种子 bootstrap 95% 置信区间，并写明库指纹与评测集指纹——同库、同评测集、同参数必须同输出，所以改前跑一次、改后再跑一次就能直接对比。接 CI 用 `--gate mrr=0.6`（不达标 exit 1）；`--ablate` 对比关键词 / 语义 × 融合 / 纯分四组；想要耗时再加 `--timing`（带上后报告标记为不可逐字节复算）。`bench` 全程只读：不重建索引、不写访问计数、不调用外部 embedding 插件；索引缺失或版本过旧时会提示先 `reindex`。

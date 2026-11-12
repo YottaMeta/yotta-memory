@@ -1,4 +1,4 @@
-# yotta-memory 协议规范 v0.8.1
+# yotta-memory 协议规范 v0.24.0
 
 > 本文件定义 yotta-memory 记忆标准：存储位置、目录结构、文件格式、类型体系与 CLI 命令参考。
 > 目标：任何支持 Agent Skills 开放标准的智能体，装完即可读写同一份记忆。
@@ -17,24 +17,24 @@
 
 ```
 <root>/
-├── facts/                  # FACT 事实（公共可共享）
+├── facts/<yyyy>/<mm>/<dd>/ # FACT 事实（公共可共享；旧平铺 / 年/月桶兼容）
 ├── private/                # 私密区（按 owner 物理分目录）
 │   └── <owner>/            # 每个智能体一个子目录
-│       ├── prefs/          # PREF 偏好（该 owner 私密）
-│       ├── bounds/         # BOUND 边界（该 owner 私密）
-│       ├── commits/        # COMMIT 承诺（该 owner 私密）
+│       ├── prefs/<yyyy>/<mm>/<dd>/  # PREF 偏好（该 owner 私密）
+│       ├── bounds/<yyyy>/<mm>/<dd>/ # BOUND 边界（该 owner 私密）
+│       ├── commits/<yyyy>/<mm>/<dd>/ # COMMIT 承诺（该 owner 私密）
 │       ├── distills/       # 心理日志蒸馏产物（v0.8.0：distill 命令生成，私密）
 │       └── profile.md      # 用户画像（profile 命令生成，零推断，可再生成）
 ├── .archive/               # 归档区（archive / maintain / consolidate / merge 移入，v0.10.0 起带 owner）
 │   ├── facts/                # 公共 FACT 归档
 │   └── private/<owner>/<type>/  # 私密归档（PREF/BOUND/COMMIT，带 owner 防撞名）
-├── index.json              # 公共 FACT 索引 + TF 打分（加密库只含公共条目）
+├── index.json              # v5 manifest；大库分片为 index-<year>.json.gz（兼容 v4）
 ├── keys/                   # 加密库密钥库：salt / <owner>.key.enc(UMK 包裹) / <owner>.key.recovery(恢复钥匙包裹) / recovery.key.enc / bindings/<id>.key.agent；legacy cache/<id>.key 不再加载
 ├── agents.json             # 智能体身份登记表（iam 写入，唯一性强制）
 └── README.md               # 记忆库说明
 ```
 
-> **`index.json` 说明**：条目内的 `tokens` 字段是中文分词的「词频表」（v0.8.0 起含字段加权与拼音 token），供 recall 的 TF 打分 / 语义检索使用，**不是**访问令牌。真正的访问令牌由 `token` 命令生成，存放在 `<root>/.server/tokens.json`，仅在局域网 `serve` 模式下用于请求鉴权。v0.8.1 起索引 version=4（公共索引超过 5000 条按年份分片 `index-<year>.json`），旧索引首次 recall 自动重建。
+> **`index.json` 说明**：条目内的 `tokens` 字段是中文分词的「词频表」（v0.8.0 起含字段加权与拼音 token），供 recall 的 TF 打分 / 语义检索使用，**不是**访问令牌。真正的访问令牌由 `token` 命令生成，存放在 `<root>/.server/tokens.json`，仅在局域网 `serve` 模式下用于请求鉴权。v0.24.0 起索引 version=5：逻辑体积 > 4 MB 或条目数 > 5000 时使用 `index-<year>.json.gz` 年份分片，同时兼容 v4 平铺 / JSON 分片；旧索引首次 recall 自动重建。
 
 > **目录结构（v0.5.0）**：私密记忆按 `owner` 物理分目录存放于 `private/<owner>/<type>/`。旧版根下平铺的 `prefs/` `bounds/` `commits/` 会在 `reindex`（或首次 recall 建索引）时按 frontmatter `owner` 自动迁移到 `private/<owner>/<type>/`。**AI 读写红线**：记忆读写一律走 `yotta-memory` CLI / MCP 工具；禁止用 shell（`Get-ChildItem` / `Get-Content` / `cat` / `ls` / `type` 等）直接读改记忆库目录下的文件——否则会绕过 `scope/owner` 权限边界，读到其它智能体的私密内容。
 
@@ -157,6 +157,8 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 | `forget <文件>` | 删除（按路径或文件名）|
 | `archive [--days 180] [--threshold 0.4] [--dry-run] [--force] [--json]` | 按效用分 + 年龄移入 `.archive/`（`utility < threshold` 且超过 N 天）；v0.18.0 起默认豁免冷却期与 `evergreen` / `pinned`（`--force` 覆盖，immutable / BOUND 始终豁免）；`--dry-run` 只预览（零写入，不建快照 / 不写审计），无候选时不建整库快照，`--json` 输出结构化报告 |
 | `reindex` | 全量扫描重建 `index.json`（手动改 .md 后校正）|
+| `index --stats [--json]` | 只读分析索引存储 / 逻辑体积、字段占比、token 与 gzip 年份分片预估 |
+| `layout plan/apply/rollback` | 生成日级目录迁移计划、按 journal 执行、失败回滚或按批次恢复 |
 | `export [--out f.json]` | 导出全部记忆为 JSON |
 | `import <f.json>` | 从 JSON 导入（幂等）|
 | `profile [--owner <id>]` | 用户画像聚合（零推断，写 `private/<owner>/profile.md`；跨 owner 默认拒绝）|

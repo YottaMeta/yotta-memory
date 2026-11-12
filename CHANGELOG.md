@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.24.0 (2026-11-11)
+
+- **备份可靠性**：`backup status` 改为按 manifest `created` 解析时间排序，超过当前时间 15 分钟的备份标记 `future_timestamp` 并排除；manifest 缺失 / 不完整 / created 无效不参与健康判定；新增 `latest_valid` / `config_last_success` / `effective_last_success` / `source` / `anomalies`，`ensure-daily` 与默认备份体检复用同一选择逻辑。
+- **索引诊断**：新增 `yotta-memory index --stats [--json]`，只读输出当前存储体积、逻辑体积、tokens / statement / subject / tags / usage 字段占比、token / 拼音 token 统计和 v5 gzip 年份分片预估。
+- **索引 v5**：按逻辑体积 > 4 MB 或条目数 > 5000 触发 `index-<year>.json.gz`；兼容平铺 v4、分片 v4 与 v5 gzip；`--year` 只读命中的 gzip 分片；命中回写只重压对应分片；损坏 gzip fail-closed；备份白名单支持 `.json.gz`；`doctor` 新增 `index_logical_bytes` / `index_shards` / `index_format`。
+- **日级布局**：新写入改为 `facts/<yyyy>/<mm>/<dd>/` 与 `private/<owner>/<type>/<yyyy>/<mm>/<dd>/`，旧布局继续可读。
+- **布局迁移**：新增 `layout plan` / `layout apply --from-plan <文件> --yes` / `layout rollback --batch <id> --yes`；计划含旧 / 新路径、内容哈希与冲突；apply 写 journal，任一步失败逆序恢复；路径穿越与重复执行 fail-closed；加密 owner 无 key 时跳过。
+- **类型压力**：`doctor --json` 的 `checks.scale.type_pressure` 输出 `total` / `stale_180d` / `archive_candidates` / `growth_30d` / `stale_ratio` / `growth_ratio_30d` / `pressure_level`；按计划保留 7 天观察窗，暂不删除旧 `type_max` 兼容告警。
+- **扫描例外**：新增 `security/scan-policy.json` 精确例外，只接受规则 + 文件 + 整行 SHA-256 + 原因 + `review_by`；通配、路径穿越、无效哈希 fail-closed；内容变化或过期自动恢复命中；`--no-policy` 全量复核；`scan --policy-candidates --out <文件>` 只生成候选，不自动写策略。
+- **验证**：真实库副本公开索引 19,638,987 B → 3,221,545 B（16.4%），bench 指标前后一致；隔离副本 `facts/2026/10` 874 文件迁移后单目录最大 874 → 466，rollback 恢复；40 条扫描候选生成但未启用。
+
 ## v0.23.3 (2026-11-05)
 
 - 质量门禁与打包文档修正；发布前测试接入。
