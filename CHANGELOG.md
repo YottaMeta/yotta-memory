@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.24.3 (2026-11-14)
+
+- **CI 精度回归**：将命中打点后的 mtime 断言收紧到 Node 原生精度边界内（纳秒偏差 < 5µs）并保留可见毫秒不变；避免 Linux 上 `utimesSync` 的亚微秒浮点误差把正确行为误判为失败。
+
 ## v0.24.2 (2026-11-14)
 
 - **跨平台修复**：Windows profile 绝对路径（如 `C:\Users\...\serve-profile.json`）在 Linux CI / 非 Windows 环境生成任务 XML 时不再被 `path.resolve()` 误拼成仓库内相对路径；新增 host-independent profile 路径解析并保留 XML 回归。

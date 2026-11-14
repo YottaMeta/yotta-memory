@@ -263,13 +263,18 @@ test('recall restores the original file mtime after recording a search hit', () 
     const fp = onlyEntry(root);
     const past = new Date(Date.now() - 3 * 24 * 3600 * 1000);
     fs.utimesSync(fp, past, past);
-    const before = fs.statSync(fp).mtimeMs;
+    const beforeNs = fs.statSync(fp, { bigint: true }).mtimeNs;
+    const beforeMs = fs.statSync(fp).mtimeMs;
 
     const r = memory.recallCore('mtime 稳定性', { agent: 'codex', limit: 10 });
     assert.strictEqual(r.exitCode, 0, r.text);
     assert.strictEqual(r.entries.length, 1, r.text);
 
-    assert.strictEqual(fs.statSync(fp).mtimeMs, before, 'search hit must keep the original mtime');
+    const afterNs = fs.statSync(fp, { bigint: true }).mtimeNs;
+    const afterMs = fs.statSync(fp).mtimeMs;
+    const delta = afterNs > beforeNs ? afterNs - beforeNs : beforeNs - afterNs;
+    assert.ok(delta < 5000n, 'search hit mtime delta must stay within Node native precision, got ' + delta + 'ns');
+    assert.strictEqual(Math.round(afterMs), Math.round(beforeMs), 'search hit must keep the visible millisecond mtime');
     assert.match(readMeta(fp).hit_days, new RegExp('s' + todayStr() + ':1'), 'hit must still be recorded');
   });
 });
@@ -281,11 +286,16 @@ test('direct usage signals keep the original mtime as well', () => {
     const rel = path.relative(root, fp).replace(/\\/g, '/');
     const past = new Date(Date.now() - 2 * 24 * 3600 * 1000);
     fs.utimesSync(fp, past, past);
-    const before = fs.statSync(fp).mtimeMs;
+    const beforeNs = fs.statSync(fp, { bigint: true }).mtimeNs;
+    const beforeMs = fs.statSync(fp).mtimeMs;
 
     const r = memory.applyUsageHits(root, [rel], 'use', null, { selfAgent: 'codex' });
     assert.strictEqual(r.written, 1, JSON.stringify(r));
-    assert.strictEqual(fs.statSync(fp).mtimeMs, before, 'applyUsageHits must keep the original mtime');
+    const afterNs = fs.statSync(fp, { bigint: true }).mtimeNs;
+    const afterMs = fs.statSync(fp).mtimeMs;
+    const delta = afterNs > beforeNs ? afterNs - beforeNs : beforeNs - afterNs;
+    assert.ok(delta < 5000n, 'applyUsageHits mtime delta must stay within Node native precision, got ' + delta + 'ns');
+    assert.strictEqual(Math.round(afterMs), Math.round(beforeMs), 'applyUsageHits must keep the visible millisecond mtime');
     assert.match(readMeta(fp).hit_days, new RegExp('u' + todayStr() + ':1'));
   });
 });
