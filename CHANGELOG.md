@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.24.2 (2026-11-14)
+
+- **跨平台修复**：Windows profile 绝对路径（如 `C:\Users\...\serve-profile.json`）在 Linux CI / 非 Windows 环境生成任务 XML 时不再被 `path.resolve()` 误拼成仓库内相对路径；新增 host-independent profile 路径解析并保留 XML 回归。
+
 ## v0.24.1 (2026-11-14)
 
 - **自启服务 profile**：`lan enable` 在目标用户上下文解析并写入 `serve-profile.json`（memoryHome / runtimeHome / configDir / host / port / userId），Windows 任务 XML、Startup 兜底、systemd unit 与 crontab 均显式引用该 profile，不再依赖 S4U 启动环境的 `os.homedir()`。

@@ -26,7 +26,7 @@ const zlib = require('zlib');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.24.1';
+const VERSION = '0.24.2';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path', '--from', '--from-plan', '--batch', '--profile']);
 const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--propose', '--audit', '--capacity', '--rules', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--no-usage', '--yes', '--keep-memories', '--keep-identity', '--stats', '--include-flat', '--no-policy', '--policy-candidates']);
 
@@ -11696,10 +11696,18 @@ const LAN_CRONTAB_MARKER = '#YTM_LAN:yotta-memory-serve';
 const SERVE_PROFILE_FILE = 'serve-profile.json';
 const SERVE_PROFILE_SCHEMA = 1;
 
+function resolveProfilePath(value) {
+  const text = String(value || '');
+  if (!text) return '';
+  if (path.isAbsolute(text)) return path.resolve(text);
+  if (path.win32.isAbsolute(text)) return path.win32.normalize(text);
+  return path.resolve(text);
+}
+
 function lanServeProfilePath(opts) {
   opts = opts || {};
-  if (opts.profilePath) return path.resolve(String(opts.profilePath));
-  if (process.env.YOTTA_LAN_PROFILE_FILE) return path.resolve(process.env.YOTTA_LAN_PROFILE_FILE);
+  if (opts.profilePath) return resolveProfilePath(opts.profilePath);
+  if (process.env.YOTTA_LAN_PROFILE_FILE) return resolveProfilePath(process.env.YOTTA_LAN_PROFILE_FILE);
   const configDir = opts.configDir || process.env.YOTTA_MEMORY_CONFIG_DIR || path.dirname(configPath());
   return path.join(path.resolve(String(configDir)), SERVE_PROFILE_FILE);
 }
@@ -11752,7 +11760,7 @@ function lanWriteServeProfile(opts) {
 
 function loadServeProfile(profilePath, opts) {
   opts = opts || {};
-  const resolved = path.resolve(String(profilePath || ''));
+  const resolved = resolveProfilePath(profilePath);
   try {
     if (!profilePath) return { error: true, text: 'profile 路径不能为空。' };
     const profile = JSON.parse(String(fs.readFileSync(resolved, 'utf8')).replace(/^\uFEFF/, ''));
@@ -13709,6 +13717,7 @@ module.exports = {
   runtimeEnsureForManagedTask: runtimeEnsureForManagedTask,
   runtimeRestartManagedServer: runtimeRestartManagedServer,
   lanServeProfilePath: lanServeProfilePath,
+  resolveProfilePath: resolveProfilePath,
   lanWriteServeProfile: lanWriteServeProfile,
   loadServeProfile: loadServeProfile,
   applyServeProfile: applyServeProfile,
