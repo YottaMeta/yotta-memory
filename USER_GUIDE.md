@@ -327,6 +327,21 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 - `doctor --json` 的 `checks.scale` 新增 `index_logical_bytes` / `index_shards` / `index_format` 与 `type_pressure`（总数 / 180 天陈旧 / 归档候选 / 30 天增长）；类型阈值按计划保留观察窗。
 - `scan` 精确例外：`security/scan-policy.json` 中每条必须同时匹配规则、文件、整行 SHA-256 与未过期的 `review_by`；内容变化或过期自动恢复命中。`scan --no-policy` 做全量复核；`scan --policy-candidates --out security/scan-policy.candidates.json` 只生成候选，不自动启用。
 
+## 3.12 每用户自启 profile（v0.24.1）
+
+- `yotta-memory lan enable` 在目标用户上下文解析 `memoryHome`、`runtimeHome`、
+  `configDir`、`host`、`port` 和 `userId`，写到该用户配置目录下的
+  `serve-profile.json`。不同用户的路径互不影响，不是代码或全机器共享常量。
+- Windows task XML、Startup 兜底、systemd unit 与 crontab 都引用该绝对 profile
+  路径。服务由 S4U 或无用户环境启动时，不再依赖 `os.homedir()`。
+- `yotta-memory serve --profile <文件>` 在监听端口前校验 profile schema、
+  绝对路径、memoryHome / runtimeHome 是否存在以及 Windows 用户是否匹配；
+  校验失败直接退出，不创建 `C:\Users\Default\.yottamemory` 空库。
+- `yotta-memory lan status` 显示 profile 中的记忆库和运行时路径，并与当前
+  设置比较漂移；旧任务命令缺少 `--profile` 时提示重新执行 `lan enable`。
+- 修改 `memory_home`、配置目录或 runtime 路径后，应重新执行
+  `yotta-memory lan enable --onstart` 更新 profile 和自启任务。
+
 ## 4. 便携记忆盘 · 记忆引擎主机篇
 
 场景：记忆放在一台主机上（Linux / Windows 均可），本机直接 CLI 读写；局域网内其它主机上的 AI 智能体经 MCP 远程接入。引擎主机只需装 CLI，不需要装任何 AI 智能体。

@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
 description: 元忆 —— 有权限边界的文件式智能体记忆。文件式、零依赖、可 diff/可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、蒸馏、feedback、maintain、distill、explain、自我学习、自我进化、自我提升、查看平台分页、recall 候选预过滤、任务相关记忆、--focus、--embedding、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、回滚、备份、backup、防误删、doctor、事务快照、基线探针、恢复演练、记忆库安全扫描、scan、命中打点、容量水位、--capacity、--propose、上下文压缩审计、context --audit
-version: 0.24.0
+version: 0.24.1
 license: MIT
 ---
 
@@ -14,6 +14,10 @@ license: MIT
   新写入进入 `yyyy/mm/dd` 日级桶，`layout plan/apply/rollback` 提供可预演、可回滚迁移；
   `doctor` 增加类型压力四指标（保留 7 天观察窗）；`scan` 支持精确文件 + 规则 + 行哈希 +
   有效期的例外策略，`--policy-candidates` 只生成候选、不自动启用。
+- **自启服务 profile（v0.24.1）**：`lan enable` 在目标用户上下文生成
+  `serve-profile.json`，Windows 计划任务、Startup 兜底、systemd 与 crontab
+  均显式引用该 profile；`serve --profile <文件>` 固化 memory_home / runtime_home /
+  config_dir，避免 S4U 或无用户环境启动时 `os.homedir()` 漂移为空库并导致远端 401。
 
 ## 这是什么
 

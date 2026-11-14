@@ -53,6 +53,9 @@ yotta-memory recall <关键词> --agent <id> --agent-key-file "<AI_HOME>/.yotta-
 ## 6.1 全局 CLI、MCP 或常驻服务版本不一致？
 先跑 `yotta-memory doctor --runtime`：它会列出 CLI、current、`runtime.json`、MCP 配置、运行中 server、技能副本与身份模式的漂移，并给出实际版本、期望版本、修复命令和是否阻断。用 `yotta-memory runtime install --from-current` 建立 `<runtimeRoot>/current` 稳定入口；升级用 `runtime install <tarball|版本>` + `runtime use <版本> --restart`，回滚用 `runtime rollback --restart`。`lan enable` 与备份调度只登记 `current/bin/yotta-memory.js`，不再写死版本目录。
 
+## 6.2 电脑异常重启后，局域网 MCP 一直返回 401？
+先运行 `yotta-memory lan status`，检查“服务 profile”的记忆库是否指向真实库，而不是 `C:\Users\Default\.yottamemory`。v0.24.1 起，`lan enable` 会生成每用户 `serve-profile.json`，任务命令应包含 `--profile <绝对路径>`。若仍显示旧任务未固定 profile，请在目标用户的管理员终端重新执行 `yotta-memory lan enable --onstart`，然后结束旧任务并从新任务启动。这样 S4U / 无登录会话启动不会重新猜测 home，也不会起在空库上。运行中的服务日志应显示 `服务 profile:` 与真实 `记忆库:`。
+
 ## 7. MCP 工具没加载？
 检查客户端 `mcpServers` 已配置 yotta-memory（url + token + agent_key）；agent_key 应来自 `<AI_HOME>/.yotta-memory-agent-key` 或 MCP secret 注入，不把明文 key 写进对话。改配置后重启/重载会话。本机直连可不配 MCP，直接用 CLI。
 

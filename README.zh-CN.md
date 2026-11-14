@@ -23,6 +23,7 @@
 
 > 📖 面向用户的操作手册见 [USER_GUIDE.md](USER_GUIDE.md)。
 > 🆕 **v0.24.0（结构容量整改）**：`backup status` 按 manifest 时间选择有效备份并隔离未来时间异常；新增只读 `index --stats`，索引 v5 使用年份 gzip 分片并兼容 v4；新写入进入 `yyyy/mm/dd` 日级桶，`layout plan/apply/rollback` 支持可回滚迁移；`doctor` 增加类型压力四指标；`scan` 支持精确文件 + 规则 + 行哈希 + 有效期的例外策略，`--policy-candidates` 只生成候选、不自动启用。
+> 🆕 **v0.24.1（自启服务 profile）**：`lan enable` 在目标用户上下文生成 `serve-profile.json`；Windows 计划任务、Startup 兜底、systemd 与 crontab 都引用该绝对 profile。`serve --profile <文件>` 固定 memoryHome / runtimeHome / configDir，并在路径缺失或 Windows 用户不匹配时 fail-closed，避免 S4U / 无用户环境启动落到 `C:\Users\Default\.yottamemory` 空库后返回远端 MCP 401。
 > 🆕 **v0.23.2（ClawHub 门面）**：ClawHub 上的技能卡改为英文优先的双语摘要与描述（新增 `clawhub-dist/yotta-memory` 专属发布副本），README 首屏新增上面三条使用案例；命令、参数、输出与记忆库格式全部不变。
 > 🆕 **v0.20.0（上下文分页 + 画像驱逐修复）**：`memory.hook` 的 PREF 驱逐空转已修复——hook / paging 决策生效时，画像段落按实时可读条目渲染并套用同一套过滤；自我接入档案不进候选、不可驱逐。新增 `context.paging`：仅在显式 `--budget` 时调用，hook 先过滤、paging 再排序与分页；`drop` 始终安全应用，`order` 仅在 `complete:true` 且未截断时应用。`context --json` 新增 `paging` 块，`--explain` 增加 `[paging]` 轨迹。配置与协议见 `references/provider-protocol.md`。
 > 🆕 **v0.18.1（蒸馏溯源 + 日期绝对化 + 巩固标记 + 规则晋升建议 + 写入纪律）**：`distill` 新增分类型提取清单（事件 / 教训 / 待办 / 成长 / 规则边界 / 其他）+ 逐条 `[溯源: 文件#L<a>-L<b>]` + 实测质量指标 + 跳过与边界，`--json` 输出结构化报告；`consolidate` 摘要按条目 `created` 把「昨天 / 上周 / 本月 / 今年」写成绝对日期，归档副本写入巩固标记（`--undo` 剥离还原）；`maintain --rules` 只读给出「重复踩坑 → 建议升级为规则」（默认阈值 3，不自动写 BOUND）；记忆守则新增冲突权威顺序 6 层与写入纪律 3 条。
@@ -360,7 +361,8 @@ bash install.sh --agent <智能体名称>
 | `yotta-memory iam <id> [--name <显示名>] [--user <用户名>] [--relationship <关系>] [--force]` | 登记本智能体唯一身份并自动落自我档案（`agents.json`，ID 必须唯一；可选扩展显示名 / 用户 / 关系）|
 | `yotta-memory token new --agent <id> [--force]` / `token list` / `token revoke --agent <id>` | 为智能体生成 / 列出 / 吊销访问 token（登记于记忆库 `.server/tokens.json`；同 ID 已被其它来源占用需 `--force` 覆盖，防不同智能体合流）|
 | `yotta-memory serve [--host 0.0.0.0] [--port 8787] [--no-auth] [--stdio]` | 启动 MCP 记忆引擎（streamable HTTP 局域网 / --stdio 本地零进程模式；Bearer token + X-Agent-Id + X-Agent-Key 鉴权）|
-| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务 S4U 主体后台静默、不弹窗口；默认登录自启、`--onstart` 开机即启（无登录会话也可启动，注册需管理员），非管理员自动降级用户级 Startup 静默自启；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）|
+| `yotta-memory lan enable [--onstart] / disable / status` | 开机自启管理（Windows：计划任务 S4U 主体后台静默、不弹窗口；默认登录自启、`--onstart` 开机即启（无登录会话也可启动，注册需管理员），非管理员自动降级用户级 Startup 静默自启；Linux：systemd 用户单元，不可用时自动降级用户 crontab @reboot）。v0.24.1 生成每用户 `serve-profile.json`；`lan status` 检查路径漂移并提示缺少 `--profile` 的旧任务 |
+| `yotta-memory serve --profile <文件>` | 读取每用户服务 profile，固定记忆库 / 运行时 / 配置目录；路径缺失、非法或 Windows 用户不匹配时在监听端口前 fail-closed |
 | `yotta-memory maintain [--dry-run] [--apply] [--purge] [--threshold N] [--age N] [--dedup] [--dedup --apply] [--merge A,B]` / `maintain --capacity [--json]` | 记忆自组织：归档 / 遗忘候选 / 置信度查重 / 自动合并高置信组；默认 dry-run；`--dedup` 与归档互斥。`--capacity` 只读报告容量水位、LRU / LFU 淘汰候选与晋升建议（冷却期与常青条目豁免）|
 | `yotta-memory consolidate [--propose] [--min-age N] [--min-idle N] [--max-utility N] [--min-group N] [--period N] [--type T] [--model <cmd>] [--apply [--yes]] [--undo <batch>] [--batches]` | 周期摘要压缩：同主题旧记忆 → 带溯源摘要 + 原文归档；默认等价 `--propose`（结构化报告，不写盘）；`--apply` 需确认（非交互必须 `--yes`）；`--undo <batch>` 回滚批次；`--batches` 查批次 |
 | `yotta-memory feedback <文件|主题> --useful|--useless [--reason <原因>] [--undo]` | 使用反馈（useful/useless 调整 weight / confidence / feedback_net；`--undo` 回滚最近一次）|

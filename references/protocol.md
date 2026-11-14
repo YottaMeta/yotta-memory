@@ -1,4 +1,4 @@
-# yotta-memory 协议规范 v0.24.0
+# yotta-memory 协议规范 v0.24.1
 
 > 本文件定义 yotta-memory 记忆标准：存储位置、目录结构、文件格式、类型体系与 CLI 命令参考。
 > 目标：任何支持 Agent Skills 开放标准的智能体，装完即可读写同一份记忆。
@@ -159,6 +159,8 @@ magic "YTMIDX1" (7B) | nonce(12B) | tag(16B) | ciphertext(JSON: {version, update
 | `reindex` | 全量扫描重建 `index.json`（手动改 .md 后校正）|
 | `index --stats [--json]` | 只读分析索引存储 / 逻辑体积、字段占比、token 与 gzip 年份分片预估 |
 | `layout plan/apply/rollback` | 生成日级目录迁移计划、按 journal 执行、失败回滚或按批次恢复 |
+| `serve --profile <文件>` | 读取每用户服务 profile，固定 memoryHome / runtimeHome / configDir；缺失或无效时 fail-closed |
+| `lan enable/disable/status` | 生成并检查每用户 `serve-profile.json`；自启任务只引用该 profile |
 | `export [--out f.json]` | 导出全部记忆为 JSON |
 | `import <f.json>` | 从 JSON 导入（幂等）|
 | `profile [--owner <id>]` | 用户画像聚合（零推断，写 `private/<owner>/profile.md`；跨 owner 默认拒绝）|

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.24.1 (2026-11-14)
+
+- **自启服务 profile**：`lan enable` 在目标用户上下文解析并写入 `serve-profile.json`（memoryHome / runtimeHome / configDir / host / port / userId），Windows 任务 XML、Startup 兜底、systemd unit 与 crontab 均显式引用该 profile，不再依赖 S4U 启动环境的 `os.homedir()`。
+- **serve fail-closed**：新增 `serve --profile <文件>`；启动时校验 profile schema、绝对路径、memoryHome / runtimeHome 是否存在、userId 是否匹配，并原子覆盖进程环境。缺文件、空库、错误用户或非法路径均拒绝启动并给出中文提示。
+- **状态与迁移**：`lan status` 显示 profile 的 memoryHome / runtimeHome，与当前配置比较漂移；旧任务缺少 `--profile` 时提示重新执行 `lan enable`。重新执行 `lan enable` 即可迁移旧任务。
+- **验证**：新增 Windows task / Startup / Linux unit / crontab profile 回归，以及 `serve --profile` 的路径固化、缺库、错用户、CLI 缺文件用例；全量测试覆盖正常与失败路径。
+
 ## v0.24.0 (2026-11-11)
 
 - **备份可靠性**：`backup status` 改为按 manifest `created` 解析时间排序，超过当前时间 15 分钟的备份标记 `future_timestamp` 并排除；manifest 缺失 / 不完整 / created 无效不参与健康判定；新增 `latest_valid` / `config_last_success` / `effective_last_success` / `source` / `anomalies`，`ensure-daily` 与默认备份体检复用同一选择逻辑。

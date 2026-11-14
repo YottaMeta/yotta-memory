@@ -22,6 +22,10 @@ function coreOpts(dir, extra) {
     nodePath: 'C:\\node\\node.exe',
     scriptPath: 'C:\\tools\\yotta-memory.js',
     logPath: path.join(dir, 'serve-8787.log'),
+    profilePath: path.join(dir, 'serve-profile.json'),
+    memoryHome: dir,
+    runtimeHome: path.join(dir, 'runtime'),
+    configDir: dir,
     xmlDir: dir,
     startupDir: path.join(dir, 'startup'),
     autostartDir: path.join(dir, 'autostart'),
@@ -36,6 +40,9 @@ function winCliEnv(dir, extra) {
   env.YOTTA_LAN_STARTUP_DIR = path.join(dir, 'startup');
   env.YOTTA_LAN_AUTOSTART_DIR = path.join(dir, 'autostart');
   env.YOTTA_MEMORY_HOME = dir;
+  env.YOTTA_MEMORY_CONFIG_DIR = dir;
+  env.YOTTA_MEMORY_RUNTIME_HOME = path.join(dir, 'runtime');
+  env.YOTTA_LAN_PROFILE_FILE = path.join(dir, 'serve-profile.json');
   return Object.assign(env, extra || {});
 }
 
@@ -60,6 +67,7 @@ test('Windows task XML uses an S4U principal and boot trigger without battery/ti
     nodePath: 'C:\\Program Files\\nodejs\\node.exe',
     scriptPath: 'C:\\tools\\yotta-memory.js',
     logPath: 'C:\\Users\\tester\\.yottamemory\\serve-8787.log',
+    profilePath: 'C:\\Users\\tester\\.yottamemory\\serve-profile.json',
     host: '0.0.0.0',
     port: 8787,
     cmdPath: 'C:\\Windows\\system32\\cmd.exe',
@@ -73,7 +81,7 @@ test('Windows task XML uses an S4U principal and boot trigger without battery/ti
   assert.match(xml, /<ExecutionTimeLimit>PT0S<\/ExecutionTimeLimit>/);
   assert.match(xml, /<StartWhenAvailable>true<\/StartWhenAvailable>/);
   assert.match(xml, /<Command>C:\\Windows\\system32\\cmd\.exe<\/Command>/);
-  assert.match(xml, /"C:\\Program Files\\nodejs\\node\.exe" "C:\\tools\\yotta-memory\.js" serve --host 0\.0\.0\.0 --port 8787/);
+  assert.match(xml, /"C:\\Program Files\\nodejs\\node\.exe" "C:\\tools\\yotta-memory\.js" serve --profile "C:\\Users\\tester\\\.yottamemory\\serve-profile\.json" --host 0\.0\.0\.0 --port 8787/);
   assert.match(xml, />> "C:\\Users\\tester\\\.yottamemory\\serve-8787\.log" 2>&amp;1/);
   assert.ok(!/&(?!amp;|lt;|gt;|quot;|apos;)/.test(xml), 'XML text must not contain raw & outside entities');
 });
@@ -85,11 +93,13 @@ test('Windows task XML defaults to a logon trigger and escapes XML special chara
     nodePath: 'C:\\node&tools\\node.exe',
     scriptPath: 'C:\\my tools\\yotta-memory.js',
     logPath: 'C:\\logs\\serve.log',
+    profilePath: 'C:\\my config\\serve profile.json',
   });
   assert.match(xml, /<LogonTrigger>/);
   assert.doesNotMatch(xml, /<BootTrigger>/);
   assert.match(xml, /<UserId>DOMAIN\\user&amp;co<\/UserId>/);
   assert.match(xml, /C:\\node&amp;tools\\node\.exe/);
+  assert.match(xml, /--profile "C:\\my config\\serve profile\.json"/);
   assert.match(xml, /<Command>[^<]*cmd[^<]*<\/Command>/i);
   assert.ok(!/&(?!amp;|lt;|gt;|quot;|apos;)/.test(xml), 'XML text must not contain raw & outside entities');
 });
@@ -134,6 +144,12 @@ test('Windows lan enable registers the S4U task from XML and cleans the temp fil
   assert.ok(!calls[0].args.includes('/sc'), 'must not fall back to the legacy /sc trigger form');
   assert.match(xmlDuringCall, /<LogonType>S4U<\/LogonType>/);
   assert.match(xmlDuringCall, /<BootTrigger>/);
+  assert.match(xmlDuringCall, /--profile "[^"]+serve-profile\.json"/);
+  assert.ok(fs.existsSync(result.profilePath), 'lan enable must persist the resolved serve profile');
+  const profile = JSON.parse(fs.readFileSync(result.profilePath, 'utf8'));
+  assert.strictEqual(profile.memoryHome, dir);
+  assert.strictEqual(profile.runtimeHome, path.join(dir, 'runtime'));
+  assert.strictEqual(profile.userId, 'TESTPC\\tester');
   assert.strictEqual(fs.existsSync(xmlPathSeen), false, 'temp task XML must be cleaned up');
   assert.deepStrictEqual(result.removedStartup, []);
 });
@@ -169,7 +185,7 @@ test('schtasks access denied falls back to the silent Startup path', (t) => {
   assert.ok(fs.existsSync(result.vbsPath));
   assert.ok(fs.existsSync(result.cmdPath));
   const cmdContent = fs.readFileSync(result.cmdPath, 'utf8');
-  assert.match(cmdContent, /serve --host 0\.0\.0\.0 --port 8787/);
+  assert.match(cmdContent, /serve --profile "[^"]+serve-profile\.json" --host 0\.0\.0\.0 --port 8787/);
   assert.match(cmdContent, /serve-8787\.log/);
   assert.match(cmdContent, new RegExp(MARKER));
   const vbsContent = fs.readFileSync(result.vbsPath, 'utf16le');
@@ -215,6 +231,41 @@ test('lan status warns when the legacy interactive task is still registered', (t
   assert.strictEqual(r.status, 0, r.stderr || r.stdout);
   assert.match(r.stdout, /登录模式: 交互式/);
   assert.match(r.stdout, /请重新执行 yotta-memory lan enable 修复/);
+});
+
+test('lan status trusts task XML S4U over the misleading legacy text field', (t) => {
+  const dir = tmpDir(t, 'status-s4u-xml');
+  const stub = writeStub(dir, 'schtasks-stub.js', [
+    "if (process.argv.includes('/xml')) {",
+    "  console.log('<Task><Principals><Principal><LogonType>S4U</LogonType></Principal></Principals></Task>');",
+    '} else {',
+    "  console.log('状态: 就绪');",
+    "  console.log('登录模式: Interactive/Background');",
+    '}',
+  ]);
+  const r = runCli(['lan', 'status'], winCliEnv(dir, { YOTTA_LAN_SCHTASKS_BIN: stub }));
+  assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+  assert.doesNotMatch(r.stdout, /请重新执行 yotta-memory lan enable 修复为后台静默/);
+});
+
+test('lan status warns when the task does not reference a serve profile', (t) => {
+  const dir = tmpDir(t, 'status-no-profile');
+  const profilePath = path.join(dir, 'serve-profile.json');
+  memory.lanWriteServeProfile({
+    profilePath: profilePath,
+    memoryHome: dir,
+    runtimeHome: path.join(dir, 'runtime'),
+    configDir: dir,
+    userId: 'TESTPC\\tester',
+  });
+  const stub = writeStub(dir, 'schtasks-stub.js', [
+    "console.log('状态: 就绪');",
+    "console.log('登录模式: S4U');",
+    'console.log(\'要运行的任务: node yotta-memory.js serve --host 0.0.0.0 --port 8787\');',
+  ]);
+  const r = runCli(['lan', 'status'], winCliEnv(dir, { YOTTA_LAN_SCHTASKS_BIN: stub }));
+  assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+  assert.match(r.stdout, /未固定服务 profile/);
 });
 
 test('lan disable removes the task through the configured schtasks binary', (t) => {
@@ -328,18 +379,21 @@ test('daily backup task wraps an Electron host with cmd + env', () => {
 });
 
 test('Linux autostart and backup generators inject the Electron env', () => {
-  const unit = memory.lanLinuxUnitContent({ host: '127.0.0.1', port: 8787, electronHost: true });
+  const profilePath = '/home/tester/.yottamemory/serve-profile.json';
+  const unit = memory.lanLinuxUnitContent({ host: '127.0.0.1', port: 8787, profilePath: profilePath, electronHost: true });
   assert.match(unit, /Environment=ELECTRON_RUN_AS_NODE=1/);
-  const line = memory.lanCrontabLine({ host: '127.0.0.1', port: 8787, electronHost: true });
+  assert.match(unit, /--profile .*serve-profile\.json/);
+  const line = memory.lanCrontabLine({ host: '127.0.0.1', port: 8787, profilePath: profilePath, electronHost: true });
   assert.match(line, /^@reboot ELECTRON_RUN_AS_NODE=1 /);
+  assert.match(line, /--profile .*serve-profile\.json/);
   const backupService = memory.backupSystemdServiceContent({ nodePath: '/opt/YottaCode/yottacode', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: true });
   assert.match(backupService, /Environment=ELECTRON_RUN_AS_NODE=1/);
   const backupCron = memory.backupCronLine({ time: '03:30', nodePath: '/opt/YottaCode/yottacode', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: true });
   assert.match(backupCron, /\* \* \* ELECTRON_RUN_AS_NODE=1 /);
 
-  const plainUnit = memory.lanLinuxUnitContent({ host: '127.0.0.1', port: 8787, electronHost: false });
+  const plainUnit = memory.lanLinuxUnitContent({ host: '127.0.0.1', port: 8787, profilePath: profilePath, electronHost: false });
   assert.doesNotMatch(plainUnit, /ELECTRON_RUN_AS_NODE/);
-  const plainLine = memory.lanCrontabLine({ host: '127.0.0.1', port: 8787, electronHost: false });
+  const plainLine = memory.lanCrontabLine({ host: '127.0.0.1', port: 8787, profilePath: profilePath, electronHost: false });
   assert.doesNotMatch(plainLine, /ELECTRON_RUN_AS_NODE/);
 });
 
