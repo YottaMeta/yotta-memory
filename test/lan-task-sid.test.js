@@ -124,6 +124,26 @@ test('SID discovery parses whoami CSV and canonicalizes casing', () => {
   assert.strictEqual(result.sid, SID_A);
 });
 
+test('Windows console output decodes GBK schtasks errors before classification', () => {
+  const gbkMissing = Buffer.from('cfb5cdb3d5d2b2bbb5bdd6b8b6a8b5c4cec4bcfea1a3', 'hex');
+  assert.strictEqual(
+    memory.decodeWindowsConsoleOutput(gbkMissing),
+    '系统找不到指定的文件。',
+  );
+  assert.strictEqual(memory.decodeWindowsConsoleOutput(Buffer.from('plain utf8')), 'plain utf8');
+});
+
+test('lan disable treats a GBK missing-task message as not enabled', (t) => {
+  const dir = tmpDir(t, 'gbk-missing');
+  const stub = writeStub(dir, 'schtasks-stub.js', [
+    "process.stderr.write(Buffer.from('cfb5cdb3d5d2b2bbb5bdd6b8b6a8b5c4cec4bcfea1a3', 'hex'));",
+    'process.exit(1);',
+  ]);
+  const r = runCli(['lan', 'disable'], winCliEnv(dir, { YOTTA_LAN_SCHTASKS_BIN: stub }));
+  assert.strictEqual(r.status, 0, r.stderr || r.stdout);
+  assert.match(r.stdout, /未启用|未发现/);
+});
+
 test('task ownership accepts only a proven SID or current username match', () => {
   assert.strictEqual(memory.lanWindowsTaskOwnership({
     xml: '<Task><Principals><Principal><UserId>' + SID_A.toLowerCase() + '</UserId></Principal></Principals></Task>',

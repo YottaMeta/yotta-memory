@@ -11810,6 +11810,21 @@ function isSchtasksTaskMissing(value) {
   return /cannot find the (path|file|task)|系统找不到指定的文件|没有找到|找不到|不存在|does not exist/i.test(msg);
 }
 
+function decodeWindowsConsoleOutput(value) {
+  if (!Buffer.isBuffer(value)) return String(value || '');
+  if (value.length === 0) return '';
+  const utf8 = value.toString('utf8');
+  if (!utf8.includes('\uFFFD')) return utf8;
+  try {
+    // Windows console programs commonly emit the active OEM/ANSI code page.
+    // Keep the raw buffer until after capture so localized errors stay classifiable.
+    const gbk = new TextDecoder('gbk').decode(value);
+    return gbk || utf8;
+  } catch (_) {
+    return utf8;
+  }
+}
+
 function lanWindowsTaskQuery(opts, taskName) {
   const r = lanWindowsRunSchtasks(opts, ['/query', '/tn', taskName, '/xml']);
   const text = String(r.stderr || r.stdout || '');
@@ -12162,11 +12177,11 @@ function lanWindowsRunSchtasks(opts, args) {
       };
     }
   }
-  const r = lanSpawn(lanSchTasksBin(), args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  const r = lanSpawn(lanSchTasksBin(), args, { encoding: 'buffer', stdio: ['ignore', 'pipe', 'pipe'] });
   return {
     status: r.error ? 1 : r.status,
-    stdout: String(r.stdout || ''),
-    stderr: String(r.stderr || (r.error && r.error.message) || ''),
+    stdout: decodeWindowsConsoleOutput(r.stdout),
+    stderr: decodeWindowsConsoleOutput(r.stderr || (r.error && r.error.message) || ''),
   };
 }
 function lanWindowsTaskUser(opts) {
@@ -14079,7 +14094,9 @@ module.exports = {
   lanInstallStartup: lanInstallStartup,
   lanRemoveStartupFiles: lanRemoveStartupFiles,
   lanFileHasMarker: lanFileHasMarker,
+  isSchtasksTaskMissing: isSchtasksTaskMissing,
   isSchtasksAccessDenied: isSchtasksAccessDenied,
+  decodeWindowsConsoleOutput: decodeWindowsConsoleOutput,
   lanServeArgs: lanServeArgs,
   lanSpawn: lanSpawn,
   lanPlatform: lanPlatform,
