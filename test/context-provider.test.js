@@ -112,7 +112,12 @@ function withStore(run, providerCommand) {
   if (providerCommand) {
     fs.writeFileSync(path.join(providerHome, 'provider.json'), JSON.stringify({
       schema: 1,
-      providers: [{ id: 'fake', capabilities: ['memory.hook'], command: providerCommand }],
+      providers: [{
+        id: 'fake',
+        capabilities: ['memory.hook'],
+        command: providerCommand,
+        timeout_ms: 5000,
+      }],
     }), 'utf8');
   }
   const saved = {
@@ -246,6 +251,7 @@ test('BOUND / COMMIT 不进入候选集，且不可被驱逐', () => {
           command: [process.execPath, FIXTURE, 'custom', JSON.stringify({
             evict: ['private/codex/bounds/b.md', 'private/codex/commits/c.md'],
           })],
+          timeout_ms: 5000,
         }],
       }), 'utf8');
       const second = memory.applyMemoryHook(readable, { owner: 'codex' });

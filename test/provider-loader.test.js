@@ -23,6 +23,7 @@ function baseProvider(extra) {
     id: 'fake',
     capabilities: ['memory.hook'],
     command: [process.execPath, FIXTURE],
+    timeout_ms: 5000,
   }, extra || {});
 }
 

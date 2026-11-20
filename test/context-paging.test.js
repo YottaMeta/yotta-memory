@@ -136,6 +136,7 @@ function pagingProvider(plan) {
     id: 'fake-paging',
     capabilities: ['memory.hook', 'context.paging'],
     command: [process.execPath, FIXTURE, 'paging', JSON.stringify(plan || {})],
+    timeout_ms: 5000,
   };
 }
 
@@ -366,6 +367,7 @@ test('license_required：回落普通上下文并保留状态行', (t) => {
       id: 'license-paging',
       capabilities: ['context.paging'],
       command: [process.execPath, FIXTURE, 'license'],
+      timeout_ms: 5000,
     }],
   }), 'utf8');
   const saved = {
