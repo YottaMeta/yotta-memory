@@ -187,11 +187,11 @@ test('withIndexLock serializes read-modify-write across processes', async () => 
       '    fs.writeFileSync(counter, String(n + 1), "utf8");',
       '  });',
       '}',
-      'process.exit(0);',
     ].join('\n'), 'utf8');
-    const workers = [0, 1, 2].map(() => new Promise((resolve) => {
+    const workers = [0, 1, 2].map(() => new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [script, root], { stdio: ['ignore', 'pipe', 'pipe'] });
-      child.on('exit', (code) => resolve(code));
+      child.on('error', reject);
+      child.on('close', (code) => resolve(code));
     }));
     const codes = await Promise.all(workers);
     assert.deepStrictEqual(codes, [0, 0, 0]);
