@@ -87,7 +87,9 @@ test('license_required / timeout / invalid_output 状态透传', () => {
   const cases = [
     ['license', 'license_required', {}],
     ['hang', 'timeout', { timeout_ms: 200 }],
-    ['invalid', 'invalid_output', {}],
+    // Keep the invalid-output assertion independent of cold-start scheduling:
+    // under the 43-repo matrix, Node startup can exceed the 600ms default.
+    ['invalid', 'invalid_output', { timeout_ms: 5000 }],
   ];
   for (const item of cases) {
     const home = tmpHome();
