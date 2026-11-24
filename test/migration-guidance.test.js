@@ -27,7 +27,7 @@ test('migrate output presents view and key bind as equivalent authorization path
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ytm-migration-guidance-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
 
-  const result = MOD.migrateCore(home, PASS, { agent: 'yottacode-desktop' });
+  const result = MOD.migrateCore(home, PASS, { agent: 'yottaweave-desktop' });
   assert.strictEqual(result.error, false, result.text);
   assert.match(result.text, /yotta-memory view/);
   assert.match(result.text, /yotta-memory key bind/);

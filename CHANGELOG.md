@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.24.5 (2026-11-24)
+
+- Electron 宿主识别与开机自启测试切换为 `YottaWeave`，不再保留 `yottacode` 兼容标识。
+- 活跃文档、身份示例、任务路径与测试夹具统一使用 `yottaweave` / `YottaWeave`。
+- 不改变记忆格式、索引格式、命令参数或既有数据目录。
+
 ## v0.24.4 (2026-11-20)
 
 - **Windows 多用户自启隔离**：计划任务名改为 `YottaMemoryServe-<SHA-256(大写 SID) 前 16 位>`；`lan enable / status / disable` 与 runtime 受管重启统一使用当前用户 SID，并在操作前验证目标任务主体归属。其他用户或归属未知的任务不会被覆盖、删除、停止或运行。

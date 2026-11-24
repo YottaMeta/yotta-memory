@@ -140,11 +140,11 @@ test('remember echoes the write identity and its source', (t) => {
 test('remember warns when a launcher-provided host identity environment is present', (t) => {
   const home = tmpHome(t);
   initPlain(home);
-  const r = run(['remember', 'FACT', '宿主身份警告', '警告回显测试', '--agent', 'yottacode-desktop'], home, {
-    YOTTA_MEMORY_AGENT_HOME: 'C:\\Users\\root\\.yottacode\\config\\yottacode',
+  const r = run(['remember', 'FACT', '宿主身份警告', '警告回显测试', '--agent', 'yottaweave-desktop'], home, {
+    YOTTA_MEMORY_AGENT_HOME: 'C:\\Users\\root\\.yottaweave\\config\\yottaweave',
   });
   assert.strictEqual(r.status, 0, r.stderr || r.stdout);
-  assert.match(r.stderr, /\[身份\] agent_id: yottacode-desktop；来源: explicit/);
+  assert.match(r.stderr, /\[身份\] agent_id: yottaweave-desktop；来源: explicit/);
   assert.match(r.stderr, /\[注意\] 检测到宿主身份环境 YOTTA_MEMORY_AGENT_HOME=/);
   assert.match(r.stderr, /请显式传 --agent <id> --agent-key-file <path> 覆盖/);
 });

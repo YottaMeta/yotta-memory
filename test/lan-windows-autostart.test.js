@@ -334,18 +334,18 @@ test('lan disable on a non-admin shell explains the admin fix for an access-deni
   assert.match(r.stderr, /请用管理员终端执行 yotta-memory lan disable/);
 });
 
-// ---- v0.22.5: Electron host (YottaCode shim) env injection ----
+// ---- v0.22.5: Electron host (YottaWeave shim) env injection ----
 
 test('Windows task XML injects ELECTRON_RUN_AS_NODE under an Electron host', () => {
   const xml = memory.lanWindowsTaskXml({
     trigger: 'onstart',
     userId: 'DESKTOP-BKLMU7E\\tester',
-    nodePath: 'C:\\Program Files\\YottaCode\\YottaCode.exe',
+    nodePath: 'C:\\Program Files\\YottaWeave\\YottaWeave.exe',
     scriptPath: 'C:\\Users\\tester\\.yottamemory\\runtime\\current\\bin\\yotta-memory.js',
     logPath: 'C:\\Users\\tester\\.yottamemory\\serve-8787.log',
     electronHost: true,
   });
-  assert.match(xml, /set "ELECTRON_RUN_AS_NODE=1" &amp;&amp; "C:\\Program Files\\YottaCode\\YottaCode\.exe"/);
+  assert.match(xml, /set "ELECTRON_RUN_AS_NODE=1" &amp;&amp; "C:\\Program Files\\YottaWeave\\YottaWeave\.exe"/);
   assert.ok(!/&(?!amp;|lt;|gt;|quot;|apos;)/.test(xml), 'XML text must not contain raw & outside entities');
 
   const plain = memory.lanWindowsTaskXml({
@@ -363,7 +363,7 @@ test('lan enable under an Electron host registers an env-injected task XML', (t)
   let xmlDuringCall = '';
   const result = memory.lanWindowsEnableCore(coreOpts(dir, {
     electronHost: true,
-    nodePath: 'C:\\Program Files\\YottaCode\\YottaCode.exe',
+    nodePath: 'C:\\Program Files\\YottaWeave\\YottaWeave.exe',
     execFileFn: (command, args) => {
       if (args[0] === '/query') throw taskMissing();
       const i = args.indexOf('/xml');
@@ -396,14 +396,14 @@ test('Startup fallback cmd injects the Electron env under an Electron host', (t)
 test('daily backup task wraps an Electron host with cmd + env', () => {
   const xml = memory.backupWindowsTaskXml({
     time: '03:30',
-    nodePath: 'C:\\Program Files\\YottaCode\\YottaCode.exe',
+    nodePath: 'C:\\Program Files\\YottaWeave\\YottaWeave.exe',
     scriptPath: 'C:\\tools\\yotta-memory.js',
     userId: 'TESTPC\\tester',
     electronHost: true,
     cmdPath: 'C:\\Windows\\system32\\cmd.exe',
   });
   assert.match(xml, /<Command>C:\\Windows\\system32\\cmd\.exe<\/Command>/);
-  assert.match(xml, /set "ELECTRON_RUN_AS_NODE=1" &amp;&amp; "C:\\Program Files\\YottaCode\\YottaCode\.exe" "C:\\tools\\yotta-memory\.js" backup ensure-daily/);
+  assert.match(xml, /set "ELECTRON_RUN_AS_NODE=1" &amp;&amp; "C:\\Program Files\\YottaWeave\\YottaWeave\.exe" "C:\\tools\\yotta-memory\.js" backup ensure-daily/);
   const plain = memory.backupWindowsTaskXml({
     time: '03:30',
     nodePath: 'C:\\nodejs\\node.exe',
@@ -422,9 +422,9 @@ test('Linux autostart and backup generators inject the Electron env', () => {
   const line = memory.lanCrontabLine({ host: '127.0.0.1', port: 8787, profilePath: profilePath, electronHost: true });
   assert.match(line, /^@reboot ELECTRON_RUN_AS_NODE=1 /);
   assert.match(line, /--profile .*serve-profile\.json/);
-  const backupService = memory.backupSystemdServiceContent({ nodePath: '/opt/YottaCode/yottacode', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: true });
+  const backupService = memory.backupSystemdServiceContent({ nodePath: '/opt/YottaWeave/yottaweave', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: true });
   assert.match(backupService, /Environment=ELECTRON_RUN_AS_NODE=1/);
-  const backupCron = memory.backupCronLine({ time: '03:30', nodePath: '/opt/YottaCode/yottacode', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: true });
+  const backupCron = memory.backupCronLine({ time: '03:30', nodePath: '/opt/YottaWeave/yottaweave', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: true });
   assert.match(backupCron, /\* \* \* ELECTRON_RUN_AS_NODE=1 /);
 
   const plainUnit = memory.lanLinuxUnitContent({ host: '127.0.0.1', port: 8787, profilePath: profilePath, electronHost: false });
@@ -434,7 +434,7 @@ test('Linux autostart and backup generators inject the Electron env', () => {
 });
 
 test('macOS backup LaunchAgent injects the Electron env', () => {
-  const plist = memory.backupLaunchdPlist({ time: '03:30', nodePath: '/Applications/YottaCode.app/yottacode', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: true });
+  const plist = memory.backupLaunchdPlist({ time: '03:30', nodePath: '/Applications/YottaWeave.app/yottaweave', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: true });
   assert.match(plist, /<key>EnvironmentVariables<\/key><dict><key>ELECTRON_RUN_AS_NODE<\/key><string>1<\/string><\/dict>/);
   const plain = memory.backupLaunchdPlist({ time: '03:30', nodePath: '/usr/local/bin/node', scriptPath: '/opt/ytm/yotta-memory.js', electronHost: false });
   assert.doesNotMatch(plain, /ELECTRON_RUN_AS_NODE/);
@@ -448,7 +448,7 @@ test('lan status warns when the task launches an Electron exe without the env', 
     "if (args.includes('/xml')) { console.log('<Task><Principals><Principal><LogonType>S4U</LogonType></Principal></Principals></Task>'); process.exit(0); }",
     "console.log('状态: 就绪');",
     "console.log('登录模式: S4U');",
-    "console.log('要运行的任务: \"C:\\\\Program Files\\\\YottaCode\\\\YottaCode.exe\" \"C:\\\\Users\\\\t\\\\.yottamemory\\\\runtime\\\\current\\\\bin\\\\yotta-memory.js\" serve --host 0.0.0.0 --port 8787');",
+    "console.log('要运行的任务: \"C:\\\\Program Files\\\\YottaWeave\\\\YottaWeave.exe\" \"C:\\\\Users\\\\t\\\\.yottamemory\\\\runtime\\\\current\\\\bin\\\\yotta-memory.js\" serve --host 0.0.0.0 --port 8787');",
   ]);
   const r = runCli(['lan', 'status'], winCliEnv(dir, { YOTTA_LAN_SCHTASKS_BIN: stub }));
   assert.strictEqual(r.status, 0, r.stderr || r.stdout);
@@ -463,7 +463,7 @@ test('lan status does not warn when the task already injects the env', (t) => {
     "if (args.includes('/xml')) { console.log('<Task><Principals><Principal><LogonType>S4U</LogonType></Principal></Principals></Task>'); process.exit(0); }",
     "console.log('状态: 就绪');",
     "console.log('登录模式: S4U');",
-    "console.log('要运行的任务: cmd.exe /c \"set \"ELECTRON_RUN_AS_NODE=1\" && \"C:\\\\Program Files\\\\YottaCode\\\\YottaCode.exe\" serve\"');",
+    "console.log('要运行的任务: cmd.exe /c \"set \"ELECTRON_RUN_AS_NODE=1\" && \"C:\\\\Program Files\\\\YottaWeave\\\\YottaWeave.exe\" serve\"');",
   ]);
   const r = runCli(['lan', 'status'], winCliEnv(dir, { YOTTA_LAN_SCHTASKS_BIN: stub }));
   assert.strictEqual(r.status, 0, r.stderr || r.stdout);

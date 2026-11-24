@@ -294,25 +294,25 @@ test('iam registers an identity on a fresh encrypted store without an owner key'
   const home = tmpHome(t);
   const init = run(['init', '--encrypt'], home, { YOTTA_MEMORY_PASS: PASS });
   assert.strictEqual(init.status, 0, init.stderr || init.stdout);
-  const iam = run(['iam', 'yottacode-desktop', '--name', 'YottaCode Desktop'], home);
+  const iam = run(['iam', 'yottaweave-desktop', '--name', 'YottaWeave Desktop'], home);
   assert.strictEqual(iam.status, 0, iam.stderr || iam.stdout);
   assert.match(iam.stdout + iam.stderr, /已登记智能体身份/);
   const agents = JSON.parse(fs.readFileSync(path.join(home, 'agents.json'), 'utf8'));
-  assert.ok(agents.agents['yottacode-desktop']);
+  assert.ok(agents.agents['yottaweave-desktop']);
   assert.match(iam.stdout + iam.stderr, /授权|key bind|自我档案/);
 });
 
 test('iam writes the self profile after the owner key exists', (t) => {
   const home = tmpHome(t);
   assert.strictEqual(run(['init', '--encrypt'], home, { YOTTA_MEMORY_PASS: PASS }).status, 0);
-  assert.strictEqual(run(['iam', 'yottacode-desktop'], home).status, 0);
-  const bind = run(['key', 'bind', 'yottacode-desktop', '--password', PASS], home);
+  assert.strictEqual(run(['iam', 'yottaweave-desktop'], home).status, 0);
+  const bind = run(['key', 'bind', 'yottaweave-desktop', '--password', PASS], home);
   assert.strictEqual(bind.status, 0, bind.stderr || bind.stdout);
   const aiHome = path.join(home, 'aihome');
-  const claim = run(['key', 'claim', 'yottacode-desktop', '--to', aiHome], home);
+  const claim = run(['key', 'claim', 'yottaweave-desktop', '--to', aiHome], home);
   assert.strictEqual(claim.status, 0, claim.stderr || claim.stdout);
   const keyFile = path.join(aiHome, '.yotta-memory-agent-key');
-  const again = run(['iam', 'yottacode-desktop', '--force', '--agent-key-file', keyFile], home);
+  const again = run(['iam', 'yottaweave-desktop', '--force', '--agent-key-file', keyFile], home);
   assert.strictEqual(again.status, 0, again.stderr || again.stdout);
   assert.match(again.stdout, /已写入自我档案/);
 });

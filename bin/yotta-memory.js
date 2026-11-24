@@ -26,7 +26,7 @@ const zlib = require('zlib');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.24.4';
+const VERSION = '0.24.5';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path', '--from', '--from-plan', '--batch', '--profile']);
 const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--propose', '--audit', '--capacity', '--rules', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--no-usage', '--yes', '--keep-memories', '--keep-identity', '--stats', '--include-flat', '--no-policy', '--policy-candidates']);
 
@@ -3653,7 +3653,7 @@ function backupWindowsTaskXml(opts) {
     ? '<Principal id="Author"><UserId>' + xmlEscape(userId) + '</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>'
     : '<Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal>';
   const cmdPath = opts.cmdPath || process.env.ComSpec || 'cmd.exe';
-  // v0.22.5: Electron 宿主（如 YottaCode shim）下 process.execPath 是 Electron 可执行文件，
+  // v0.22.5: Electron 宿主（如 YottaWeave shim）下 process.execPath 是 Electron 可执行文件，
   // 任务需经 cmd /c + ELECTRON_RUN_AS_NODE=1 包装，否则拉起的是桌面程序本体而非 Node。
   const action = lanElectronHost(opts)
     ? '<Actions Context="Author"><Exec><Command>' + xmlEscape(cmdPath) + '</Command><Arguments>/c "set "ELECTRON_RUN_AS_NODE=1" &amp;&amp; "' + xmlEscape(nodePath) + '" "' + xmlEscape(scriptPath) + '" backup ensure-daily"</Arguments></Exec></Actions>'
@@ -12025,8 +12025,8 @@ function lanSpawn(bin, args, spawnOpts) {
 }
 // platform override for testing/advanced use (YOTTA_LAN_PLATFORM=linux/win32/...)
 function lanPlatform() { return process.env.YOTTA_LAN_PLATFORM || process.platform; }
-// ---- v0.22.5: Electron 宿主（YottaCode shim）适配 ----
-// 背景：宿主运行时为 Electron 时（如 YottaCode.exe 以 ELECTRON_RUN_AS_NODE=1 当 Node 运行本脚本），
+// ---- v0.22.5: Electron 宿主（YottaWeave shim）适配 ----
+// 背景：宿主运行时为 Electron 时（如 YottaWeave.exe 以 ELECTRON_RUN_AS_NODE=1 当 Node 运行本脚本），
 // process.execPath 指向 Electron 可执行文件；自启 / 定时任务环境不带 ELECTRON_RUN_AS_NODE=1 时，
 // 拉起的是桌面程序本体而非 Node 服务（0.22.4 后新机首例实测）。生成任务 / 兜底 / 定时配置时统一注入。
 function lanElectronHost(opts) {
@@ -12040,7 +12040,7 @@ function lanElectronHost(opts) {
 function lanTaskCommandNeedsElectronEnv(text) {
   const t = String(text || '');
   if (!t || /ELECTRON_RUN_AS_NODE/.test(t)) return false;
-  if (/electron|yottacode/i.test(t)) return true;
+  if (/electron|yottaweave/i.test(t)) return true;
   if (lanElectronHost({})) {
     const exe = String(process.execPath || '');
     if (exe && t.toLowerCase().indexOf(exe.toLowerCase()) !== -1) return true;
@@ -12212,7 +12212,7 @@ function lanWindowsTaskXml(opts) {
   // 让 node/脚本/日志路径里的空格与中文都能安全传递；S4U 非交互会话下不弹窗口。
   // 注意：重定向 `2>&1` 的 & 在 XML 文本里必须写成 &amp;（DOM 解码后仍是 2>&1），
   // 否则 schtasks 报 "The task XML is malformed"。
-  // v0.22.5: Electron 宿主（YottaCode shim）下先 set ELECTRON_RUN_AS_NODE=1，
+  // v0.22.5: Electron 宿主（YottaWeave shim）下先 set ELECTRON_RUN_AS_NODE=1，
   // 否则任务会拉起桌面程序本体（GUI）而不是 Node 服务。
   const envPrefix = lanElectronHost(opts) ? 'set "ELECTRON_RUN_AS_NODE=1" &amp;&amp; ' : '';
   const inner = envPrefix + '"' + xmlEscape(nodePath) + '" "' + xmlEscape(scriptPath) + '" serve --profile "' + xmlEscape(profilePath) + '" --host ' + host + ' --port ' + port
@@ -12753,7 +12753,7 @@ function cmdLanWinStatus() {
         console.log('  提示: 登录模式为交互式（仅登录时运行，且在登录会话会弹窗口）——这是旧版任务；请重新执行 yotta-memory lan enable 修复为后台静默');
       }
       if (lanTaskCommandNeedsElectronEnv(taskRun)) {
-        console.log('  警告: 任务命令指向 Electron 可执行文件（如 YottaCode.exe）但缺少 ELECTRON_RUN_AS_NODE —— 开机将拉起桌面程序而非服务；请重新执行 yotta-memory lan enable 修复');
+        console.log('  警告: 任务命令指向 Electron 可执行文件（如 YottaWeave.exe）但缺少 ELECTRON_RUN_AS_NODE —— 开机将拉起桌面程序而非服务；请重新执行 yotta-memory lan enable 修复');
       }
       if (taskRun && !/--profile(?:\s|$)/.test(taskRun)) {
         console.log('  警告: 任务命令未固定服务 profile，S4U / 无用户环境启动可能落到错误记忆库；请重新执行 yotta-memory lan enable 修复');
