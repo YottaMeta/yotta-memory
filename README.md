@@ -154,6 +154,8 @@ After upgrading, check that `yotta-memory --version` and the installed `SKILL.md
 
 The store can live on a desktop, a NAS or an external disk. Local agents use the CLI; other machines connect over MCP with a per-agent token and agent key. Setup, autostart and recovery steps: [`references/lan-mode.md`](references/lan-mode.md).
 
+> Transport boundary: the MCP endpoint is plain HTTP by default, so the bearer token and agent key travel in clear text on the wire. Use it only on a trusted LAN, VPN or SSH tunnel; add a TLS reverse proxy for anything beyond that.
+
 ## Docs
 
 | Document | What is inside |

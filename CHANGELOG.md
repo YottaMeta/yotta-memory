@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.1 (2026-11-28)
+
+- **局域网传输边界**：`references/lan-mode.md` 新增 4.5.1，明确 `serve` 的 MCP 默认是 HTTP 明文，`Authorization: Bearer` 与 `X-Agent-Key` 会随请求在网络上传输；只在可信局域网 / VPN / SSH 隧道内使用，跨网段改用 TLS 反向代理或 SSH 端口转发，`--no-auth` 只用于一次性排障。
+- **信任卡与 SKILL 同步**：`references/trust-card.md`「不承诺什么」补充「不承诺局域网传输机密性」；`SKILL.md` 数据边界补充同样的传输口径与文档指引。
+- **兼容性**：只改文档，不改记忆格式、索引格式、CLI 参数或退出码；1.0.0 可直接升级。
+
 ## v1.0.0 (2026-11-28)
 
 - **对外口径升级**：定位统一为「数据永不出你本机的下一代记忆引擎」——`--help` 首行、SKILL.md、README / README.zh-CN、USER_GUIDE 与各发布渠道门面同批更新。无云端、无账号、无遥测；局域网共享与本地 provider 都由用户显式发起。

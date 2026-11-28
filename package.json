@@ -1,6 +1,6 @@
 {
   "name": "@yottameta/yotta-memory",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Yuanyi (元忆) — the next-generation memory engine whose data never leaves your machine. File-based, zero-dependency memory for AI agents: plain Markdown you can read, diff and roll back; FACT is shared, PREF / BOUND / COMMIT are privately isolated and AES-256-GCM encrypted; user-level + project-level stores; start-of-work context package, semantic recall, feedback-driven reweighting, consolidation with provenance, independent-volume backups with recovery drills, and a prompt-injection scan for the store. No cloud, no account, no telemetry.",
   "license": "MIT",
   "keywords": [

@@ -154,6 +154,8 @@ npx -y --package @yottameta/yotta-memory yotta-memory-install --agent <智能体
 
 记忆库可以放在台式机、NAS 或移动硬盘。本机智能体用 CLI 直连；其它机器经 MCP 接入，每个智能体一份 token 与 agent_key。配置、开机自启与故障恢复：[`references/lan-mode.md`](references/lan-mode.md)。
 
+> 传输边界：MCP 默认走 HTTP 明文，Bearer token 与 agent_key 会在网络上明文传输。只在可信局域网 / VPN / SSH 隧道内使用；跨网段请加 TLS 反向代理。
+
 ## 文档
 
 | 文档 | 内容 |

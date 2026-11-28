@@ -64,6 +64,18 @@
 
 > token 可以按用户习惯复制；agent_key 属于私密能力，优先走 `key claim` 或安全文件传输，不走对话明文。
 
+### 4.5.1 传输边界（必读）
+
+- `serve` 的 MCP 默认是 **HTTP 明文**：客户端用 `http://<IP>:8787/mcp` 连接时，
+  `Authorization: Bearer <token>` 与 `X-Agent-Key` 会随请求在网络上传输。
+- 只在**可信局域网 / VPN / SSH 隧道**内使用；不要在公共 Wi-Fi、跨网段或公网主机上
+  直接暴露 8787。
+- 跨网络或不可信网络：在引擎主机前加 TLS 反向代理（Caddy / nginx），客户端改用
+  `https://...`；或把 `serve` 绑到 `127.0.0.1`，远程通过 SSH 端口转发访问。
+- `--no-auth` 只用于一次性排障，绝不能在共享网络上长期开启。
+- token 泄露立即 `yotta-memory token revoke <id>`；agent_key 泄露立即 `key revoke`，
+  旧 key 下次校验即失效。
+
 ### 4.6 配置 MCP（AI 自己完成，🔒 需同意）
 1. 🔒 说明将把 yotta-memory 写入本智能体 MCP 配置并请用户同意；
 2. 定位当前智能体 MCP 配置文件（见 4.7）；

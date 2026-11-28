@@ -240,6 +240,9 @@ stdio MCP、`lan enable` 与备份调度只指向 `<runtimeRoot>/current/bin/yot
 记忆放在一台主机（Linux / Windows 均可）上，本机 CLI 直连，局域网其它主机的 AI 经 MCP 接入。
 引擎主机只需装 CLI。完整步骤见 `references/lan-mode.md`，这里是主干。
 
+> 传输边界：MCP 默认 HTTP 明文，Bearer token 与 agent_key 会随请求传输。只在可信局域网 /
+> VPN / SSH 隧道内使用；跨网段请加 TLS 反向代理，或把 `serve` 绑到 `127.0.0.1` 后走 SSH 端口转发。
+
 **第 1 步：安装 CLI 并指定位置**
 
 ```bash

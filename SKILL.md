@@ -1,7 +1,7 @@
 ---
 name: yotta-memory
 description: 元忆 —— 数据永不出你本机的下一代记忆引擎。文件式、零依赖、可 diff / 可回滚：让任何 AI 智能体活过会话，开工 recall 恢复上下文、重要信息 remember 落盘、收工归档。类型体系 FACT（公共共享）/ PREF / BOUND / COMMIT（私密隔离，AES-256-GCM 信封加密）。触发：记住、别忘了、记一笔、记忆、remember、recall、跨会话、上次说到、续测、交接、归档、记忆盘、共享记忆、局域网记忆、画像、开工上下文、长期理解摘要、近期走廊、会话闭环、记忆守则、profile、context、越用越懂、语义检索、反馈、维护、反馈调权、maintain、distill、explain、压缩遗忘、consolidate、周期摘要、自动合并、分类型衰减、备份、backup、防误删、doctor、事务快照、恢复演练、记忆库安全扫描、上下文压缩审计。边界：不做云端同步、不做知识库检索、不替代元钥 / 元信；不用于未授权读取其它智能体的私密记忆。
-version: 1.0.0
+version: 1.0.1
 license: MIT
 ---
 
@@ -142,7 +142,9 @@ license: MIT
 ### 数据边界
 
 - **无云端、无账号、无遥测**；引擎自身不主动联网。会联网的只有你自己显式执行的 `npm i`，以及你显式配置的本地 provider 子进程（协议见 `references/provider-protocol.md`）。
-- 局域网共享是你自己发起的多机模式：监听地址、Bearer token、agent_key 都由你决定；`--no-auth` 只用于可信内网。
+- 局域网共享是你自己发起的多机模式：监听地址、Bearer token、agent_key 都由你决定；
+  **MCP 默认 HTTP 明文**，只在可信局域网 / VPN / SSH 隧道内使用，跨网段请加 TLS 反代或
+  改走 SSH 隧道；`--no-auth` 只用于一次性排障（见 `references/lan-mode.md` 4.5.1）。
 - 导入 / 导出只写你指定的路径；MCP 的 `export` / `import` 限制在记忆库内，MCP `distill` 不接受 `--model`。
 - `scan` 在无授权密钥时不解密加密条目；凭证片段一律打码，不回显原文。
 - 命中打点是本地元数据（稀疏日计数 + 查询指纹，不存查询原文）；`config set usage_enabled false` 或单命令 `--no-usage` 可关。
