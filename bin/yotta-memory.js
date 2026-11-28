@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// yotta-memory（元忆）: 有权限边界的文件式智能体记忆 CLI（零依赖）
+// yotta-memory（元忆）: 数据永不出你本机的下一代记忆引擎 CLI（零依赖）
 // v0.4.0 新增：lan（Windows 计划任务开机自启 serve）/ init --dir（显式指定位置）/ serve --stdio（本地零进程模式）/ MCP 工具补 reindex/export/import
 // v0.5.0 新增：隐私硬隔离——私密物理分目录 private/<agent_id>/{prefs,bounds,commits}/ + 关闭 --agent 越权读 + 私密写跨智能体需 --unsafe + 禁 shell 直读写（文档红线）
 // v0.4.2 新增：iam/whoami 智能体身份自注册（agents.json 唯一性）+ 自我档案 PREF + 私密记忆须声明 owner
@@ -26,7 +26,7 @@ const zlib = require('zlib');
 const child_process = require('child_process');
 const { AsyncLocalStorage } = require('async_hooks');
 
-const VERSION = '0.24.5';
+const VERSION = '1.0.0';
 const CLI_VALUE_OPTS = new Set(['--type', '--limit', '--days', '--out', '--owner', '--agent', '--agent-id', '--agent-key', '--agent-key-file', '--plugin-data', '--threshold', '--scope', '--host', '--port', '--dir', '--name', '--user', '--relationship', '--source', '--weight', '--budget', '--password', '--new-password', '--recovery-key', '--recovery-key-out', '--reason', '--merge', '--model', '--subject', '--embedding', '--focus', '--embedding-timeout', '--min-age', '--min-idle', '--max-utility', '--min-group', '--period', '--to', '--id', '--time', '--tools', '--mcp-config', '--skill-dir', '--year', '--evalset', '--k', '--seed', '--bootstrap', '--gate', '--against', '--template', '--path', '--from', '--from-plan', '--batch', '--profile']);
 const CLI_FLAG_OPTS = new Set(['--project', '--all', '--unsafe', '--no-auth', '--stdio', '--onstart', '--from-current', '--restart', '--force', '--attach', '--allow-same-volume', '--verify', '--no-hint', '--encrypt', '--no-encrypt', '--password-stdin', '--json', '--manual', '--skip-schedule', '--useful', '--useless', '--undo', '--dry-run', '--apply', '--purge', '--dedup', '--batches', '--propose', '--audit', '--capacity', '--rules', '--explain', '--semantic', '--runtime', '--ablate', '--timing', '--baseline', '--probe', '--quarantine', '--restore', '--no-usage', '--yes', '--keep-memories', '--keep-identity', '--stats', '--include-flat', '--no-policy', '--policy-candidates']);
 
@@ -1732,7 +1732,7 @@ function ensureInit(root) {
   fs.mkdirSync(path.join(root, ARCHIVE_DIR), { recursive: true });
   const readme = path.join(root, 'README.md');
   if (!fs.existsSync(readme)) {
-    fs.writeFileSync(readme, '# yotta-memory（元忆）记忆库\n\n有权限边界的文件式智能体记忆存储目录。结构：facts/<年>/<月>/（公共 FACT） private/<agent_id>/{prefs,bounds,commits}/<年>/<月>/（各智能体私密，物理隔离） .archive/（归档）。v0.16 及更早的平铺文件（facts/*.md、private/<agent_id>/<type>/*.md）继续可读，不做自动迁移。\n', 'utf8');
+  fs.writeFileSync(readme, '# yotta-memory（元忆）记忆库\n\n数据永不出你本机的智能体记忆库目录。结构：facts/<年>/<月>/（公共 FACT） private/<agent_id>/{prefs,bounds,commits}/<年>/<月>/（各智能体私密，物理隔离） .archive/（归档）。v0.16 及更早的平铺文件（facts/*.md、private/<agent_id>/<type>/*.md）继续可读，不做自动迁移。\n', 'utf8');
   }
 }
 // 递归收集目录下（含年/月子目录）的记忆文件路径，跳过 distills/profile.md 等非记忆文件。
@@ -9155,11 +9155,39 @@ function pagingStatusText(paging) {
     const who = paging.provider_id ? '提供方 ' + paging.provider_id : '提供方';
     return '已应用（' + who + '；丢弃 ' + paging.dropped.length + ' / 排序 ' + paging.ordered.length + '）';
   }
+  if (paging.status === 'builtin') {
+    return '已应用（内置规则层；丢弃 ' + paging.dropped.length + ' / 段配额 '
+      + (paging.quotas ? ('focus ' + (paging.quotas.focus || 0)
+        + ' / 走廊 ' + (paging.quotas.corridor || 0)
+        + ' / 高价值 ' + (paging.quotas.high_value || 0)) : '-') + '）';
+  }
   if (paging.status === 'license_required') return '需授权（该能力需要授权后使用；普通记忆不受影响）';
   if (paging.status === 'timeout') return '未生效（提供方超时，已回落普通记忆）';
   if (paging.status === 'invalid_output') return '未生效（提供方输出无效，已回落普通记忆）';
   if (paging.status === 'error') return '未生效（提供方异常，已回落普通记忆）';
   return '';
+}
+
+// v1.0 S2-②：没有分页提供方时的内置规则层。
+// 按任务是否带 focus 给三段分配预算，避免「近期走廊」把预算吃光。
+function builtinSectionQuotas(budget, hasFocus) {
+  const total = parseInt(budget || 0, 10) || 0;
+  if (total <= 0) return null;
+  const weights = hasFocus
+    ? { focus: 0.40, corridor: 0.35, high_value: 0.25 }
+    : { focus: 0, corridor: 0.55, high_value: 0.45 };
+  const keys = Object.keys(weights);
+  const quotas = {};
+  let allocated = 0;
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    const quota = i === keys.length - 1
+      ? total - allocated
+      : Math.floor(total * weights[key]);
+    quotas[key] = quota;
+    allocated += quota;
+  }
+  return quotas;
 }
 
 function pagingCandidatePayload(entry, baselineSection) {
@@ -9387,6 +9415,9 @@ function contextCore(opts) {
   let usedDynamicChars = 0;
   const FENCE = String.fromCharCode(96, 96, 96);
   function usedChars() { return lines.reduce(function (s, x) { return s + String(x).length + 1; }, 0); }
+  let sectionQuotas = null;
+  const sectionUsed = { focus: 0, corridor: 0, high_value: 0 };
+  const sectionDropped = [];
   function appendContextEntry(entry, reason, options) {
     options = options || {};
     if (!entry) return false;
@@ -9395,7 +9426,16 @@ function contextCore(opts) {
       return false;
     }
     const line = contextEntryLine(entry);
-    if (options.budget !== false && budget > 0 && usedChars() + line.length > budget) {
+    const section = options.section || '';
+    const quota = (sectionQuotas && sectionQuotas[section] !== undefined) ? sectionQuotas[section] : null;
+    if (quota !== null && sectionUsed[section] > 0 && sectionUsed[section] + line.length > quota) {
+      trace.push('[dropped] ' + entry.file + ' reason: budget_exceeded (section: ' + section + ')');
+      if (sectionDropped.indexOf(entry.file) === -1) sectionDropped.push(entry.file);
+      return false;
+    }
+    // --budget 是「动态记忆字符预算」：固定骨架（身份 / 铁律 / 画像标题）不计入，
+    // 否则小预算会被固定内容吃光，段配额失去意义。
+    if (options.budget !== false && budget > 0 && usedDynamicChars + line.length > budget) {
       trace.push('[dropped] ' + entry.file + ' reason: budget_exceeded');
       return false;
     }
@@ -9403,6 +9443,7 @@ function contextCore(opts) {
     shownFiles.add(entry.file);
     usedFiles.add(entry.file);
     usedDynamicChars += line.length;
+    if (sectionUsed[section] !== undefined) sectionUsed[section] += line.length + 1;
     trace.push('[included] ' + entry.file + ' reason: ' + reason);
     return true;
   }
@@ -9535,6 +9576,18 @@ function contextCore(opts) {
     baselineSections: baselineSections,
   });
   const pagingState = paging.block;
+  // 只在没有分页提供方时启用内置规则层；提供方的 active / 授权 / 超时等状态一律保留原语义。
+  if (budget > 0 && (!pagingState || pagingState.status === 'not_installed')) {
+    const quotas = builtinSectionQuotas(budget, !!focus);
+    if (quotas) {
+      pagingState.status = 'builtin';
+      pagingState.quotas = quotas;
+      pagingState.section_used = sectionUsed;
+      sectionQuotas = quotas;
+      trace.push('[paging] builtin quota focus=' + quotas.focus
+        + ' corridor=' + quotas.corridor + ' high_value=' + quotas.high_value);
+    }
+  }
   const pagingOrder = new Map();
   for (let i = 0; i < pagingState.ordered.length; i++) pagingOrder.set(pagingState.ordered[i], i);
   function pagingAllows(entry) {
@@ -9604,7 +9657,7 @@ function contextCore(opts) {
       .filter(decisionAllows)
       .sort(function (a, b) { return compareWithPaging(a, b, function () { return 0; }); });
     for (const e of focusedVisible) {
-      appendContextEntry(e, 'focus_match score: ' + round3(e.score));
+      appendContextEntry(e, 'focus_match score: ' + round3(e.score), { section: 'focus' });
     }
     lines.push('');
   }
@@ -9618,7 +9671,7 @@ function contextCore(opts) {
     .filter(function (e) { return !shownFiles.has(e.file); })
     .slice(0, limit);
   if (!corridor.length) lines.push('（暂无近期记忆）');
-  for (const e of corridor) appendContextEntry(e, 'recent_corridor');
+  for (const e of corridor) appendContextEntry(e, 'recent_corridor', { section: 'corridor' });
   lines.push('');
 
   lines.push('## 4. 近期高价值记忆（补位）');
@@ -9629,7 +9682,7 @@ function contextCore(opts) {
     .sort(function (a, b) { return compareWithPaging(a.e, b.e, function (x, y) { return y.s - x.s; }); })
     .slice(0, limit);
   if (!highValue.length) lines.push('（暂无补位条目）');
-  for (const h of highValue) appendContextEntry(h.e, 'high_value_backfill');
+  for (const h of highValue) appendContextEntry(h.e, 'high_value_backfill', { section: 'high_value' });
   lines.push('');
   lines.push('## 5. 边界提醒（BOUND）');
   lines.push('');
@@ -9715,6 +9768,10 @@ function contextCore(opts) {
     if (!reliability.ok) lines.push('- 破坏性写入已锁定：先运行 yotta-memory doctor 修复严重问题。');
   }
   pagingState.used = usedDynamicChars;
+  if (pagingState.status === 'builtin') {
+    pagingState.dropped = sectionDropped.slice();
+    pagingState.section_used = sectionUsed;
+  }
   return { error: false, exitCode: 0, text: lines.join('\n'), trace: trace, hook: hookState, paging: pagingState };
 }
 function cmdContext(opts) {
@@ -13668,7 +13725,7 @@ function renderHelp(model) {
   optionCol += 2;
 
   const lines = [
-    'yotta-memory v' + VERSION + ' — 元忆：有权限边界的文件式智能体记忆',
+    'yotta-memory v' + VERSION + ' — 元忆：数据永不出你本机的下一代记忆引擎',
     '',
     '用法:',
     '  yotta-memory <命令> [选项]',

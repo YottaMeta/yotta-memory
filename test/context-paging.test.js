@@ -347,12 +347,17 @@ test('候选超过 500：只应用 drop，不应用 order', (t) => {
   });
 });
 
-test('未配置 provider：加 budget 与不加 budget 的输出逐字节一致', (t) => {
+test('未配置 provider：--budget 启用内置段预算，预算充足时条目保持一致', (t) => {
   withStore(t, { entries: candidates() }, () => {
     const plain = memory.contextCore({ selfAgent: 'codex', limit: 10 });
     const budgeted = memory.contextCore({ selfAgent: 'codex', limit: 10, budget: 6000 });
-    assert.strictEqual(budgeted.text, plain.text);
-    assert.strictEqual(budgeted.paging.status, 'not_installed');
+    // v1.0 S2-②：没有 provider 时由内置规则层接管预算，因此多一行状态是预期变化；
+    // 预算充足时收录的记忆条目必须与不传预算完全一致。
+    assert.strictEqual(plain.paging.status, 'not_requested');
+    assert.strictEqual(budgeted.paging.status, 'builtin');
+    assert.ok(budgeted.text.includes('预算分页'));
+    const entriesOf = (text) => text.split('\n').filter((line) => line.startsWith('- ['));
+    assert.deepStrictEqual(entriesOf(budgeted.text), entriesOf(plain.text));
   });
 });
 

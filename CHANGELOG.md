@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.0 (2026-11-28)
+
+- **对外口径升级**：定位统一为「数据永不出你本机的下一代记忆引擎」——`--help` 首行、SKILL.md、README / README.zh-CN、USER_GUIDE 与各发布渠道门面同批更新。无云端、无账号、无遥测；局域网共享与本地 provider 都由用户显式发起。
+- **context 段预算**：没有分页提供方且显式 `--budget` 时，内置规则层按段分配预算（有 focus：focus 40% / 走廊 35% / 高价值 25%；无 focus：走廊 55% / 高价值 45%），每个非空段至少保留 1 条；预算只统计动态记忆条目，提供方状态不被覆盖。`--explain` 输出段配额，丢弃原因标注 `budget_exceeded (section: …)`。
+- **文档重写**：SKILL.md 收口为「能做什么 / 怎么用 / 边界」三层，版本特性移入本文件；完整命令表移入 `references/cli-reference.md`，局域网流程移入 `references/lan-mode.md`；新增 `references/trust-card.md`（数据在哪、谁能读、怎么删、备份与故障口径）。
+- **兼容性**：记忆格式、索引格式、CLI 参数与退出码不变，无破坏性变更；0.24.5 可直接升级。
+
 ## v0.24.5 (2026-11-24)
 
 - Electron 宿主识别与开机自启测试切换为 `YottaWeave`，不再保留 `yottacode` 兼容标识。
